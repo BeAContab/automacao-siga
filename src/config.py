@@ -17,6 +17,7 @@ class Settings:
     siga_url: str = "https://siga.sefaz.ce.gov.br/ui/"
     browser_channel: str = "chrome"
     connect_browser_url: str | None = None
+    prefer_existing_siga_session: bool = True
     headless: bool = False
     slow_mo_ms: int = 250
     timeout_ms: int = 30_000
@@ -31,6 +32,10 @@ class Settings:
     click_certificate_option: bool = False
     manual_login_timeout_ms: int = 300_000
     reset_browser_profile: bool = False
+    force_restart_browser: bool = False
+    use_system_browser_profile: bool = False
+    chrome_profile_directory: str | None = None
+    configure_certificate_policy: bool = True
     blank_page_retry_count: int = 2
     siga_app_root_selector: str = "app-root"
     remote_debugging_port: int = 9222

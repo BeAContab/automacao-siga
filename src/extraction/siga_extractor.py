@@ -3,18 +3,17 @@ from __future__ import annotations
 import logging
 import re
 import time
-import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from openpyxl import Workbook
-from playwright.sync_api import BrowserContext, Download, Error, Locator, Page, TimeoutError
 
 from src.auth.siga_login import SigaLoginFlow
 from src.config import Settings
 from src.extraction.spreadsheet import SpreadsheetRow
 from src.utils.browser import BrowserSession
+from src.utils.selenium_compat import BrowserContext, Download, Error, Locator, Page, TimeoutError
 from src.utils.siga_page import SigaPageInspector
 from src.utils.text import slugify, strip_accents
 
@@ -59,6 +58,8 @@ class PendingDetailRequest:
     summary_path: Path
     report_name: str
     tela_aba: str
+    requested_after: datetime
+    taxpayer_document: str
 
 
 @dataclass(slots=True)
@@ -260,6 +261,7 @@ class SigaContributorExtractor:
                 detail_label="Autorizadas",
                 selected_year=self._resolve_selected_year_from_page(page),
             )
+            requested_after = datetime.now() - timedelta(minutes=2)
             self._request_detail_download(page)
             pending_requests.append(
                 PendingDetailRequest(
@@ -268,6 +270,8 @@ class SigaContributorExtractor:
                     summary_path=summary_paths[profile.label],
                     report_name="Autorizadas",
                     tela_aba=tela_aba,
+                    requested_after=requested_after,
+                    taxpayer_document=self._current_taxpayer_document(page),
                 )
             )
 
@@ -716,6 +720,7 @@ class SigaContributorExtractor:
                 detail_label=report_name,
                 selected_year=selected_year,
             )
+            requested_after = datetime.now() - timedelta(minutes=2)
             self._request_detail_download(page)
             requests.append(
                 PendingDetailRequest(
@@ -724,6 +729,8 @@ class SigaContributorExtractor:
                     summary_path=summary_path,
                     report_name=report_name,
                     tela_aba=tela_aba,
+                    requested_after=requested_after,
+                    taxpayer_document=self._current_taxpayer_document(page),
                 )
             )
         return requests
@@ -907,6 +914,8 @@ class SigaContributorExtractor:
             summary_path=Path("."),
             report_name=basename,
             tela_aba=basename,
+            requested_after=datetime.min,
+            taxpayer_document=self._current_taxpayer_document(page),
         )
         detail_paths = self._download_pending_detail_requests(page, cgf, month_reference, [request])
         return detail_paths[request.tela_aba]
@@ -943,6 +952,8 @@ class SigaContributorExtractor:
                 month_reference,
                 request.tela_aba,
                 request.document_tab,
+                request.requested_after,
+                request.taxpayer_document,
             )
 
         page.goto(origin_url, wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
@@ -971,6 +982,8 @@ class SigaContributorExtractor:
 
     def _click_download_action(self, row: Locator) -> None:
         candidates = (
+            row.locator("xpath=.//td[last()]//*[contains(normalize-space(.),'Download')]"),
+            row.locator("xpath=.//td[last()]"),
             row.get_by_role("button", name=re.compile(r"download|baixar", re.IGNORECASE)),
             row.get_by_role("link", name=re.compile(r"download|baixar", re.IGNORECASE)),
             row.locator("button"),
@@ -1016,34 +1029,15 @@ class SigaContributorExtractor:
         month_reference: str,
         tela_aba: str,
         document_tab: str,
+        requested_after: datetime,
+        taxpayer_document: str,
     ) -> Path:
         LOGGER.info("Downloading requested file for TELA/ABA: %s", tela_aba)
-        download_row = self._find_download_row_by_screen_name(page, tela_aba)
-        signed_urls: list[str] = []
-
-        def on_response(response) -> None:
-            if "/api/v1/solicitacoes/" not in response.url or "/download" not in response.url:
-                return
-            location = response.headers.get("location")
-            if location:
-                signed_urls.append(location)
-
-        page.on("response", on_response)
-        try:
-            self._click_download_action(download_row)
-            page.wait_for_timeout(2_500)
-        finally:
-            page.remove_listener("response", on_response)
-
-        if signed_urls:
-            signed_url = signed_urls[-1]
-            output_path = self._save_signed_download(cgf, month_reference, tela_aba, signed_url, document_tab)
-            LOGGER.info("Saved download center file via signed URL to %s", output_path)
-            return output_path
-
-        LOGGER.warning(
-            "Signed URL was not captured for %s. Falling back to direct browser download capture.",
+        download_row = self._find_download_row_by_screen_name(
+            page,
             tela_aba,
+            requested_after,
+            taxpayer_document,
         )
         output_path = self._capture_download_from_row(
             page=page,
@@ -1053,12 +1047,19 @@ class SigaContributorExtractor:
             basename=self._sanitize_filename(tela_aba),
             document_tab=document_tab,
         )
-        LOGGER.info("Saved download center file via direct capture to %s", output_path)
+        LOGGER.info("Saved download center file via Selenium download capture to %s", output_path)
         return output_path
 
-    def _find_download_row_by_screen_name(self, page: Page, tela_aba: str) -> Locator:
+    def _find_download_row_by_screen_name(
+        self,
+        page: Page,
+        tela_aba: str,
+        requested_after: datetime | None = None,
+        taxpayer_document: str = "",
+    ) -> Locator:
         normalized_target = strip_accents(self._normalize_spaces(tela_aba)).lower()
         match_fragments = self._extract_download_match_fragments(normalized_target)
+        taxpayer_key = self._document_key(taxpayer_document)
         deadline = time.time() + (self.settings.download_wait_timeout_ms / 1000)
         while time.time() < deadline:
             rows = page.locator("tr")
@@ -1082,10 +1083,15 @@ class SigaContributorExtractor:
                 except Error:
                     continue
 
-                if tela_aba_text == normalized_target and "concluido" in status_text:
-                    exact_candidates.append((row, self._parse_request_datetime(requested_at_text), tela_aba_text))
-                    continue
+                requested_at = self._parse_request_datetime(requested_at_text)
                 if "concluido" not in status_text:
+                    continue
+                if taxpayer_key and not self._download_row_matches_taxpayer(row, taxpayer_key):
+                    continue
+                if not taxpayer_key and requested_after is not None and requested_at < requested_after:
+                    continue
+                if tela_aba_text == normalized_target:
+                    exact_candidates.append((row, requested_at, tela_aba_text))
                     continue
                 score = 0.0
                 if match_fragments["tab"] and match_fragments["tab"] in tela_aba_text:
@@ -1101,9 +1107,7 @@ class SigaContributorExtractor:
                 if "informacoes fiscais" in tela_aba_text:
                     score += 0.25
                 if score >= 3.0:
-                    fuzzy_candidates.append(
-                        (row, score, self._parse_request_datetime(requested_at_text), tela_aba_text)
-                    )
+                    fuzzy_candidates.append((row, score, requested_at, tela_aba_text))
 
             if exact_candidates:
                 exact_candidates.sort(key=lambda item: item[1], reverse=True)
@@ -1154,15 +1158,38 @@ class SigaContributorExtractor:
         }
 
     def _parse_request_datetime(self, value: str) -> datetime:
-        normalized = self._normalize_spaces(value)
-        # Exemplo SIGA: 26/05/2026 às 13:52:43
-        match = re.search(r"(\d{2}/\d{2}/\d{4})\s+(?:as|às)\s+(\d{2}:\d{2}:\d{2})", normalized, re.IGNORECASE)
+        normalized = strip_accents(self._normalize_spaces(value)).lower()
+        normalized = normalized.replace("Ã s", "as")
+        # Exemplo SIGA: 26/05/2026 as 13:52:43
+        match = re.search(r"(\d{2}/\d{2}/\d{4})\s+as\s+(\d{2}:\d{2}:\d{2})", normalized, re.IGNORECASE)
         if not match:
             return datetime.min
         try:
             return datetime.strptime(f"{match.group(1)} {match.group(2)}", "%d/%m/%Y %H:%M:%S")
         except ValueError:
             return datetime.min
+
+    def _current_taxpayer_document(self, page: Page) -> str:
+        match = re.search(r"/contribuinte/([^/?#]+)", page.url)
+        if not match:
+            return ""
+        return self._normalize_numeric_document(match.group(1))
+
+    def _download_row_matches_taxpayer(self, row: Locator, taxpayer_key: str) -> bool:
+        cells = row.locator("td")
+        row_documents: list[str] = []
+        for cell_index in (0, 1):
+            try:
+                cell_text = cells.nth(cell_index).inner_text(timeout=2_000)
+            except Error:
+                continue
+            document_key = self._document_key(cell_text)
+            if document_key:
+                row_documents.append(document_key)
+        return taxpayer_key in row_documents
+
+    def _document_key(self, value: str) -> str:
+        return self._normalize_numeric_document(value).lstrip("0")
 
     def _capture_download_from_row(
         self,
@@ -1177,20 +1204,6 @@ class SigaContributorExtractor:
             self._click_download_action(row)
         download = download_info.value
         return self._save_download(download, cgf, month_reference, basename, document_tab)
-
-    def _save_signed_download(
-        self,
-        cgf: str,
-        month_reference: str,
-        tela_aba: str,
-        signed_url: str,
-        document_tab: str,
-    ) -> Path:
-        output_dir = self._build_taxpayer_output_dir(cgf, month_reference, document_tab)
-        output_path = output_dir / f"{self._sanitize_filename(tela_aba)}.csv"
-        with urllib.request.urlopen(signed_url, timeout=60) as response:
-            output_path.write_bytes(response.read())
-        return output_path
 
     def _sanitize_filename(self, value: str) -> str:
         compact = self._normalize_spaces(value)
@@ -1238,12 +1251,10 @@ class SigaContributorExtractor:
                 if candidate not in patterns:
                     patterns.append(candidate)
         for pattern in patterns:
-            locator = page.locator(f"text=/{re.escape(pattern)}/i")
             try:
-                if locator.count():
-                    value = self._extract_value_near_label(page, pattern)
-                    if value:
-                        return value
+                value = self._extract_value_near_label(page, pattern)
+                if value:
+                    return value
             except Error:
                 continue
 

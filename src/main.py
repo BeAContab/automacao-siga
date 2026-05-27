@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -14,6 +15,10 @@ from src.extraction.spreadsheet import load_cgfs_from_xlsx
 from src.live_assist import LiveAssistSession
 from src.months import MONTH_OPTIONS
 from src.utils.browser import BrowserSession, get_connect_browser_url, launch_debug_browser
+from src.utils.certificate_policy import (
+    clear_auto_certificate_selection,
+    configure_auto_certificate_selection,
+)
 from src.utils.logging_setup import configure_logging
 
 
@@ -29,16 +34,50 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--browser-channel",
         default="chrome",
-        help="Browser channel used by Playwright, for example msedge or chrome.",
+        help="Browser used by Selenium, for example msedge or chrome.",
     )
     parser.add_argument(
         "--connect-browser-url",
         help="Connect to an existing browser via CDP, for example http://127.0.0.1:9222.",
     )
     parser.add_argument(
+        "--disable-attach",
+        action="store_true",
+        help="Disable the automatic attach to an existing authenticated SIGA tab.",
+    )
+    parser.add_argument(
         "--reset-browser-profile",
         action="store_true",
         help="Recreate the persistent browser profile before running the automation.",
+    )
+    parser.add_argument(
+        "--force-restart-browser",
+        action="store_true",
+        help="Terminate browser processes for the selected channel before opening a new CDP session.",
+    )
+    parser.add_argument(
+        "--isolated-browser-profile",
+        action="store_true",
+        help="Use the automation profile instead of an explicitly requested system Chrome profile.",
+    )
+    parser.add_argument(
+        "--system-browser-profile",
+        action="store_true",
+        help="Try to use the normal Chrome user profile. This may block CDP in recent Chrome versions.",
+    )
+    parser.add_argument(
+        "--chrome-profile-directory",
+        help="Optional Chrome profile directory, for example Default or Profile 1.",
+    )
+    parser.add_argument(
+        "--skip-certificate-policy",
+        action="store_true",
+        help="Do not configure Chrome/Edge certificate auto-selection policy before login.",
+    )
+    parser.add_argument(
+        "--clear-certificate-policy",
+        action="store_true",
+        help="Remove the certificate auto-selection policy configured by this tool and exit.",
     )
     parser.add_argument(
         "--manual-login-timeout",
@@ -78,6 +117,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reference month used by the extraction. If omitted, the terminal will ask.",
     )
     return parser
+
+
+def _read_env_bool(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on", "sim"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "nao"}:
+        return False
+    return default
 
 
 def _prompt_month() -> str:
@@ -132,18 +183,17 @@ def run_interactive_terminal(settings: Settings, spreadsheet: str | None, month:
     print(f"Mes de referencia: {month_reference}")
     print(f"Planilha: {spreadsheet_path}")
     print("Abrindo navegador para login manual...")
-    # Forca o fluxo interativo a reutilizar o mesmo navegador via CDP.
     if not settings.connect_browser_url:
         settings.connect_browser_url = get_connect_browser_url(settings)
     launch_debug_browser(settings)
+    print("Conclua o login manual no navegador aberto.")
+    print("Se a sessao ja estiver autenticada, apenas pressione Enter.")
+    input("Pressione Enter somente depois que o SIGA estiver aberto/autenticado...")
 
     flow = SigaLoginFlow(settings)
     extractor = SigaContributorExtractor(settings, allow_manual_login_prompt=False)
 
     with BrowserSession(settings) as context:
-        page = context.pages[0] if context.pages else context.new_page()
-        flow._open_siga(page)
-        input("Faca o login manualmente no navegador aberto e pressione Enter para continuar...")
         authenticated_page = flow.confirm_authenticated_context(context, browser=context.browser)
         print(f"Login confirmado: {authenticated_page.title()}")
 
@@ -164,12 +214,36 @@ def main() -> int:
         headless=args.headless,
         browser_channel=args.browser_channel,
         connect_browser_url=args.connect_browser_url,
+        prefer_existing_siga_session=(
+            _read_env_bool("PREFER_EXISTING_SIGA_SESSION", True) and not args.disable_attach
+        ),
         manual_login_timeout_ms=args.manual_login_timeout * 1000,
         reset_browser_profile=args.reset_browser_profile,
+        force_restart_browser=args.force_restart_browser,
+        use_system_browser_profile=args.system_browser_profile and not args.isolated_browser_profile,
+        chrome_profile_directory=args.chrome_profile_directory,
+        configure_certificate_policy=not args.skip_certificate_policy,
     )
     configure_logging(settings.log_dir / "run.log")
 
     try:
+        if args.clear_certificate_policy:
+            removed = clear_auto_certificate_selection(settings)
+            print(
+                "Politica de selecao automatica de certificado removida."
+                if removed
+                else "Nenhuma politica de selecao automatica de certificado foi encontrada."
+            )
+            return 0
+
+        if settings.configure_certificate_policy:
+            certificate_policy = configure_auto_certificate_selection(settings)
+            if certificate_policy.applied and certificate_policy.subject_cn:
+                print(f"Certificado configurado para selecao automatica: {certificate_policy.subject_cn}")
+            elif certificate_policy.reg_file_path:
+                print("Nao foi possivel gravar a politica de certificado automaticamente.")
+                print(f"Arquivo .reg gerado para aplicacao manual: {certificate_policy.reg_file_path}")
+
         if args.live_assist or args.live_command:
             session = LiveAssistSession(settings)
             if args.live_assist:

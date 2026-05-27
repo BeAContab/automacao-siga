@@ -3,9 +3,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from playwright.sync_api import Error, Page, TimeoutError
-
 from src.config import Settings
+from src.utils.selenium_compat import Error, Page, TimeoutError
 
 
 LOGGER = logging.getLogger(__name__)

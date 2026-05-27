@@ -4,14 +4,17 @@ import logging
 import shutil
 import subprocess
 import time
+import urllib.parse
 import urllib.error
 import urllib.request
 from contextlib import suppress
 from pathlib import Path
 
-from playwright.sync_api import Browser, BrowserContext, sync_playwright
+from selenium import webdriver
+from selenium.common.exceptions import WebDriverException
 
 from src.config import Settings
+from src.utils.selenium_compat import Browser, BrowserContext
 
 
 LOGGER = logging.getLogger(__name__)
@@ -25,6 +28,11 @@ WINDOWS_BROWSER_PATHS = {
         Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
         Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
     ),
+}
+
+BROWSER_IMAGE_NAMES = {
+    "chrome": "chrome.exe",
+    "msedge": "msedge.exe",
 }
 
 
@@ -66,23 +74,72 @@ def launch_debug_browser(settings: Settings) -> subprocess.Popen[str] | None:
     connect_url = get_connect_browser_url(settings)
     port = settings.remote_debugging_port
 
+    if settings.force_restart_browser:
+        terminate_browser_processes(settings)
+
     if is_cdp_available(connect_url):
         LOGGER.info("A browser with CDP is already available at %s", connect_url)
         return None
 
+    try:
+        return _start_debug_browser_process(settings, executable, port)
+    except BrowserLauncherError:
+        LOGGER.warning(
+            "CDP did not become available on first attempt; forcing browser restart and trying once more."
+        )
+        terminate_browser_processes(settings)
+        return _start_debug_browser_process(settings, executable, port)
+
+
+def _start_debug_browser_process(settings: Settings, executable: Path, port: int) -> subprocess.Popen[str]:
     settings.browser_debug_profile_dir.mkdir(parents=True, exist_ok=True)
     command = [
         str(executable),
         f"--remote-debugging-port={port}",
-        f"--user-data-dir={settings.browser_debug_profile_dir}",
         "--start-maximized",
-        settings.siga_url,
     ]
+    if settings.use_system_browser_profile:
+        LOGGER.info("Launching browser with the system user profile for certificate selection")
+        if settings.chrome_profile_directory:
+            command.append(f"--profile-directory={settings.chrome_profile_directory}")
+    else:
+        command.append(f"--user-data-dir={settings.browser_debug_profile_dir}")
+    command.append(settings.siga_url)
     LOGGER.info("Launching browser with remote debugging: %s", executable)
     process = subprocess.Popen(command)
     get_debug_browser_pid_path(settings).write_text(str(process.pid), encoding="ascii")
     wait_for_cdp(settings)
     return process
+
+
+def terminate_browser_processes(settings: Settings) -> None:
+    image_name = BROWSER_IMAGE_NAMES.get(settings.browser_channel)
+    if not image_name:
+        LOGGER.warning("Skipping forced browser restart for unknown channel: %s", settings.browser_channel)
+        return
+
+    LOGGER.info("Forcing browser restart by terminating '%s' processes", image_name)
+    result = subprocess.run(
+        ["taskkill", "/IM", image_name, "/T", "/F"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if result.returncode == 0:
+        LOGGER.info("Terminated existing '%s' processes", image_name)
+    else:
+        LOGGER.info("No running '%s' process found or taskkill returned %s", image_name, result.returncode)
+
+    with suppress(OSError):
+        get_debug_browser_pid_path(settings).unlink()
+
+    deadline = time.time() + 5
+    connect_url = get_connect_browser_url(settings)
+    while time.time() < deadline:
+        if not is_cdp_available(connect_url, timeout_seconds=1):
+            return
+        time.sleep(0.25)
 
 
 def shutdown_debug_browser(settings: Settings) -> bool:
@@ -91,20 +148,18 @@ def shutdown_debug_browser(settings: Settings) -> bool:
     closed = False
 
     if is_cdp_available(connect_url):
-        LOGGER.info("Closing browser via CDP at %s", connect_url)
-        playwright = sync_playwright().start()
-        browser = None
+        LOGGER.info("Closing browser via Selenium debugger attach at %s", connect_url)
+        driver = None
         try:
-            browser = playwright.chromium.connect_over_cdp(connect_url)
-            browser.close()
+            driver = create_debugger_driver(settings, connect_url)
+            driver.execute_cdp_cmd("Browser.close", {})
             closed = True
         except Exception:
             LOGGER.exception("Failed to close browser via CDP")
         finally:
-            if browser is not None:
+            if driver is not None:
                 with suppress(Exception):
-                    browser.close()
-            playwright.stop()
+                    driver.quit()
 
     if not closed and pid_path.exists():
         try:
@@ -152,54 +207,102 @@ def wait_for_cdp(settings: Settings) -> None:
 class BrowserSession:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._playwright = None
         self.browser: Browser | None = None
         self.context: BrowserContext | None = None
         self._connected_over_cdp = False
 
     def __enter__(self) -> BrowserContext:
         self.settings.ensure_runtime_dirs()
-        self._playwright = sync_playwright().start()
 
         if self.settings.connect_browser_url:
             connect_url = get_connect_browser_url(self.settings)
-            LOGGER.info("Connecting to existing browser via CDP at %s", connect_url)
+            LOGGER.info("Connecting to existing browser via Selenium debugger at %s", connect_url)
             if is_cdp_available(connect_url):
-                self.browser = self._playwright.chromium.connect_over_cdp(connect_url)
                 self._connected_over_cdp = True
-                if self.browser.contexts:
-                    self.context = self.browser.contexts[0]
-                else:
-                    self.context = self.browser.new_context()
+                driver = create_debugger_driver(self.settings, connect_url)
+                self.context = BrowserContext(driver, self.settings, owns_driver=False)
+                self.browser = Browser(driver, self.context)
+                self.context.browser = self.browser
                 return self.context
             else:
-                LOGGER.info("CDP not available at %s. Falling back to persistent launch.", connect_url)
+                LOGGER.info("Debugger not available at %s. Falling back to WebDriver launch.", connect_url)
 
         if self.settings.reset_browser_profile and self.settings.browser_profile_dir.exists():
             LOGGER.warning("Resetting browser profile at %s", self.settings.browser_profile_dir)
             shutil.rmtree(self.settings.browser_profile_dir, ignore_errors=True)
             self.settings.browser_profile_dir.mkdir(parents=True, exist_ok=True)
 
-        # Habilitamos depuracao remota no perfil persistente para permitir conexoes CDP futuras do Live Assist
-        launch_args = [
-            "--start-maximized",
-            f"--remote-debugging-port={self.settings.remote_debugging_port}"
-        ]
-        self.context = self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(self.settings.browser_profile_dir),
-            channel=self.settings.browser_channel,
-            headless=self.settings.headless,
-            slow_mo=self.settings.slow_mo_ms,
-            accept_downloads=True,
-            no_viewport=True,
-            args=launch_args,
-        )
+        driver = create_webdriver(self.settings)
+        self.context = BrowserContext(driver, self.settings, owns_driver=True)
+        self.browser = Browser(driver, self.context)
+        self.context.browser = self.browser
         return self.context
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        if self.context is not None and not self._connected_over_cdp:
+        if self.context is not None:
             self.context.close()
-        if self.browser is not None and not self._connected_over_cdp:
-            self.browser.close()
-        if self._playwright is not None:
-            self._playwright.stop()
+
+
+def create_debugger_driver(settings: Settings, connect_url: str):
+    debugger_address = _debugger_address(connect_url)
+    options = _build_browser_options(settings, debugger_address=debugger_address)
+    return _create_driver(settings, options)
+
+
+def create_webdriver(settings: Settings):
+    options = _build_browser_options(settings)
+    return _create_driver(settings, options)
+
+
+def _build_browser_options(settings: Settings, debugger_address: str | None = None):
+    if settings.browser_channel == "msedge":
+        options = webdriver.EdgeOptions()
+    else:
+        options = webdriver.ChromeOptions()
+
+    if debugger_address:
+        options.add_experimental_option("debuggerAddress", debugger_address)
+        return options
+
+    options.add_argument("--start-maximized")
+    options.add_argument(f"--remote-debugging-port={settings.remote_debugging_port}")
+    if settings.headless:
+        options.add_argument("--headless=new")
+    if settings.use_system_browser_profile:
+        LOGGER.info("Launching WebDriver with the system user profile for certificate selection")
+        if settings.chrome_profile_directory:
+            options.add_argument(f"--profile-directory={settings.chrome_profile_directory}")
+    else:
+        options.add_argument(f"--user-data-dir={settings.browser_profile_dir}")
+
+    download_dir = settings.output_dir / "_downloads"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    options.add_experimental_option(
+        "prefs",
+        {
+            "download.default_directory": str(download_dir.resolve()),
+            "download.prompt_for_download": False,
+            "download.directory_upgrade": True,
+            "safebrowsing.enabled": True,
+        },
+    )
+    return options
+
+
+def _create_driver(settings: Settings, options):
+    try:
+        if settings.browser_channel == "msedge":
+            return webdriver.Edge(options=options)
+        return webdriver.Chrome(options=options)
+    except WebDriverException as exc:
+        raise BrowserLauncherError(
+            "Nao foi possivel iniciar/conectar o Selenium WebDriver. "
+            "Verifique se o navegador selecionado esta instalado e se o Selenium Manager consegue localizar o driver."
+        ) from exc
+
+
+def _debugger_address(connect_url: str) -> str:
+    parsed = urllib.parse.urlparse(connect_url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 9222
+    return f"{host}:{port}"

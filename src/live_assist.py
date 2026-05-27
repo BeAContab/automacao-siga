@@ -7,13 +7,12 @@ from datetime import datetime
 from pathlib import Path
 from contextlib import suppress
 
-from playwright.sync_api import BrowserContext, Download, Page
-
 from src.auth.siga_login import FlowResult, SigaLoginFlow
 from src.config import PROJECT_ROOT, Settings
 from src.extraction.siga_extractor import SigaContributorExtractor
 from src.utils.browser import BrowserSession, get_connect_browser_url, launch_debug_browser
 from src.utils.browser import get_debug_browser_pid_path
+from src.utils.selenium_compat import BrowserContext, Download, Page
 from src.utils.siga_page import SigaPageInspector
 
 
@@ -63,10 +62,14 @@ class LiveAssistSession:
         else:
             LOGGER.info("Browser launched for live assist with PID %s", process.pid)
 
+        input(
+            "Conclua o login manual no navegador aberto e pressione Enter "
+            "somente quando o SIGA estiver autenticado..."
+        )
+
         flow = SigaLoginFlow(self.settings)
         with BrowserSession(self.settings) as context:
-            page = self._ensure_page(context)
-            page = flow.wait_for_manual_login(page, context)
+            page = flow.confirm_authenticated_context(context, browser=context.browser)
             self._persist_session_state(page)
             return FlowResult(
                 final_url=page.url,

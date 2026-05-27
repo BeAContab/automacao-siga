@@ -2,6 +2,9 @@
 __pycache__/
 *.py[cod]
 .browser-profile/
+browser-debug-profile/
+chrome-live-profile/
+edge-live-profile/
 logs/
 saida/
 .env
