@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+*.py[cod]
+.browser-profile/
+logs/
+saida/
+.env
+
+# Local project notes and chat context
+brain/
+
+# Local certificates and secrets
+certificado/*.pfx
+certificado/*.p12
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.p7b
+*.p7c
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
