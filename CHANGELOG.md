@@ -15,6 +15,16 @@
 - Motivo: inclusão da licença proprietária privada obrigatória do projeto.
 - Impacto: formaliza que o projeto é privado e possui todos os direitos reservados.
 
+### Dependências
+- Arquivo: requirements.txt
+- Motivo: instalação do `pyinstaller==6.20.0` para permitir empacotamento da automação em executável.
+- Impacto: o ambiente Python passa a ter a ferramenta de build necessária para gerar distribuições locais do projeto.
+
+### Corrigido
+- Arquivo: siga-automacao.spec
+- Motivo: o executável `onefile` falhava ao iniciar com `ModuleNotFoundError` para `selenium.webdriver.common.action_chains`.
+- Impacto: inclusão de `hiddenimports` do Selenium no build, permitindo inicialização correta do executável empacotado.
+
 ### Segurança
 - Arquivo: .gitignore
 - Motivo: inclusão do padrão `*.sqlite-journal` na lista de bancos locais ignorados.
@@ -24,6 +34,12 @@
 - Arquivo: brain/2026-06-01-abertura-contribuinte.md
 - Motivo: registro da decisão técnica aplicada ao fluxo de abertura do contribuinte.
 - Impacto: mantém rastreabilidade do diagnóstico e da correção.
+- Arquivo: brain/2026-06-01-pyinstaller.md
+- Motivo: registro da instalação do PyInstaller como ferramenta de empacotamento local.
+- Impacto: mantém rastreabilidade da decisão de dependência.
+- Arquivo: brain/2026-06-01-pyinstaller-onefile-fix.md
+- Motivo: registro da correção aplicada ao empacotamento `onefile` com `hiddenimports`.
+- Impacto: mantém histórico técnico do ajuste necessário para execução do `.exe`.
 
 ## 1.1.0 - 2026-05-27
 
