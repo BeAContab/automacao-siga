@@ -1,5 +1,30 @@
 # Changelog
 
+## [2026-06-01]
+
+### Corrigido
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: a abertura do contribuinte podia travar após a pesquisa do CGF quando a tabela ainda estava renderizando ou quando a varredura de texto via Selenium ficava lenta.
+- Impacto: a automação passa a aguardar o resultado filtrado, tenta abrir o detalhamento com seletores mais específicos, usa fallback por DOM e só prossegue após confirmar a tela de detalhes.
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: a lista de contribuintes podia terminar de carregar somente depois do timeout inicial, interrompendo o fluxo antes da pesquisa do CGF.
+- Impacto: a espera inicial pela lista virou permissiva, o ciclo de pesquisa/abertura ganhou retentativas e a validação forte passou a ocorrer após o envio do CGF.
+
+### Adicionado
+- Arquivo: LICENSE
+- Motivo: inclusão da licença proprietária privada obrigatória do projeto.
+- Impacto: formaliza que o projeto é privado e possui todos os direitos reservados.
+
+### Segurança
+- Arquivo: .gitignore
+- Motivo: inclusão do padrão `*.sqlite-journal` na lista de bancos locais ignorados.
+- Impacto: reduz risco de versionar arquivos auxiliares de banco local.
+
+### Documentação
+- Arquivo: brain/2026-06-01-abertura-contribuinte.md
+- Motivo: registro da decisão técnica aplicada ao fluxo de abertura do contribuinte.
+- Impacto: mantém rastreabilidade do diagnóstico e da correção.
+
 ## 1.1.0 - 2026-05-27
 
 - Migrada a automacao principal de Playwright para Selenium WebDriver.

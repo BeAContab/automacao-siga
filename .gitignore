@@ -10,6 +10,8 @@ edge-live-profile/
 logs/
 saida/
 .env
+.xlsx
+*.xlsx
 
 # Local project notes and chat context
 brain/
@@ -29,3 +31,4 @@ certificado/*.p12
 *.db
 *.sqlite
 *.sqlite3
+*.sqlite-journal
