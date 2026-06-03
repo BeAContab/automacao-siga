@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Fluxo de autenticação manual e validação da sessão autenticada do SIGA."""
+
 import logging
 import re
 import time
@@ -22,11 +24,13 @@ class FlowResult:
 
 
 class SigaLoginFlow:
+    """Encapsula a abertura do SIGA, a espera pelo login manual e a validação final."""
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.page_inspector = SigaPageInspector(settings)
 
     def run(self) -> FlowResult:
+        """Executa o fluxo completo de login e devolve o estado da sessão."""
         with BrowserSession(self.settings) as context:
             page = self.attach_to_existing_authenticated_page(context, browser=context.browser)
             if page is None:
@@ -48,6 +52,7 @@ class SigaLoginFlow:
         context: BrowserContext,
         browser: Browser | None = None,
     ) -> Page:
+        """Pausa o fluxo para que o usuário conclua a autenticação manual no navegador."""
         if self.settings.prefer_existing_siga_session:
             attached_page = self.attach_to_existing_authenticated_page(context, browser=browser)
             if attached_page is not None:
@@ -62,6 +67,7 @@ class SigaLoginFlow:
         return self.confirm_authenticated_context(context, browser=browser)
 
     def confirm_authenticated_context(self, context: BrowserContext, browser: Browser | None = None) -> Page:
+        """Espera até localizar uma página do SIGA já autenticada."""
         LOGGER.info("Validating authenticated SIGA page")
         return self._wait_for_authenticated_page(context, browser=browser)
 
@@ -70,6 +76,7 @@ class SigaLoginFlow:
         context: BrowserContext,
         browser: Browser | None = None,
     ) -> Page | None:
+        """Tenta reaproveitar uma aba autenticada já aberta no navegador."""
         LOGGER.info("Trying to attach to an existing authenticated SIGA page")
         for active_context in self._iter_contexts(context, browser):
             for candidate in active_context.pages:
@@ -85,6 +92,7 @@ class SigaLoginFlow:
         return None
 
     def _open_siga(self, page: Page) -> None:
+        """Abre a URL principal do SIGA e aguarda a estabilização inicial da tela."""
         LOGGER.info("Opening SIGA at %s", self.settings.siga_url)
         page.goto(self.settings.siga_url, wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
         if "siga.sefaz.ce.gov.br/ui" in page.url:
@@ -99,6 +107,7 @@ class SigaLoginFlow:
         page.wait_for_timeout(3_000)
 
     def _wait_for_authenticated_page(self, context: BrowserContext, browser: Browser | None = None) -> Page:
+        """Varre as abas até encontrar a área autenticada do SIGA."""
         deadline = time.time() + (self.settings.manual_login_timeout_ms / 1000)
         while time.time() < deadline:
             for active_context in self._iter_contexts(context, browser):
@@ -114,6 +123,7 @@ class SigaLoginFlow:
         raise TimeoutError("Pagina autenticada do SIGA nao foi detectada apos a confirmacao do login manual.")
 
     def _iter_contexts(self, context: BrowserContext, browser: Browser | None) -> list[BrowserContext]:
+        """Monta a lista de contextos de navegador que precisam ser inspecionados."""
         contexts: list[BrowserContext] = [context]
         if browser is not None:
             for candidate_context in browser.contexts:
@@ -122,6 +132,7 @@ class SigaLoginFlow:
         return contexts
 
     def _is_authenticated_siga_page(self, page: Page) -> bool:
+        """Valida se a página aberta realmente pertence à área autenticada do SIGA."""
         if page.is_closed():
             return False
         if "siga.sefaz.ce.gov.br/ui" not in page.url:

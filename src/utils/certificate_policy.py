@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Política local para seleção automática do certificado de cliente no navegador."""
+
 import json
 import logging
 import subprocess
@@ -29,6 +31,7 @@ class CertificatePolicyError(RuntimeError):
 
 @dataclass(slots=True)
 class CertificatePolicyResult:
+    """Resultado consolidado da tentativa de aplicar ou limpar a política."""
     subject_cn: str | None
     applied: bool
     registry_path: str | None = None
@@ -36,6 +39,7 @@ class CertificatePolicyResult:
 
 
 def configure_auto_certificate_selection(settings: Settings) -> CertificatePolicyResult:
+    """Cria ou atualiza a política de seleção automática do certificado de cliente."""
     policy_path = POLICY_PATHS.get(settings.browser_channel)
     if not policy_path:
         LOGGER.info("Skipping certificate policy for unsupported browser channel: %s", settings.browser_channel)
@@ -72,6 +76,7 @@ def configure_auto_certificate_selection(settings: Settings) -> CertificatePolic
 
 
 def clear_auto_certificate_selection(settings: Settings) -> bool:
+    """Remove as entradas criadas pela política quando o usuário pede limpeza."""
     policy_path = POLICY_PATHS.get(settings.browser_channel)
     if not policy_path:
         return False
@@ -97,6 +102,7 @@ def clear_auto_certificate_selection(settings: Settings) -> bool:
 
 
 def _find_client_auth_certificate_cn() -> str | None:
+    """Localiza o CN do certificado atual do usuário que suporta autenticação cliente."""
     command = (
         "$cert = Get-ChildItem Cert:\\CurrentUser\\My | "
         "Where-Object { $_.HasPrivateKey -and "
@@ -120,6 +126,7 @@ def _find_client_auth_certificate_cn() -> str | None:
 
 
 def _policy_payloads(subject_cn: str) -> list[dict[str, object]]:
+    """Monta os blocos JSON que o Chrome/Edge espera na política de certificado."""
     return [
         {
             "pattern": pattern,
@@ -134,6 +141,7 @@ def _policy_payloads(subject_cn: str) -> list[dict[str, object]]:
 
 
 def _write_reg_file(policy_path: str, subject_cn: str) -> Path:
+    """Gera um arquivo .reg quando o Windows impede escrita direta no registro."""
     output_path = PROJECT_ROOT / "logs" / "chrome-certificate-policy.reg"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path = rf"HKEY_CURRENT_USER\{policy_path}"

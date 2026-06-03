@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Criação, reutilização e encerramento da sessão de navegador usada pela automação."""
+
 import logging
 import shutil
 import subprocess
@@ -41,16 +43,19 @@ class BrowserLauncherError(RuntimeError):
 
 
 def get_debug_browser_pid_path(settings: Settings) -> Path:
+    """Retorna o arquivo que guarda o PID do navegador de depuração."""
     return settings.browser_debug_profile_dir / "browser.pid"
 
 
 def get_connect_browser_url(settings: Settings) -> str:
+    """Resolve a URL CDP que será usada para conectar ao navegador."""
     if settings.connect_browser_url:
         return settings.connect_browser_url
     return f"http://127.0.0.1:{settings.remote_debugging_port}"
 
 
 def is_cdp_available(url: str, timeout_seconds: int = 3) -> bool:
+    """Verifica se o navegador já está expondo a interface CDP esperada."""
     version_url = f"{url.rstrip('/')}/json/version"
     try:
         with urllib.request.urlopen(version_url, timeout=timeout_seconds) as response:
@@ -60,6 +65,7 @@ def is_cdp_available(url: str, timeout_seconds: int = 3) -> bool:
 
 
 def resolve_browser_executable(settings: Settings) -> Path:
+    """Localiza o executável do Chrome ou Edge de acordo com o canal escolhido."""
     candidates = WINDOWS_BROWSER_PATHS.get(settings.browser_channel, ())
     for candidate in candidates:
         if candidate.exists():
@@ -70,6 +76,7 @@ def resolve_browser_executable(settings: Settings) -> Path:
 
 
 def launch_debug_browser(settings: Settings) -> subprocess.Popen[str] | None:
+    """Sobe ou reaproveita um navegador com depuração remota ativa."""
     executable = resolve_browser_executable(settings)
     connect_url = get_connect_browser_url(settings)
     port = settings.remote_debugging_port
@@ -92,12 +99,14 @@ def launch_debug_browser(settings: Settings) -> subprocess.Popen[str] | None:
 
 
 def _start_debug_browser_process(settings: Settings, executable: Path, port: int) -> subprocess.Popen[str]:
+    """Inicia o navegador com perfil controlado pela automação."""
     settings.browser_debug_profile_dir.mkdir(parents=True, exist_ok=True)
     command = [
         str(executable),
         f"--remote-debugging-port={port}",
         "--start-maximized",
     ]
+    # Quando o login depende do certificado do usuário, o perfil do sistema pode ser necessário.
     if settings.use_system_browser_profile:
         LOGGER.info("Launching browser with the system user profile for certificate selection")
         if settings.chrome_profile_directory:
@@ -113,6 +122,7 @@ def _start_debug_browser_process(settings: Settings, executable: Path, port: int
 
 
 def terminate_browser_processes(settings: Settings) -> None:
+    """Encerra processos do navegador para limpar sessões antigas antes de relançar."""
     image_name = BROWSER_IMAGE_NAMES.get(settings.browser_channel)
     if not image_name:
         LOGGER.warning("Skipping forced browser restart for unknown channel: %s", settings.browser_channel)
@@ -143,6 +153,7 @@ def terminate_browser_processes(settings: Settings) -> None:
 
 
 def shutdown_debug_browser(settings: Settings) -> bool:
+    """Tenta fechar o navegador pela CDP e, se necessário, cai para PID explícito."""
     connect_url = get_connect_browser_url(settings)
     pid_path = get_debug_browser_pid_path(settings)
     closed = False
@@ -192,6 +203,7 @@ def shutdown_debug_browser(settings: Settings) -> bool:
 
 
 def wait_for_cdp(settings: Settings) -> None:
+    """Aguarda até que a porta de depuração do navegador fique pronta para uso."""
     connect_url = get_connect_browser_url(settings)
     deadline = time.time() + (settings.browser_start_timeout_ms / 1000)
     while time.time() < deadline:
@@ -205,6 +217,7 @@ def wait_for_cdp(settings: Settings) -> None:
 
 
 class BrowserSession:
+    """Gerencia o ciclo de vida do WebDriver e do contexto compartilhado da automação."""
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.browser: Browser | None = None
@@ -212,6 +225,7 @@ class BrowserSession:
         self._connected_over_cdp = False
 
     def __enter__(self) -> BrowserContext:
+        """Cria ou anexa o navegador e devolve o contexto pronto para navegação."""
         self.settings.ensure_runtime_dirs()
 
         if self.settings.connect_browser_url:
@@ -239,22 +253,26 @@ class BrowserSession:
         return self.context
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        """Fecha o driver ou apenas a conexão, conforme a origem da sessão."""
         if self.context is not None:
             self.context.close()
 
 
 def create_debugger_driver(settings: Settings, connect_url: str):
+    """Cria um WebDriver conectado a uma sessão já aberta via CDP."""
     debugger_address = _debugger_address(connect_url)
     options = _build_browser_options(settings, debugger_address=debugger_address)
     return _create_driver(settings, options)
 
 
 def create_webdriver(settings: Settings):
+    """Cria um WebDriver novo quando não existe sessão reutilizável."""
     options = _build_browser_options(settings)
     return _create_driver(settings, options)
 
 
 def _build_browser_options(settings: Settings, debugger_address: str | None = None):
+    """Prepara as opções do navegador com base no modo de execução escolhido."""
     if settings.browser_channel == "msedge":
         options = webdriver.EdgeOptions()
     else:
@@ -290,6 +308,7 @@ def _build_browser_options(settings: Settings, debugger_address: str | None = No
 
 
 def _create_driver(settings: Settings, options):
+    """Instancia o driver do Selenium e traduz falhas em uma exceção mais amigável."""
     try:
         if settings.browser_channel == "msedge":
             return webdriver.Edge(options=options)
@@ -302,6 +321,7 @@ def _create_driver(settings: Settings, options):
 
 
 def _debugger_address(connect_url: str) -> str:
+    """Converte a URL CDP no formato aceito pela opção `debuggerAddress`."""
     parsed = urllib.parse.urlparse(connect_url)
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or 9222

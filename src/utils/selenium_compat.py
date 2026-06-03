@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Camada de compatibilidade que simplifica o uso do Selenium no projeto."""
+
 import re
 import shutil
 import time
@@ -88,6 +90,7 @@ def _key_value(key: str) -> str:
 
 
 class Download:
+    """Representa um arquivo baixado pela automação e permite movê-lo para o destino final."""
     def __init__(self, path: Path) -> None:
         self.path = path
         self.suggested_filename = path.name
@@ -105,6 +108,7 @@ class Download:
 
 
 class DownloadWaiter:
+    """Context manager que aguarda um download terminar sem polling externo espalhado pelo código."""
     def __init__(self, page: Page, timeout_ms: int) -> None:
         self.page = page
         self.timeout_ms = timeout_ms
@@ -132,6 +136,7 @@ class DownloadWaiter:
 
 
 class Keyboard:
+    """Encapsula ações de teclado executadas na aba ativa."""
     def __init__(self, page: Page) -> None:
         self.page = page
 
@@ -141,6 +146,7 @@ class Keyboard:
 
 
 class Mouse:
+    """Encapsula cliques por coordenada quando o seletor não basta."""
     def __init__(self, page: Page) -> None:
         self.page = page
 
@@ -165,6 +171,7 @@ class Mouse:
 
 
 class Locator:
+    """Interface leve para localizar elementos, semelhante ao estilo do Playwright."""
     def __init__(
         self,
         page: Page,
@@ -188,11 +195,13 @@ class Locator:
         return len(self._elements())
 
     def inner_text(self, timeout: int | None = None) -> str:
+        """Lê o texto visível do primeiro elemento encontrado."""
         element = self._element(timeout)
         text = element.text or element.get_attribute("innerText") or element.get_attribute("textContent") or ""
         return str(text)
 
     def click(self, timeout: int | None = None, force: bool = False) -> None:
+        """Clica no elemento, forçando via JavaScript quando o clique normal falhar."""
         element = self._element(timeout)
         self.page._scroll_into_view(element)
         if force:
@@ -204,6 +213,7 @@ class Locator:
             self.page.driver.execute_script("arguments[0].click();", element)
 
     def fill(self, value: str, timeout: int | None = None) -> None:
+        """Limpa o campo e preenche o valor informado."""
         element = self._element(timeout)
         self.page._scroll_into_view(element)
         element.click()
@@ -305,6 +315,7 @@ class Locator:
 
 
 class Page:
+    """Representa uma aba do navegador com operações de alto nível para a automação."""
     def __init__(self, context: BrowserContext, handle: str) -> None:
         self.context = context
         self.driver = context.driver
@@ -329,6 +340,7 @@ class Page:
         self._switch()
 
     def goto(self, url: str, wait_until: str | None = None, timeout: int | None = None) -> None:
+        """Navega para uma URL e aguarda o estado mínimo da página quando solicitado."""
         self._switch()
         self.driver.set_page_load_timeout(_timeout_seconds(timeout))
         try:
@@ -348,6 +360,7 @@ class Page:
             self.wait_for_load_state(wait_until, timeout=timeout)
 
     def wait_for_load_state(self, state: str, timeout: int | None = None) -> None:
+        """Espera a página estabilizar em um estado de carregamento aceitável."""
         self._switch()
         try:
             WebDriverWait(self.driver, _timeout_seconds(timeout)).until(
@@ -386,6 +399,7 @@ class Page:
         return self.driver.page_source
 
     def evaluate(self, script: str, arg: Any = None) -> Any:
+        """Executa JavaScript para consultas ou ações que o Selenium não expressa bem."""
         self._switch()
         wrapped_script = f"return ({script})(arguments[0]);"
         try:
@@ -531,6 +545,7 @@ class Page:
 
 
 class BrowserContext:
+    """Agrupa o driver e os helpers de download usados durante a execução."""
     def __init__(self, driver: WebDriver, settings: Settings, owns_driver: bool) -> None:
         self.driver = driver
         self.settings = settings
@@ -544,6 +559,7 @@ class BrowserContext:
         return [Page(self, handle) for handle in self.driver.window_handles]
 
     def new_page(self) -> Page:
+        """Abre uma nova aba e a devolve já associada ao contexto."""
         self.driver.switch_to.new_window("tab")
         return Page(self, self.driver.current_window_handle)
 
@@ -557,6 +573,7 @@ class BrowserContext:
                     service.stop()
 
     def configure_downloads(self) -> None:
+        """Habilita o diretório padrão de downloads para arquivos baixados pelo navegador."""
         self.download_dir.mkdir(parents=True, exist_ok=True)
         try:
             self.driver.execute_cdp_cmd(
@@ -587,6 +604,7 @@ class BrowserContext:
         }
 
     def wait_for_download(self, snapshot: dict[Path, tuple[int, int]], timeout_ms: int) -> Path:
+        """Espera surgir um novo arquivo estável no diretório de downloads."""
         deadline = time.time() + _timeout_seconds(timeout_ms)
         while time.time() < deadline:
             for path in self.download_dir.iterdir():
@@ -610,6 +628,7 @@ class BrowserContext:
 
 
 class Browser:
+    """Wrapper pequeno para permitir fechamento controlado da sessão compartilhada."""
     def __init__(self, driver: WebDriver, context: BrowserContext) -> None:
         self.driver = driver
         self._context = context
@@ -626,6 +645,7 @@ class Browser:
 
 
 def _is_attached(element: WebElement) -> bool:
+    """Confirma se o elemento ainda pertence ao DOM antes de usá-lo."""
     try:
         element.is_enabled()
         return True
@@ -636,11 +656,13 @@ def _is_attached(element: WebElement) -> bool:
 
 
 def _is_temporary_download(path: Path) -> bool:
+    """Identifica arquivos ainda em progresso para evitar copiar downloads incompletos."""
     temporary_suffixes = {".crdownload", ".tmp", ".part"}
     return path.suffix.lower() in temporary_suffixes or path.name.endswith(".download")
 
 
 def _accessible_name(element: WebElement) -> str:
+    """Reconstrói um nome acessível aproximado a partir de atributos comuns."""
     values = [
         element.get_attribute("aria-label"),
         element.get_attribute("title"),
@@ -654,6 +676,7 @@ def _accessible_name(element: WebElement) -> str:
 
 
 def _prefer_deepest(elements: list[WebElement]) -> list[WebElement]:
+    """Prefere os elementos mais específicos quando vários batem com o mesmo texto."""
     def child_match_count(element: WebElement) -> int:
         try:
             text = element.text or element.get_attribute("textContent") or ""

@@ -3,6 +3,8 @@ teste-navegador
 .venv/
 __pycache__/
 *.py[cod]
+build/
+dist/
 .browser-profile/
 browser-debug-profile/
 chrome-live-profile/
@@ -10,13 +12,14 @@ edge-live-profile/
 logs/
 saida/
 .env
-.xlsx
 *.xlsx
+*.csv
 
 # Local project notes and chat context
 brain/
 
 # Local certificates and secrets
+certificado/
 certificado/*.pfx
 certificado/*.p12
 *.pem

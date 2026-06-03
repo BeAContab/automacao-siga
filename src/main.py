@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+"""Ponto de entrada da automação do SIGA.
+
+Este módulo coordena a leitura dos argumentos, o fluxo interativo do terminal
+e a execução da extração com a sessão autenticada do navegador.
+"""
+
 import argparse
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -11,7 +18,7 @@ from dotenv import load_dotenv
 from src.auth.siga_login import SigaLoginFlow
 from src.config import Settings
 from src.extraction.siga_extractor import BatchExtractionResult, SigaContributorExtractor
-from src.extraction.spreadsheet import load_cgfs_from_xlsx
+from src.extraction.spreadsheet import load_cnpjs_from_xlsx
 from src.live_assist import LiveAssistSession
 from src.months import MONTH_OPTIONS
 from src.utils.browser import BrowserSession, get_connect_browser_url, launch_debug_browser
@@ -21,8 +28,11 @@ from src.utils.certificate_policy import (
 )
 from src.utils.logging_setup import configure_logging
 
+DOCUMENT_TAB_OPTIONS = ("NF-e", "NFC-e", "CT-e")
+
 
 def build_parser() -> argparse.ArgumentParser:
+    """Define os argumentos aceitos pela interface de terminal."""
     parser = argparse.ArgumentParser(
         description="SIGA automation with interactive terminal workflow."
     )
@@ -109,17 +119,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--spreadsheet",
-        help="Path to the XLSX spreadsheet with the 'cgf' column. If omitted, the terminal will ask.",
+        help="Path to the XLSX spreadsheet with the 'cnpj' column. If omitted, the terminal will ask.",
     )
     parser.add_argument(
         "--month",
-        choices=MONTH_OPTIONS,
-        help="Reference month used by the extraction. If omitted, the terminal will ask.",
+        nargs="+",
+        help=(
+            "Reference month(s) used by the extraction. "
+            "Accepted values: month names (e.g. Maio Junho) or indexes in interactive mode."
+        ),
+    )
+    parser.add_argument(
+        "--year",
+        type=int,
+        help="Reference year used by detail naming. If omitted, the terminal will ask.",
+    )
+    parser.add_argument(
+        "--docs",
+        nargs="+",
+        help=(
+            "Document tabs to process. Accepted values: NF-e, NFC-e, CT-e. "
+            "You can provide one or more values, for example: --docs NF-e CT-e"
+        ),
     )
     return parser
 
 
 def _read_env_bool(name: str, default: bool) -> bool:
+    """Lê uma variável booleana do ambiente com formatos comuns do Windows e Unix."""
     raw_value = os.getenv(name)
     if raw_value is None:
         return default
@@ -131,25 +158,69 @@ def _read_env_bool(name: str, default: bool) -> bool:
     return default
 
 
-def _prompt_month() -> str:
+def _normalize_selected_months(values: list[str] | tuple[str, ...] | None) -> list[str]:
+    """Converte nomes ou índices de meses para a forma canônica usada internamente."""
+    if not values:
+        return []
+
+    month_by_name = {month.casefold(): month for month in MONTH_OPTIONS}
+    selected: list[str] = []
+    for value in values:
+        token = str(value).strip()
+        if not token:
+            continue
+        if token.isdigit():
+            position = int(token)
+            if not (1 <= position <= len(MONTH_OPTIONS)):
+                raise ValueError("Mes invalido. Use nomes de meses validos ou numeros de 1 a 12.")
+            month_name = MONTH_OPTIONS[position - 1]
+        else:
+            month_name = month_by_name.get(token.casefold())
+            if not month_name:
+                raise ValueError("Mes invalido. Use nomes de meses validos ou numeros de 1 a 12.")
+        if month_name not in selected:
+            selected.append(month_name)
+    return selected
+
+
+def _prompt_months() -> list[str]:
+    """Pergunta ao usuário quais meses devem entrar no lote de extração."""
     print("Meses disponiveis:")
     for index, month in enumerate(MONTH_OPTIONS, start=1):
         print(f"{index}. {month}")
+    print("Exemplo: 5 ou Maio ou 5,6,7")
 
     while True:
-        value = input("Informe o mes de referencia (nome ou numero): ").strip()
-        if value.isdigit():
-            position = int(value)
-            if 1 <= position <= len(MONTH_OPTIONS):
-                return MONTH_OPTIONS[position - 1]
-        for month in MONTH_OPTIONS:
-            if month.lower() == value.lower():
-                return month
-        print("Mes invalido. Exemplo: Maio ou 5.")
+        raw_value = input("Informe o(s) mes(es) de referencia [padrao: mes atual]: ").strip()
+        if not raw_value:
+            current_month = MONTH_OPTIONS[max(0, min(11, time.localtime().tm_mon - 1))]
+            return [current_month]
+        tokens = [token.strip() for token in raw_value.replace(";", ",").split(",") if token.strip()]
+        try:
+            months = _normalize_selected_months(tokens)
+        except ValueError:
+            print("Mes invalido. Exemplo: Maio ou 5,6.")
+            continue
+        if months:
+            return months
+        print("Mes invalido. Exemplo: Maio ou 5,6.")
+
+
+def _prompt_year() -> str:
+    """Pergunta o ano de referência com base no ano atual como padrão."""
+    default_year = str(time.localtime().tm_year)
+    while True:
+        value = input(f"Informe o ano de referencia [padrao: {default_year}]: ").strip()
+        if not value:
+            return default_year
+        if value.isdigit() and len(value) == 4:
+            return value
+        print("Ano invalido. Exemplo: 2026.")
 
 
 def _prompt_spreadsheet() -> Path:
-    default_path = Path("cgf.xlsx")
+    """Solicita a planilha XLSX com a coluna `cnpj`."""
+    default_path = Path("cnpj.xlsx")
     prompt = "Informe o caminho da planilha XLSX"
     if default_path.exists():
         prompt += f" [padrao: {default_path}]"
@@ -163,7 +234,64 @@ def _prompt_spreadsheet() -> Path:
         print(f"Planilha invalida ou nao encontrada: {path}")
 
 
+def _normalize_selected_tabs(values: list[str] | tuple[str, ...] | None) -> list[str]:
+    """Normaliza a escolha das abas fiscais e aceita aliases como `Todos`."""
+    if not values:
+        return list(DOCUMENT_TAB_OPTIONS)
+
+    normalized_map = {value.casefold(): value for value in DOCUMENT_TAB_OPTIONS}
+    selected: list[str] = []
+    for value in values:
+        normalized = str(value).strip().casefold()
+        if normalized in {"todos", "todas", "all", "*"}:
+            return list(DOCUMENT_TAB_OPTIONS)
+        match = normalized_map.get(normalized)
+        if not match:
+            raise ValueError(
+                "Valor invalido em --docs. Use apenas: NF-e, NFC-e, CT-e (ou 'all')."
+            )
+        if match not in selected:
+            selected.append(match)
+    return selected
+
+
+def _prompt_document_tabs() -> list[str]:
+    """Pergunta ao usuário quais documentos fiscais ele quer processar."""
+    print("Quais documentos deseja processar?")
+    print("1. NF-e")
+    print("2. NFC-e")
+    print("3. CT-e")
+    print("4. Todos")
+    print("Exemplo: 1,3 ou NF-e,CT-e")
+
+    while True:
+        raw_value = input("Informe as opcoes [padrao: Todos]: ").strip()
+        if not raw_value:
+            return list(DOCUMENT_TAB_OPTIONS)
+
+        tokens = [token.strip() for token in raw_value.replace(";", ",").split(",") if token.strip()]
+        expanded: list[str] = []
+        for token in tokens:
+            if token.isdigit():
+                mapping = {"1": "NF-e", "2": "NFC-e", "3": "CT-e", "4": "all"}
+                mapped = mapping.get(token)
+                if not mapped:
+                    expanded = []
+                    break
+                expanded.append(mapped)
+            else:
+                expanded.append(token)
+        if not expanded:
+            print("Opcao invalida. Exemplo: 1,2 ou NF-e,CT-e.")
+            continue
+        try:
+            return _normalize_selected_tabs(expanded)
+        except ValueError:
+            print("Opcao invalida. Use NF-e, NFC-e, CT-e ou Todos.")
+
+
 def _print_batch_summary(results: list[BatchExtractionResult], total_rows: int) -> None:
+    """Mostra um resumo compacto do lote ao final da execução."""
     download_count = sum(len(result.fiscal_results) for result in results)
     print("")
     print("Processo concluido.")
@@ -172,16 +300,28 @@ def _print_batch_summary(results: list[BatchExtractionResult], total_rows: int) 
     if results:
         print(f"Pasta da ultima saida: {results[-1].taxpayer_folder}")
     for result in results:
-        print(f"- {result.cgf}: {result.message}")
+        print(f"- {result.cnpj}: {result.message}")
 
 
-def run_interactive_terminal(settings: Settings, spreadsheet: str | None, month: str | None) -> int:
-    month_reference = month or _prompt_month()
+def run_interactive_terminal(
+    settings: Settings,
+    spreadsheet: str | None,
+    months: list[str] | None,
+    year: int | None,
+    docs: list[str] | None,
+) -> int:
+    """Executa o fluxo interativo completo do terminal."""
+    month_references = months if months else _prompt_months()
+    reference_year = str(year) if year is not None else _prompt_year()
+    selected_tabs = _normalize_selected_tabs(docs) if docs is not None else _prompt_document_tabs()
     spreadsheet_path = Path(spreadsheet).expanduser() if spreadsheet else _prompt_spreadsheet()
-    spreadsheet_rows = load_cgfs_from_xlsx(spreadsheet_path)
+    spreadsheet_rows = load_cnpjs_from_xlsx(spreadsheet_path)
 
-    print(f"Mes de referencia: {month_reference}")
+    print(f"Mes(es) de referencia: {', '.join(month_references)}")
+    print(f"Ano de referencia: {reference_year}")
+    print(f"Documentos selecionados: {', '.join(selected_tabs)}")
     print(f"Planilha: {spreadsheet_path}")
+    # O navegador é aberto antes da extração para que o usuário conclua o login manual.
     print("Abrindo navegador para login manual...")
     if not settings.connect_browser_url:
         settings.connect_browser_url = get_connect_browser_url(settings)
@@ -197,17 +337,26 @@ def run_interactive_terminal(settings: Settings, spreadsheet: str | None, month:
         authenticated_page = flow.confirm_authenticated_context(context, browser=context.browser)
         print(f"Login confirmado: {authenticated_page.title()}")
 
-        results = extractor.run_batch_from_spreadsheet_in_context(
-            context,
-            spreadsheet_rows,
-            month_reference,
-        )
+        results: list[BatchExtractionResult] = []
+        # Cada mês é processado separadamente para manter os nomes de saída previsíveis.
+        for month_reference in month_references:
+            print(f"Executando extracao para o mes: {month_reference}")
+            results.extend(
+                extractor.run_batch_from_spreadsheet_in_context(
+                    context,
+                    spreadsheet_rows,
+                    month_reference,
+                    reference_year,
+                    selected_tabs,
+                )
+            )
 
     _print_batch_summary(results, len(spreadsheet_rows))
     return 0
 
 
 def main() -> int:
+    """Configura o ambiente e escolhe entre os modos interativo, assistido ou de limpeza."""
     load_dotenv()
     args = build_parser().parse_args()
     settings = Settings(
@@ -227,6 +376,7 @@ def main() -> int:
     configure_logging(settings.log_dir / "run.log")
 
     try:
+        # Este modo apenas limpa a política de certificado e encerra.
         if args.clear_certificate_policy:
             removed = clear_auto_certificate_selection(settings)
             print(
@@ -236,6 +386,7 @@ def main() -> int:
             )
             return 0
 
+        # A política de certificado é aplicada antes do navegador para reduzir atrito no login.
         if settings.configure_certificate_policy:
             certificate_policy = configure_auto_certificate_selection(settings)
             if certificate_policy.applied and certificate_policy.subject_cn:
@@ -244,6 +395,7 @@ def main() -> int:
                 print("Nao foi possivel gravar a politica de certificado automaticamente.")
                 print(f"Arquivo .reg gerado para aplicacao manual: {certificate_policy.reg_file_path}")
 
+        # O modo assistido reaproveita a infraestrutura de navegador, mas deixa a ação manual guiada.
         if args.live_assist or args.live_command:
             session = LiveAssistSession(settings)
             if args.live_assist:
@@ -262,7 +414,9 @@ def main() -> int:
             print(f"URL atual: {result.current_url}")
             return 0
 
-        return run_interactive_terminal(settings, args.spreadsheet, args.month)
+        parsed_docs = _normalize_selected_tabs(args.docs) if args.docs else None
+        parsed_months = _normalize_selected_months(args.month) if args.month else None
+        return run_interactive_terminal(settings, args.spreadsheet, parsed_months, args.year, parsed_docs)
     except Exception:
         logging.exception("Unhandled fatal error during execution")
         return 1

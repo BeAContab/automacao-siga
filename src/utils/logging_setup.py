@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Configuração central de logs para execução, erro e exceções globais."""
+
 import logging
 import sys
 import threading
@@ -7,6 +9,7 @@ from pathlib import Path
 
 
 def configure_logging(log_file: Path) -> None:
+    """Ativa logs em arquivo e no console com tratamento consistente de erros."""
     log_file.parent.mkdir(parents=True, exist_ok=True)
     error_log_file = log_file.parent / "errors.log"
 
@@ -36,7 +39,9 @@ def configure_logging(log_file: Path) -> None:
 
 
 def install_global_exception_logging() -> None:
+    """Registra exceções não tratadas em nível global e em threads."""
     def handle_exception(exc_type, exc_value, exc_traceback) -> None:
+        # Erros de teclado seguem o comportamento normal do terminal.
         if issubclass(exc_type, KeyboardInterrupt):
             sys.__excepthook__(exc_type, exc_value, exc_traceback)
             return
@@ -46,6 +51,7 @@ def install_global_exception_logging() -> None:
         )
 
     def handle_thread_exception(args: threading.ExceptHookArgs) -> None:
+        # Falhas em threads também precisam aparecer no log principal para diagnóstico.
         if args.exc_type and issubclass(args.exc_type, KeyboardInterrupt):
             return
         logging.getLogger("global").error(

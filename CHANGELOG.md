@@ -1,5 +1,218 @@
 # Changelog
 
+## [2026-06-03]
+
+### Documentação
+- Arquivos:
+  - README.md
+  - .gitignore
+- Motivo: o projeto passou a documentar melhor a entrada `cnpj.xlsx`, a preservação de CNPJs com zero à esquerda e a referência de validação `testes.csv`.
+- Impacto: reduz ambiguidade na configuração inicial e mantém a árvore local limpa sem ruídos desnecessários.
+
+## [2026-06-03]
+
+### Corrigido
+- Arquivos:
+  - src/extraction/spreadsheet.py
+  - src/extraction/siga_extractor.py
+- Motivo: a normalização de CNPJ estava removendo zeros à esquerda, o que quebrava casos como `02843131000166`.
+- Impacto: a planilha agora preserva os 14 dígitos completos e a comparação com a fila do SIGA continua funcionando com a base `02843131`.
+
+## [2026-06-03]
+
+### Corrigido
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: a extração de NFC-e/Emissor em Maio de 2026 passou a reencontrar a linha visível da fila de downloads e a clicar no item vivo do DOM antes de salvar o arquivo.
+- Impacto: o CSV final `Informacoes Fiscais - NFC-e - Emissor - Detalhamento Maio de 2026.csv` agora fica byte a byte igual ao `testes.csv` de referência para o CNPJ 10484384000119.
+
+## [2026-06-03]
+
+### Corrigido
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: a seleção do download assíncrono deixou de aceitar filas antigas como fallback quando a solicitação nova ainda não apareceu.
+- Impacto: reduz a chance de baixar um arquivo velho e salvar com o nome da execução atual.
+
+## [2026-06-03]
+
+### Corrigido
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: a NFC-e deixou de acrescentar o sufixo `Autorizadas` no nome solicitado para download assíncrono.
+- Impacto: o relatório passa a ser procurado e salvo como `Informacoes Fiscais - NFC-e - Emissor - Detalhamento Maio de 2026`, conforme pedido.
+
+## [2026-06-03]
+
+### Alterado
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: os downloads assíncronos voltaram a ser renomeados pelo padrão da TELA/ABA solicitada.
+- Impacto: o nome final do arquivo passa a refletir a consulta esperada pela automação, independentemente do nome sugerido pelo navegador.
+
+## [2026-06-03]
+
+### Corrigido
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: a abertura do mês de referência passou a tentar novamente quando a lista ainda não terminou de carregar.
+- Impacto: reduz falhas intermitentes ao trocar de seção e procurar o mês `Maio` antes do DOM estabilizar.
+
+## [2026-06-03]
+
+### Alterado
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: os downloads assíncronos passaram a ser salvos com o `suggested_filename` original do SIGA em vez de um nome renomeado pela automação.
+- Impacto: reduz o mascaramento de arquivos errados com nomes “bonitos” e facilita a auditoria do que foi realmente baixado.
+
+## [2026-06-03]
+
+### Corrigido
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: o matcher da Central de Downloads passou a exigir a correspondencia completa da linha, incluindo o recorte final `Interna`, `Interestadual` ou `Externa`.
+- Impacto: evita baixar um arquivo valido, mas de outro recorte, com nome renomeado de forma incorreta.
+
+## [2026-06-03]
+
+### Alterado
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: a leitura das métricas anuais ganhou tentativas curtas com espera entre elas antes de concluir que o campo não apareceu.
+- Impacto: reduz erro por carregamento incompleto da página em seções como NFC-e/Destinatario.
+
+## [2026-06-03]
+
+### Removido
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: o fallback de CNPJ BASE zerado foi removido da Central de Downloads.
+- Impacto: a automação agora baixa apenas quando encontra o CNPJ correto da planilha; caso contrário, gera o TXT de indisponibilidade.
+
+## [2026-06-03]
+
+### Alterado
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: o matcher da Central de Downloads passou a varrer as células da linha para localizar a TELA/ABA completa, validar CNPJ na mesma linha e aguardar 5 segundos quando o status ainda estiver em processamento.
+- Impacto: reduz falso negativo quando a linha existe na tabela, mas a posição das colunas ou a formatação do CNPJ variam.
+
+## [2026-06-02]
+
+### Corrigido
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: o clique no item da Central de Downloads podia falhar quando o `Locator` da linha ficava inválido após a atualização do DOM.
+- Impacto: a automação agora reencontra a linha pelo texto da `TELA/ABA` antes de clicar no download, reduzindo `NoSuchElementException`.
+
+## [2026-06-02]
+
+### Alterado
+- Arquivos:
+  - src/extraction/spreadsheet.py
+  - src/main.py
+  - src/extraction/siga_extractor.py
+  - README.md
+
+- Motivo:
+  Migração da entrada da automação de CGF para CNPJ, incluindo leitura da planilha `cnpj.xlsx`, mensagens do terminal e documentação de uso.
+
+- Impacto:
+  O fluxo passa a aceitar planilhas com coluna `cnpj` e exibe CNPJ nas mensagens visíveis ao usuário.
+
+## [2026-06-02]
+
+### Corrigido
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: a busca na Central de Downloads rejeitava arquivos já concluídos quando a linha não era mais recente que a solicitação atual, mesmo com a TELA/ABA correta disponível.
+- Impacto: o matcher agora aceita a última linha concluída compatível com a TELA/ABA quando nenhuma linha nova aparece, reduzindo avisos falsos de indisponibilidade.
+
+## [2026-06-02]
+
+### Alterado
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: alinhar o fluxo fiscal ao `fluxo.docx`, padronizando nomes de resumos, liberando a abertura do mês com base em quantidade positiva e mantendo o detalhamento por reportes do mês.
+- Impacto: a automação agora segue melhor a regra operacional descrita para NF-e, NFC-e e CT-e e reduz cliques desnecessários.
+
+### Alterado
+- Arquivo: src/live_assist.py
+- Motivo: espelhar no modo assistido o mesmo critério de quantidade positiva usado pela extração principal.
+- Impacto: os comandos manuais passam a relatar o fluxo com mensagens coerentes com a lógica atual.
+
+### Documentação
+- Arquivo: brain/2026-06-02-fluxo-docx.md
+- Motivo: registrar a decisão técnica adotada para aplicar as mudanças do documento de fluxo.
+- Impacto: mantém rastreabilidade da alteração nesta sessão.
+
+## [2026-06-02]
+
+### Documentação
+- Arquivos:
+  - src/main.py
+  - src/auth/siga_login.py
+  - src/config.py
+  - src/extraction/spreadsheet.py
+  - src/extraction/siga_extractor.py
+  - src/live_assist.py
+  - src/utils/browser.py
+  - src/utils/certificate_policy.py
+  - src/utils/logging_setup.py
+  - src/utils/selenium_compat.py
+  - src/utils/siga_page.py
+  - src/utils/text.py
+
+- Motivo:
+  Inserção de comentários e docstrings em português para explicar fluxo de terminal, autenticação, leitura de planilha, extração fiscal, modo assistido e utilitários de navegação.
+
+- Impacto:
+  O código ficou mais fácil de manter e revisar, principalmente nas partes com regras de negócio e fallback de automação.
+
+## [2026-06-02]
+
+### Removido
+- Arquivos e pastas:
+  - browser-debug-profile/
+  - .browser-profile/
+  - build/
+  - dist/
+  - logs/
+  - saida/
+  - teste-navegador/
+  - main.spec
+  - cgf.xlsx
+  - xpath-download-assincrono.xlsx
+
+- Motivo:
+  Limpeza de artefatos locais gerados por navegador, empacotamento, logs e planilhas soltas que não fazem parte do código-fonte.
+
+- Impacto:
+  Reduz ruído no repositório, evita versionamento de dados temporários e deixa o projeto mais previsível para manutenção.
+
+### Documentação
+- Arquivo: brain/2026-06-02-limpeza-repositorio.md
+- Motivo:
+  Registro da decisão de limpeza e dos itens removidos.
+- Impacto:
+  Mantém rastreabilidade do que foi tratado nesta sessão.
+
+## [2026-06-02]
+
+### Corrigido
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: na lista de contribuintes do SIGA, a célula que corresponde ao CGF é a segunda coluna (`td[2]` no XPath), e ela é o alvo mais consistente para abrir o detalhe.
+- Impacto: a automação passa a clicar prioritariamente na célula do CGF da linha encontrada, reduzindo o risco de acionar outros elementos da tabela.
+
+## [2026-06-02]
+
+### Corrigido
+- Arquivo: src/extraction/siga_extractor.py
+- Motivo: a abertura do contribuinte podia clicar no último alvo da linha, o que acabava acionando o link errado em vez de entrar no detalhe.
+- Impacto: a automação passa a priorizar o primeiro `td` da linha encontrada pelo CGF antes de tentar o clique genérico na linha.
+
+## [2026-06-02]
+
+### Segurança
+- Arquivo: .gitignore
+- Motivo: diretórios locais de build (`build/` e `dist/`) estavam aparecendo no status do Git e não devem ser versionados.
+- Impacto: reduz ruído no controle de versão e evita o envio acidental de artefatos gerados localmente.
+
+## [2026-06-02]
+
+### Corrigido
+- Arquivo: src/extraction/spreadsheet.py
+- Motivo: a planilha podia fornecer CGF com zero à esquerda, o que fazia a busca do contribuinte falhar no SIGA.
+- Impacto: o CGF agora é normalizado sem zeros à esquerda ao ser lido da planilha, permitindo a pesquisa correta com valores como `065579828` -> `65579828`.
+
 ## [2026-06-01]
 
 ### Corrigido
@@ -174,6 +387,11 @@
 
 - Automatizado o fluxo completo do detalhamento assíncrono: clique em `Downloads`, localizacao da linha correta pela coluna `TELA/ABA`, captura da URL assinada e salvamento do CSV.
 - Os arquivos de detalhamento agora passam a ser salvos com base no texto da coluna `TELA/ABA`, sanitizando apenas caracteres invalidos para Windows.
+
+# 0.2.7 - 2026-06-02
+
+- Corrigida a chamada de captura de download na central para repassar `tela_aba` ao clicar na linha encontrada.
+- Motivo: o fluxo havia avançado até a seleção da linha, mas quebrava com `TypeError` por desencontro entre assinatura e chamada em `src/extraction/siga_extractor.py`.
 
 ## 0.2.6 - 2026-05-26
 

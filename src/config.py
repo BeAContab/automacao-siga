@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Configurações centrais e caminhos padrão usados em toda a automação."""
+
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +16,7 @@ DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "saida"
 
 @dataclass(slots=True)
 class Settings:
+    """Agrupa parâmetros de execução, diretórios e timeouts da automação."""
     siga_url: str = "https://siga.sefaz.ce.gov.br/ui/"
     browser_channel: str = "chrome"
     connect_browser_url: str | None = None
@@ -42,12 +45,14 @@ class Settings:
     browser_start_timeout_ms: int = 15_000
 
     def ensure_runtime_dirs(self) -> None:
+        """Garante que os diretórios de runtime existam antes da execução começar."""
         self.browser_profile_dir.mkdir(parents=True, exist_ok=True)
         self.browser_debug_profile_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def find_a1_certificate(self) -> Path | None:
+        """Procura um certificado A1 local para apoiar a seleção automática."""
         for pattern in ("*.pfx", "*.p12"):
             matches = sorted(self.certificate_dir.glob(pattern))
             if matches:

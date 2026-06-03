@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Fluxo principal de busca de contribuintes e extração dos relatórios do SIGA."""
+
 import logging
 import re
 import time
@@ -42,7 +44,7 @@ class FiscalDownloadResult:
 
 @dataclass(slots=True)
 class BatchExtractionResult:
-    cgf: str
+    cnpj: str
     month_reference: str
     taxpayer_folder: Path
     fiscal_results: list[FiscalDownloadResult]
@@ -99,12 +101,14 @@ class FiscalTabConfig:
 
 
 class SigaContributorExtractor:
+    """Orquestra a navegação no SIGA, a busca do contribuinte e o download dos arquivos."""
     def __init__(self, settings: Settings, allow_manual_login_prompt: bool = True) -> None:
         self.settings = settings
         self.allow_manual_login_prompt = allow_manual_login_prompt
         self.page_inspector = SigaPageInspector(settings)
 
     def run(self, cnpj: str) -> ExtractionResult:
+        """Executa a extração completa para um único contribuinte."""
         normalized_cnpj = self._normalize_numeric_document(cnpj)
 
         with BrowserSession(self.settings) as context:
@@ -136,6 +140,7 @@ class SigaContributorExtractor:
         reference_year: str | None = None,
         selected_tabs: list[str] | None = None,
     ) -> list[BatchExtractionResult]:
+        """Abre um contexto próprio de navegador e processa a planilha inteira."""
         with BrowserSession(self.settings) as context:
             return self.run_batch_from_spreadsheet_in_context(
                 context,
@@ -153,6 +158,7 @@ class SigaContributorExtractor:
         reference_year: str | None = None,
         selected_tabs: list[str] | None = None,
     ) -> list[BatchExtractionResult]:
+        """Reaproveita um contexto já autenticado para processar vários documentos em sequência."""
         normalized_month = month_reference.strip()
         if not normalized_month:
             raise ValueError("Informe o mes de referencia antes de iniciar a extracao.")
@@ -163,11 +169,12 @@ class SigaContributorExtractor:
         page = self._ensure_authenticated(page, context)
 
         for spreadsheet_row in spreadsheet_rows:
-            LOGGER.info("Processing CGF %s from spreadsheet row %s", spreadsheet_row.cgf, spreadsheet_row.row_number)
-            self._open_taxpayer_from_home(page, spreadsheet_row.cgf)
+            # Cada linha da planilha vira uma busca independente dentro do SIGA.
+            LOGGER.info("Processing CNPJ %s from spreadsheet row %s", spreadsheet_row.cnpj, spreadsheet_row.row_number)
+            self._open_taxpayer_from_home(page, spreadsheet_row.cnpj)
             fiscal_results = self._extract_fiscal_tables(
                 page,
-                spreadsheet_row.cgf,
+                spreadsheet_row.cnpj,
                 normalized_month,
                 normalized_year,
                 selected_tabs,
@@ -175,16 +182,16 @@ class SigaContributorExtractor:
 
             results.append(
                 BatchExtractionResult(
-                    cgf=spreadsheet_row.cgf,
+                    cnpj=spreadsheet_row.cnpj,
                     month_reference=normalized_month,
-                    taxpayer_folder=self._build_taxpayer_output_dir(spreadsheet_row.cgf, normalized_month),
+                    taxpayer_folder=self._build_taxpayer_output_dir(spreadsheet_row.cnpj, normalized_month),
                     fiscal_results=fiscal_results,
                     final_url=page.url,
                     status="completed_with_downloads" if fiscal_results else "completed_without_downloads",
                     message=(
-                        f"Downloads concluidos para {spreadsheet_row.cgf}."
+                        f"Downloads concluidos para {spreadsheet_row.cnpj}."
                         if fiscal_results
-                        else f"Nenhum download foi solicitado para {spreadsheet_row.cgf}."
+                        else f"Nenhum download foi solicitado para {spreadsheet_row.cnpj}."
                     ),
                 )
             )
@@ -192,6 +199,7 @@ class SigaContributorExtractor:
         return results
 
     def _open_taxpayer_from_home(self, page: Page, cgf: str) -> None:
+        """Retenta a navegação até a lista do contribuinte abrir de forma confiável."""
         last_error: Exception | None = None
         for attempt in range(1, 4):
             try:
@@ -217,6 +225,7 @@ class SigaContributorExtractor:
         ) from last_error
 
     def _wait_for_taxpayer_list_ready(self, page: Page) -> bool:
+        """Espera a lista de contribuintes se estabilizar antes de digitar o CGF."""
         deadline = time.time() + min(max(8, self.settings.timeout_ms / 1000), 12)
         skeleton_selector = ".p-skeleton, .skeleton, [class*='skeleton']"
         row_selector = "tr.p-selectable-row, tr[role='row'] td, .p-datatable-tbody tr"
@@ -239,7 +248,7 @@ class SigaContributorExtractor:
             except Error:
                 pass
 
-            # A lista vazia tambem libera a pesquisa; a validacao forte acontece apos o Enter no CGF.
+            # A lista vazia também libera a pesquisa; a validação forte acontece após o Enter no CGF.
             try:
                 body_text = strip_accents(page.locator("body").inner_text(timeout=2_000)).lower()
                 if any(
@@ -271,6 +280,7 @@ class SigaContributorExtractor:
         reference_year: str,
         selected_tabs: list[str] | None = None,
     ) -> list[FiscalDownloadResult]:
+        """Percorre as abas fiscais selecionadas e agrega os downloads encontrados."""
         results: list[FiscalDownloadResult] = []
         allowed_tabs = self._normalize_selected_tabs(selected_tabs)
         for tab_config in self._build_fiscal_tab_configs():
@@ -281,6 +291,7 @@ class SigaContributorExtractor:
         return results
 
     def _normalize_selected_tabs(self, selected_tabs: list[str] | None) -> set[str]:
+        """Converte a seleção do usuário em um conjunto válido de abas fiscais."""
         available_tabs = {config.tab_name: config.tab_name for config in self._build_fiscal_tab_configs()}
         if not selected_tabs:
             return set(available_tabs.keys())
@@ -308,6 +319,7 @@ class SigaContributorExtractor:
         reference_year: str,
         tab_config: FiscalTabConfig,
     ) -> list[FiscalDownloadResult]:
+        """Extrai uma aba fiscal inteira, incluindo resumo e detalhamento."""
         LOGGER.info("Starting fiscal extraction for tab %s", tab_config.tab_name)
         self._open_fiscal_information(page)
         self._open_document_tab(page, tab_config)
@@ -316,6 +328,7 @@ class SigaContributorExtractor:
         eligible_profiles: list[FiscalProfileConfig] = []
 
         for profile in tab_config.profiles:
+            # Primeiro verificamos se o resumo vale a pena baixar; isso evita arquivos vazios.
             self._open_named_section(page, profile.label)
             if not self._should_download_profile_summary(page, tab_config, profile):
                 LOGGER.info(
@@ -336,6 +349,7 @@ class SigaContributorExtractor:
 
         pending_requests: list[PendingDetailRequest] = []
         for profile in eligible_profiles:
+            # Só pedimos detalhamento se o mês escolhido tiver movimento suficiente.
             self._open_named_section(page, profile.label)
             month_decision = self.open_reference_month_if_positive(
                 page,
@@ -374,7 +388,7 @@ class SigaContributorExtractor:
                 detail_label=tab_config.detail_label,
                 selected_year=reference_year,
             )
-            requested_after = datetime.now() - timedelta(minutes=2)
+            requested_after = datetime.now() - timedelta(seconds=30)
             self._request_detail_download(page)
             pending_requests.append(
                 PendingDetailRequest(
@@ -407,6 +421,7 @@ class SigaContributorExtractor:
         return results
 
     def _ensure_authenticated(self, page: Page, context: BrowserContext) -> Page:
+        """Garante que a sessão esteja autenticada antes de mexer na interface do SIGA."""
         LOGGER.info("Opening SIGA to reuse authenticated session")
         page.goto(self.settings.siga_url, wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
         if "siga.sefaz.ce.gov.br/ui" in page.url:
@@ -440,6 +455,7 @@ class SigaContributorExtractor:
         return authenticated_page
 
     def _has_taxpayer_search(self, page: Page) -> bool:
+        """Identifica sinais da área autenticada por meio da presença dos campos de busca."""
         try:
             if page.locator("input").count() == 0:
                 return False
@@ -451,6 +467,7 @@ class SigaContributorExtractor:
         return any(signal in strip_accents(text).lower() for signal in search_signals)
 
     def _search_taxpayer(self, page: Page, document_value: str) -> None:
+        """Envia o CGF ou CNPJ para a busca e aguarda o resultado filtrado."""
         LOGGER.info("Searching taxpayer %s", document_value)
         search_input = self._find_search_input(page)
         search_input.click()
@@ -460,6 +477,7 @@ class SigaContributorExtractor:
         self._wait_for_taxpayer_search_result(page, document_value)
 
     def _wait_for_taxpayer_search_result(self, page: Page, document_value: str) -> None:
+        """Espera a tabela responder à busca até surgir uma linha correspondente."""
         target_digits = self._normalize_numeric_document(document_value)
         deadline = time.time() + max(30, self.settings.timeout_ms / 1000)
         script = """
@@ -535,6 +553,7 @@ class SigaContributorExtractor:
         raise TimeoutError(f"A pesquisa do contribuinte {document_value} não retornou uma linha clicável.")
 
     def _find_search_input(self, page: Page) -> Locator:
+        """Localiza o campo de pesquisa do contribuinte com várias estratégias de fallback."""
         xpath_input = self._first_visible_enabled(
             page.locator("xpath=//input[contains(@placeholder,'CGF') or contains(@placeholder,'Raz')]")
         )
@@ -558,6 +577,7 @@ class SigaContributorExtractor:
         raise TimeoutError("Nao foi possivel localizar a barra de pesquisa de contribuintes.")
 
     def _open_taxpayer(self, page: Page, document_value: str) -> None:
+        """Abre o contribuinte encontrado usando a linha ou célula que melhor bater com o documento."""
         LOGGER.info("Opening taxpayer row for %s", document_value)
         if self._is_taxpayer_detail_page(page):
             LOGGER.info("Taxpayer detail view already detected; skipping row selection for %s", document_value)
@@ -574,6 +594,11 @@ class SigaContributorExtractor:
                     continue
 
                 if self._open_detail_from_row(page, row):
+                    if self._wait_for_taxpayer_detail_page(page, document_value, attempt):
+                        return
+
+                if self._click_taxpayer_cgf_cell(row):
+                    LOGGER.info("Opening taxpayer detail by clicking the CGF cell (attempt %s)", attempt)
                     if self._wait_for_taxpayer_detail_page(page, document_value, attempt):
                         return
 
@@ -647,6 +672,23 @@ class SigaContributorExtractor:
 
         return False
 
+    def _click_taxpayer_cgf_cell(self, row: Locator) -> bool:
+        try:
+            cells = row.locator("td")
+            if cells.count() < 2:
+                return False
+            # A busca localiza a linha pelo CGF; na tabela do SIGA, a célula do CGF é a
+            # segunda coluna e costuma ser o alvo que dispara a navegação para o detalhe.
+            target = cells.nth(1)
+            if not (target.is_visible() and target.is_enabled()):
+                target = self._first_visible_enabled(cells)
+            if target is None:
+                return False
+            target.click(timeout=5_000, force=True)
+            return True
+        except Error:
+            return False
+
     def _find_taxpayer_row(self, page: Page, document_value: str) -> Locator | None:
         patterns = (
             document_value,
@@ -699,6 +741,7 @@ class SigaContributorExtractor:
         raise TimeoutError(f"Nao foi possivel localizar o contribuinte {document_value} na lista.")
 
     def _click_taxpayer_row_by_digits(self, page: Page, target_digits: str) -> bool:
+        """Usa uma checagem via DOM para clicar na linha do contribuinte quando o Selenium falha."""
         script = """
         (targetDigits) => {
             const digits = (value) => String(value || "").replace(/\\D/g, "");
@@ -719,8 +762,10 @@ class SigaContributorExtractor:
 
                 const icon = row.querySelector("i.pi-external-link, .pi-external-link");
                 const iconAction = icon ? icon.closest("a, button, [role='button']") : null;
+                const cells = row.querySelectorAll("td");
+                const cgfCell = cells.length > 1 ? cells[1] : null;
                 const actions = [...row.querySelectorAll("a, button, [role='button']")].filter(isVisible);
-                const target = iconAction || actions[actions.length - 1] || row;
+                const target = cgfCell || iconAction || actions[0] || row;
                 target.scrollIntoView({block: "center", inline: "center"});
                 target.click();
                 return true;
@@ -738,6 +783,7 @@ class SigaContributorExtractor:
         return clicked
 
     def _open_fiscal_information(self, page: Page) -> None:
+        """Entra na área de informações fiscais antes de escolher a aba de documento."""
         LOGGER.info("Opening Informacoes Fiscais")
         if self._click_xpath(
             page,
@@ -762,10 +808,11 @@ class SigaContributorExtractor:
                 tab_slug="NF-e",
                 tab_xpath="xpath=//a[contains(@href,'/informacoes-fiscais/nfe')]",
                 detail_mode="reports",
+                month_requires_positive_value=False,
                 profiles=(
                     FiscalProfileConfig(
                         label="Emissor",
-                        summary_basename="resumo-saida",
+                        summary_basename="resumo-emissor",
                         annual_quantity_label=(
                             "Quantidade Total de Documentos Emitidos pelo Contribuinte no Ano"
                         ),
@@ -775,7 +822,7 @@ class SigaContributorExtractor:
                     ),
                     FiscalProfileConfig(
                         label="Destinatario",
-                        summary_basename="resumo-entrada",
+                        summary_basename="resumo-destinatario",
                         annual_quantity_label=(
                             "Quantidade Total de Documentos Emitidos para o Contribuinte no Ano"
                         ),
@@ -791,10 +838,11 @@ class SigaContributorExtractor:
                 tab_xpath="xpath=//a[contains(@href,'/informacoes-fiscais/nfce')]",
                 detail_mode="authorized",
                 month_requires_positive_value=False,
+                detail_label=None,
                 profiles=(
                     FiscalProfileConfig(
                         label="Emissor",
-                        summary_basename="Emissor-resumo",
+                        summary_basename="resumo-emissor",
                         annual_quantity_label=(
                             "Quantidade Total de Documentos Autorizados e Emitidos pelo Contribuinte no Ano"
                         ),
@@ -804,7 +852,7 @@ class SigaContributorExtractor:
                     ),
                     FiscalProfileConfig(
                         label="Destinatario",
-                        summary_basename="Destinatario-resumo",
+                        summary_basename="resumo-destinatario",
                         annual_quantity_label=(
                             "Quantidade Total de Documentos Autorizados e Emitidos para o Contribuinte no Ano"
                         ),
@@ -825,7 +873,7 @@ class SigaContributorExtractor:
                     FiscalProfileConfig(
                         label="Emissor",
                         display_label="Emitente",
-                        summary_basename="Emissor-resumo",
+                        summary_basename="resumo-emissor",
                         annual_quantity_label=(
                             "Quantidade Total de Documentos Emitidos pelo Contribuinte no Ano"
                         ),
@@ -835,7 +883,7 @@ class SigaContributorExtractor:
                     ),
                     FiscalProfileConfig(
                         label="Tomador",
-                        summary_basename="Tomador-resumo",
+                        summary_basename="resumo-tomador",
                         annual_quantity_label=(
                             "Quantidade Total de Documentos Emitidos para o Contribuinte no Ano"
                         ),
@@ -848,6 +896,7 @@ class SigaContributorExtractor:
         )
 
     def _open_document_tab(self, page: Page, tab_config: FiscalTabConfig) -> None:
+        """Seleciona a aba fiscal correta, usando XPath primeiro e texto como fallback."""
         LOGGER.info("Opening fiscal document tab %s", tab_config.tab_name)
         if self._click_xpath(page, tab_config.tab_xpath, f"{tab_config.tab_name} tab"):
             page.wait_for_timeout(2_000)
@@ -862,6 +911,7 @@ class SigaContributorExtractor:
         page.wait_for_timeout(2_000)
 
     def _open_named_section(self, page: Page, label: str) -> None:
+        """Abre uma seção interna como Emissor, Destinatário, Tomador ou Emitente."""
         LOGGER.info("Opening fiscal section %s", label)
         normalized_label = strip_accents(label).lower()
         if normalized_label == "emissor" and self._click_xpath(
@@ -912,9 +962,30 @@ class SigaContributorExtractor:
         require_positive_value: bool = True,
     ) -> MonthOpenDecision:
         LOGGER.info("Checking month reference %s before opening it", month_reference)
-        metric = self._get_indicator_metric(page, month_reference)
+        metric = None
+        last_error: TimeoutError | None = None
+        for attempt in range(1, 5):
+            try:
+                metric = self._get_indicator_metric(page, month_reference)
+            except TimeoutError as exc:
+                last_error = exc
+                metric = None
+
+            if metric is not None:
+                break
+
+            if attempt < 4:
+                LOGGER.info(
+                    "Month reference %s not ready yet (attempt %s/4); waiting before retrying.",
+                    month_reference,
+                    attempt,
+                )
+                page.wait_for_timeout(1_000)
+                page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
+                page.wait_for_timeout(1_000)
+
         if metric is None:
-            raise TimeoutError(f"Nao foi possivel localizar o mes de referencia {month_reference}.")
+            raise TimeoutError(f"Nao foi possivel localizar o mes de referencia {month_reference}.") from last_error
 
         if metric.qtd <= 0 or (require_positive_value and metric.valor <= 0):
             return MonthOpenDecision(
@@ -940,6 +1011,7 @@ class SigaContributorExtractor:
 
     def _open_reference_month(self, page: Page, month_reference: str) -> None:
         LOGGER.info("Opening month reference %s", month_reference)
+        page.wait_for_timeout(1_000)
         month_xpath = (
             f"xpath=//tr[.//span[normalize-space()='{month_reference}']]//td[1]//div"
         )
@@ -977,23 +1049,41 @@ class SigaContributorExtractor:
                 page.wait_for_timeout(1_500)
                 return
 
+        page.wait_for_timeout(1_000)
+        rows = page.locator("tr, [role='row'], .p-datatable-row, .card, .p-accordion-header")
+        try:
+            row_count = rows.count()
+        except Error:
+            row_count = 0
+        for index in range(row_count):
+            row = rows.nth(index)
+            try:
+                text = strip_accents(row.inner_text(timeout=2_000)).lower()
+            except Error:
+                continue
+            if normalized_month in text:
+                row.click()
+                page.wait_for_timeout(1_500)
+                return
+
         raise TimeoutError(f"Nao foi possivel localizar o mes de referencia {month_reference}.")
 
     def _select_positive_reports(self, page: Page) -> list[str]:
-        LOGGER.info("Selecting reports with QTD and VALOR greater than zero")
+        LOGGER.info("Selecting reports with QTD greater than zero")
         reports = ("Interna", "Interestadual", "Externa")
         metrics = self._collect_indicator_metrics(page, reports)
         selected_reports: list[str] = []
         for report_name in reports:
             metric = metrics.get(report_name.lower())
-            if metric and metric["qtd"] > 0 and metric["valor"] > 0:
+            # O documento pede liberar o detalhamento quando a quantidade do recorte for positiva.
+            if metric and metric["qtd"] > 0:
                 selected_reports.append(report_name)
 
         if selected_reports:
             LOGGER.info("Positive reports selected for detail download: %s", ", ".join(selected_reports))
             return selected_reports
 
-        LOGGER.info("No detail reports with positive QTD and VALOR were found on the page")
+        LOGGER.info("No detail reports with positive QTD were found on the page")
         return []
 
     def _should_download_profile_summary(
@@ -1005,8 +1095,14 @@ class SigaContributorExtractor:
         if not profile.annual_quantity_label or not profile.annual_value_label:
             return True
 
-        quantity_value = self._parse_decimal_value(self._extract_metric(page, profile.annual_quantity_label))
-        total_value = self._parse_decimal_value(self._extract_metric(page, profile.annual_value_label))
+        # A tela pode terminar de renderizar os campos em etapas; por isso
+        # damos algumas tentativas curtas antes de desistir da métrica anual.
+        quantity_value = self._parse_decimal_value(
+            self._extract_metric_with_retry(page, profile.annual_quantity_label)
+        )
+        total_value = self._parse_decimal_value(
+            self._extract_metric_with_retry(page, profile.annual_value_label)
+        )
         LOGGER.info(
             "Annual totals for %s/%s: quantidade=%s valor=%s",
             tab_config.tab_name,
@@ -1038,7 +1134,7 @@ class SigaContributorExtractor:
         requests: list[PendingDetailRequest] = []
         for report_name in positive_reports:
             self._click_report_by_name(page, report_name)
-            page.wait_for_timeout(1_500)
+            page.wait_for_timeout(750)
             tela_aba = self._build_download_screen_name(
                 month_reference=month_reference,
                 tab_name=tab_config.tab_name,
@@ -1046,7 +1142,7 @@ class SigaContributorExtractor:
                 detail_label=report_name,
                 selected_year=reference_year,
             )
-            requested_after = datetime.now() - timedelta(minutes=2)
+            requested_after = datetime.now() - timedelta(seconds=30)
             self._request_detail_download(page)
             requests.append(
                 PendingDetailRequest(
@@ -1148,6 +1244,7 @@ class SigaContributorExtractor:
     def _click_report_by_name(self, page: Page, report_name: str) -> None:
         report_xpath = f"xpath=//tr[./td[1][normalize-space()='{report_name}']]/td[1]"
         if self._click_xpath(page, report_xpath, f"detail row {report_name}"):
+            page.wait_for_timeout(750)
             return
 
         self._click_text_action(
@@ -1175,14 +1272,14 @@ class SigaContributorExtractor:
             artifact_name="baixar-tabela",
             fallback_task="Locate and click the action button Baixar Tabela.",
         )
-        page.wait_for_timeout(1_500)
+        page.wait_for_timeout(750)
 
     def _click_summary_download_button(self, page: Page) -> None:
         target = self._find_download_button(page, expected_index=0)
         if target is not None:
             LOGGER.info("Clicking summary download button")
             target.click()
-            page.wait_for_timeout(1_500)
+            page.wait_for_timeout(750)
             return
         self._click_download_table_button(page)
 
@@ -1192,7 +1289,7 @@ class SigaContributorExtractor:
             raise TimeoutError("Nao foi possivel localizar o botao Baixar Tabela do bloco de detalhamento.")
         LOGGER.info("Requesting detail download using the detail section button")
         target.click()
-        page.wait_for_timeout(2_000)
+        page.wait_for_timeout(750)
 
     def _find_download_button(self, page: Page, expected_index: int) -> Locator | None:
         xpath_locator = page.locator(
@@ -1321,7 +1418,7 @@ class SigaContributorExtractor:
 
         raise TimeoutError("Nao foi possivel localizar a linha do arquivo solicitado na central de Downloads.")
 
-    def _click_download_action(self, row: Locator) -> None:
+    def _click_download_action(self, row: Locator, page: Page | None = None, tela_aba: str | None = None) -> None:
         candidates = (
             row.locator("xpath=.//td[last()]//*[contains(normalize-space(.),'Download')]"),
             row.locator("xpath=.//td[last()]"),
@@ -1335,7 +1432,42 @@ class SigaContributorExtractor:
             if target is not None:
                 target.click()
                 return
-        row.click()
+
+        if page is not None and tela_aba:
+            normalized_target = strip_accents(self._normalize_spaces(tela_aba)).lower()
+            rows = page.locator("tr")
+            try:
+                row_count = rows.count()
+            except Error:
+                row_count = 0
+
+            for index in range(1, row_count):
+                candidate_row = rows.nth(index)
+                try:
+                    row_text = strip_accents(self._normalize_spaces(candidate_row.inner_text(timeout=2_000))).lower()
+                except Error:
+                    continue
+
+                if normalized_target not in row_text:
+                    continue
+
+                retry_candidates = (
+                    candidate_row.locator("xpath=.//td[last()]//*[contains(normalize-space(.),'Download')]"),
+                    candidate_row.locator("xpath=.//td[last()]"),
+                    candidate_row.get_by_role("button", name=re.compile(r"download|baixar", re.IGNORECASE)),
+                    candidate_row.get_by_role("link", name=re.compile(r"download|baixar", re.IGNORECASE)),
+                    candidate_row.locator("button"),
+                    candidate_row.locator("a"),
+                )
+                for locator in retry_candidates:
+                    target = self._first_visible_enabled(locator)
+                    if target is not None:
+                        target.click()
+                        return
+
+        raise TimeoutError(
+            "Nao foi possivel clicar no item de download da linha encontrada; a linha pode ter sido atualizada no DOM."
+        )
 
     def _build_download_screen_name(
         self,
@@ -1388,7 +1520,7 @@ class SigaContributorExtractor:
             requested_after,
             taxpayer_document,
         )
-        basename = self._sanitize_filename(tela_aba)
+        basename = self._build_download_output_basename(tela_aba)
         if row_match is None:
             return self._save_unavailable_download_notice(
                 cgf=cgf,
@@ -1401,20 +1533,69 @@ class SigaContributorExtractor:
         if unidentified_client:
             basename = f"{basename} - cliente-nao-identificado"
             LOGGER.warning(
-                "Download selected using fallback with CNPJ BASE zerado for %s; appending suffix '%s'.",
+                "Download selected with CNPJ nao identificado para %s; appending suffix '%s'.",
                 tela_aba,
                 "cliente-nao-identificado",
             )
         output_path = self._capture_download_from_row(
             page=page,
             row=download_row,
+            tela_aba=tela_aba,
             cgf=cgf,
             month_reference=month_reference,
             basename=basename,
             document_tab=document_tab,
+            taxpayer_document=taxpayer_document,
         )
         LOGGER.info("Saved download center file via Selenium download capture to %s", output_path)
         return output_path
+
+    def _build_download_output_basename(self, tela_aba: str) -> str:
+        """Normaliza o nome final do arquivo sem repetir sufixos internos da fila do SIGA."""
+        basename = self._sanitize_filename(tela_aba)
+        if self._normalize_download_target(tela_aba).endswith(" - autorizadas"):
+            basename = basename[: -len(" - Autorizadas")]
+        return basename
+
+    def _find_visible_download_row_on_current_page(
+        self,
+        page: Page,
+        tela_aba: str,
+        taxpayer_document: str = "",
+    ) -> Locator | None:
+        """Reencontra a linha visível da fila para clicar com um locator fresco no DOM atual."""
+        self._go_to_first_downloads_page(page)
+        normalized_target = self._normalize_download_target(tela_aba)
+        match_fragments = self._extract_download_match_fragments_from_title(tela_aba)
+        taxpayer_base_key = self._taxpayer_base_key(taxpayer_document)
+
+        rows = page.locator("tr")
+        try:
+            row_count = rows.count()
+        except Error:
+            row_count = 0
+
+        for index in range(1, row_count):
+            candidate_row = rows.nth(index)
+            try:
+                if not candidate_row.is_visible():
+                    continue
+                row_cells = self._row_cell_texts(candidate_row)
+            except Error:
+                continue
+
+            if not self._row_matches_download_target(row_cells, normalized_target, match_fragments):
+                continue
+
+            status_text = self._row_status_text(row_cells)
+            if "concluido" not in status_text:
+                continue
+            if taxpayer_base_key and not self._row_matches_taxpayer_document(row_cells, taxpayer_base_key):
+                continue
+
+            return candidate_row
+
+        return None
 
     def _find_download_row_by_screen_name(
         self,
@@ -1423,12 +1604,16 @@ class SigaContributorExtractor:
         requested_after: datetime | None = None,
         taxpayer_document: str = "",
     ) -> tuple[Locator, bool] | None:
-        normalized_target = strip_accents(self._normalize_spaces(tela_aba)).lower()
-        match_fragments = self._extract_download_match_fragments(normalized_target)
+        normalized_target = self._normalize_download_target(tela_aba)
+        match_fragments = self._extract_download_match_fragments_from_title(tela_aba)
         taxpayer_base_key = self._taxpayer_base_key(taxpayer_document)
         deadline = time.time() + (self.settings.download_wait_timeout_ms / 1000)
         while time.time() < deadline:
             self._go_to_first_downloads_page(page)
+            preferred_exact_candidates: list[tuple[Locator, datetime, str]] = []
+            preferred_fuzzy_candidates: list[tuple[Locator, float, datetime, str]] = []
+            fallback_exact_candidates: list[tuple[Locator, datetime, str]] = []
+            fallback_fuzzy_candidates: list[tuple[Locator, float, datetime, str]] = []
             while True:
                 page_result = self._scan_downloads_current_page(
                     page=page,
@@ -1439,29 +1624,12 @@ class SigaContributorExtractor:
                 )
 
                 if page_result["exact"]:
-                    exact_candidates = page_result["exact"]
-                    exact_candidates.sort(key=lambda item: item[1], reverse=True)
-                    best_row, best_dt, best_text = exact_candidates[0]
-                    LOGGER.info(
-                        "Download row match strategy: exact-latest by CNPJ BASE (candidates=%s, requested_at=%s, chosen='%s')",
-                        len(exact_candidates),
-                        best_dt.isoformat(sep=" ", timespec="seconds"),
-                        best_text,
-                    )
-                    return best_row, False
+                    preferred_exact_candidates.extend(page_result["exact"]["preferred"])
+                    fallback_exact_candidates.extend(page_result["exact"]["fallback"])
 
                 if page_result["fuzzy"]:
-                    fuzzy_candidates = page_result["fuzzy"]
-                    fuzzy_candidates.sort(key=lambda item: (item[1], item[2]), reverse=True)
-                    best_row, best_score, best_dt, best_text = fuzzy_candidates[0]
-                    LOGGER.info(
-                        "Download row match strategy: fuzzy-latest by CNPJ BASE (score=%s, candidates=%s, requested_at=%s, chosen='%s')",
-                        best_score,
-                        len(fuzzy_candidates),
-                        best_dt.isoformat(sep=" ", timespec="seconds"),
-                        best_text,
-                    )
-                    return best_row, False
+                    preferred_fuzzy_candidates.extend(page_result["fuzzy"]["preferred"])
+                    fallback_fuzzy_candidates.extend(page_result["fuzzy"]["fallback"])
 
                 if page_result["processing"] > 0:
                     LOGGER.info(
@@ -1469,6 +1637,7 @@ class SigaContributorExtractor:
                         tela_aba,
                         page_result["processing"],
                     )
+                    page.wait_for_timeout(5_000)
                     page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
                     page.wait_for_timeout(1_000)
                     continue
@@ -1476,15 +1645,48 @@ class SigaContributorExtractor:
                 if not self._go_to_next_downloads_page(page):
                     break
 
-            fallback = self._find_zero_cnpj_fallback_on_first_page(
-                page=page,
-                normalized_target=normalized_target,
-                match_fragments=match_fragments,
-                requested_after=requested_after,
-            )
-            if fallback is not None:
-                return fallback, True
-
+            if preferred_exact_candidates:
+                preferred_exact_candidates.sort(key=lambda item: item[1], reverse=True)
+                best_row, best_dt, best_text = preferred_exact_candidates[0]
+                LOGGER.info(
+                    "Download row match strategy: exact-latest preferred by title (candidates=%s, requested_at=%s, chosen='%s')",
+                    len(preferred_exact_candidates),
+                    best_dt.isoformat(sep=" ", timespec="seconds"),
+                    best_text,
+                )
+                return best_row, False
+            if fallback_exact_candidates:
+                fallback_exact_candidates.sort(key=lambda item: item[1], reverse=True)
+                best_row, best_dt, best_text = fallback_exact_candidates[0]
+                LOGGER.info(
+                    "Download row match strategy: exact-latest fallback by title (candidates=%s, requested_at=%s, chosen='%s')",
+                    len(fallback_exact_candidates),
+                    best_dt.isoformat(sep=" ", timespec="seconds"),
+                    best_text,
+                )
+                return best_row, False
+            if preferred_fuzzy_candidates:
+                preferred_fuzzy_candidates.sort(key=lambda item: (item[1], item[2]), reverse=True)
+                best_row, best_score, best_dt, best_text = preferred_fuzzy_candidates[0]
+                LOGGER.info(
+                    "Download row match strategy: fuzzy-latest preferred by title (score=%s, candidates=%s, requested_at=%s, chosen='%s')",
+                    best_score,
+                    len(preferred_fuzzy_candidates),
+                    best_dt.isoformat(sep=" ", timespec="seconds"),
+                    best_text,
+                )
+                return best_row, False
+            if fallback_fuzzy_candidates:
+                fallback_fuzzy_candidates.sort(key=lambda item: (item[1], item[2]), reverse=True)
+                best_row, best_score, best_dt, best_text = fallback_fuzzy_candidates[0]
+                LOGGER.info(
+                    "Download row match strategy: fuzzy-latest fallback by title (score=%s, candidates=%s, requested_at=%s, chosen='%s')",
+                    best_score,
+                    len(fallback_fuzzy_candidates),
+                    best_dt.isoformat(sep=" ", timespec="seconds"),
+                    best_text,
+                )
+                return best_row, False
             page.wait_for_timeout(self.settings.download_poll_interval_ms)
             page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
             page.wait_for_timeout(1_000)
@@ -1507,9 +1709,9 @@ class SigaContributorExtractor:
         output_dir = self._build_taxpayer_output_dir(cgf, month_reference, document_tab)
         output_path = output_dir / f"{basename}.txt"
         message = (
-            "Download nao foi realizado porque o arquivo nao estava disponivel na Central de Downloads.\n"
+            "Download nao foi realizado porque a informacao fiscal nao foi localizada na Central de Downloads.\n"
             f"TELA/ABA: {tela_aba}\n"
-            "Criterios tentados: CNPJ BASE do contribuinte e CNPJ BASE zerado.\n"
+            "Criterios tentados: correspondencia de TELA/ABA, CNPJ na mesma linha e status Concluido.\n"
         )
         output_path.write_text(message, encoding="utf-8")
         LOGGER.warning("Saved unavailable download notice to %s", output_path)
@@ -1532,112 +1734,55 @@ class SigaContributorExtractor:
         exact_candidates: list[tuple[Locator, datetime, str]] = []
         fuzzy_candidates: list[tuple[Locator, float, datetime, str]] = []
         processing_candidates = 0
+        preferred_exact_candidates: list[tuple[Locator, datetime, str]] = []
+        preferred_fuzzy_candidates: list[tuple[Locator, float, datetime, str]] = []
+        fallback_exact_candidates: list[tuple[Locator, datetime, str]] = []
+        fallback_fuzzy_candidates: list[tuple[Locator, float, datetime, str]] = []
 
         for index in range(1, row_count):
             row = rows.nth(index)
             try:
-                tela_aba_text = strip_accents(
-                    self._normalize_spaces(row.locator("td").nth(2).inner_text(timeout=2_000))
-                ).lower()
-                requested_at_text = self._normalize_spaces(row.locator("td").nth(5).inner_text(timeout=2_000))
-                status_text = strip_accents(
-                    self._normalize_spaces(row.locator("td").nth(7).inner_text(timeout=2_000))
-                ).lower()
+                if not row.is_visible():
+                    continue
+                row_cells = self._row_cell_texts(row)
             except Error:
                 continue
 
-            requested_at = self._parse_request_datetime(requested_at_text)
-            score = self._download_match_score(tela_aba_text, normalized_target, match_fragments)
-            matches_target = tela_aba_text == normalized_target or score >= 3.0
+            row_text = self._normalize_download_target(" ".join(row_cells))
+            score = self._download_match_score(row_text, normalized_target, match_fragments)
+            matches_target = self._row_matches_download_target(row_cells, normalized_target, match_fragments)
             if not matches_target:
                 continue
 
+            requested_at = self._row_request_datetime(row_cells)
+            status_text = self._row_status_text(row_cells)
             if any(status_key in status_text for status_key in ("processando", "aguardando", "gerando")):
                 processing_candidates += 1
                 continue
             if "concluido" not in status_text:
                 continue
-            if requested_after is not None and requested_at < requested_after:
-                continue
-            if taxpayer_base_key and self._row_cnpj_base_key(row) != taxpayer_base_key:
+            if taxpayer_base_key and not self._row_matches_taxpayer_document(row_cells, taxpayer_base_key):
                 continue
 
-            if tela_aba_text == normalized_target:
-                exact_candidates.append((row, requested_at, tela_aba_text))
+            is_preferred = requested_after is None or requested_at >= requested_after
+            if self._row_matches_download_target(row_cells, normalized_target, match_fragments, exact_only=True):
+                target_bucket = preferred_exact_candidates if is_preferred else fallback_exact_candidates
+                target_bucket.append((row, requested_at, row_text))
             else:
-                fuzzy_candidates.append((row, score, requested_at, tela_aba_text))
+                target_bucket = preferred_fuzzy_candidates if is_preferred else fallback_fuzzy_candidates
+                target_bucket.append((row, score, requested_at, row_text))
 
         return {
-            "exact": exact_candidates,
-            "fuzzy": fuzzy_candidates,
+            "exact": {
+                "preferred": preferred_exact_candidates,
+                "fallback": fallback_exact_candidates,
+            },
+            "fuzzy": {
+                "preferred": preferred_fuzzy_candidates,
+                "fallback": fallback_fuzzy_candidates,
+            },
             "processing": processing_candidates,
         }
-
-    def _find_zero_cnpj_fallback_on_first_page(
-        self,
-        page: Page,
-        normalized_target: str,
-        match_fragments: dict[str, str],
-        requested_after: datetime | None,
-    ) -> Locator | None:
-        self._go_to_first_downloads_page(page)
-        rows = page.locator("tr")
-        try:
-            row_count = rows.count()
-        except Error:
-            row_count = 0
-
-        exact_candidates: list[tuple[Locator, datetime, str]] = []
-        fuzzy_candidates: list[tuple[Locator, float, datetime, str]] = []
-        for index in range(1, row_count):
-            row = rows.nth(index)
-            try:
-                tela_aba_text = strip_accents(
-                    self._normalize_spaces(row.locator("td").nth(2).inner_text(timeout=2_000))
-                ).lower()
-                requested_at_text = self._normalize_spaces(row.locator("td").nth(5).inner_text(timeout=2_000))
-                status_text = strip_accents(
-                    self._normalize_spaces(row.locator("td").nth(7).inner_text(timeout=2_000))
-                ).lower()
-            except Error:
-                continue
-
-            if "concluido" not in status_text:
-                continue
-            if not self._is_zero_cnpj_base_row(row):
-                continue
-            requested_at = self._parse_request_datetime(requested_at_text)
-            if requested_after is not None and requested_at < requested_after:
-                continue
-
-            score = self._download_match_score(tela_aba_text, normalized_target, match_fragments)
-            if tela_aba_text == normalized_target:
-                exact_candidates.append((row, requested_at, tela_aba_text))
-            elif score >= 3.0:
-                fuzzy_candidates.append((row, score, requested_at, tela_aba_text))
-
-        if exact_candidates:
-            exact_candidates.sort(key=lambda item: item[1], reverse=True)
-            best_row, best_dt, best_text = exact_candidates[0]
-            LOGGER.warning(
-                "Fallback on page 1 using zero CNPJ BASE: exact-latest (candidates=%s, requested_at=%s, chosen='%s')",
-                len(exact_candidates),
-                best_dt.isoformat(sep=" ", timespec="seconds"),
-                best_text,
-            )
-            return best_row
-        if fuzzy_candidates:
-            fuzzy_candidates.sort(key=lambda item: (item[1], item[2]), reverse=True)
-            best_row, best_score, best_dt, best_text = fuzzy_candidates[0]
-            LOGGER.warning(
-                "Fallback on page 1 using zero CNPJ BASE: fuzzy-latest (score=%s, candidates=%s, requested_at=%s, chosen='%s')",
-                best_score,
-                len(fuzzy_candidates),
-                best_dt.isoformat(sep=" ", timespec="seconds"),
-                best_text,
-            )
-            return best_row
-        return None
 
     def _go_to_next_downloads_page(self, page: Page) -> bool:
         candidates = (
@@ -1684,6 +1829,123 @@ class SigaContributorExtractor:
             score += 0.25
         return score
 
+    def _row_cell_texts(self, row: Locator) -> list[str]:
+        cells = row.locator("td")
+        try:
+            cell_count = cells.count()
+        except Error:
+            return []
+
+        values: list[str] = []
+        for index in range(cell_count):
+            try:
+                values.append(self._normalize_spaces(cells.nth(index).inner_text(timeout=2_000)))
+            except Error:
+                values.append("")
+        return values
+
+    def _row_matches_download_target(
+        self,
+        row_cells: list[str],
+        normalized_target: str,
+        match_fragments: dict[str, str],
+        exact_only: bool = False,
+    ) -> bool:
+        row_text = self._normalize_download_target(" ".join(row_cells))
+        row_text_ascii = self._normalize_download_target(" ".join(row_cells), strip_marks=True)
+        normalized_target_ascii = self._normalize_download_target(normalized_target, strip_marks=True)
+        if normalized_target in row_text or normalized_target_ascii in row_text_ascii:
+            return True
+        if exact_only:
+            return self._row_contains_signature_fragments(row_text, row_text_ascii, match_fragments)
+        return self._row_contains_signature_fragments(row_text, row_text_ascii, match_fragments)
+
+    def _row_contains_signature_fragments(self, row_text: str, row_text_ascii: str, match_fragments: dict[str, str]) -> bool:
+        if "informacoes fiscais" not in row_text_ascii:
+            return False
+        if "detalhamento" not in row_text_ascii:
+            return False
+        if match_fragments["tab"] and match_fragments["tab"] not in row_text_ascii:
+            return False
+        if match_fragments["view"] and match_fragments["view"] not in row_text_ascii:
+            return False
+        if match_fragments["month"] and match_fragments["month"] not in row_text:
+            return False
+        if match_fragments["year"] and match_fragments["year"] not in row_text_ascii:
+            return False
+        if match_fragments.get("detail") and match_fragments["detail"] not in row_text_ascii:
+            return False
+        return True
+
+    def _row_status_text(self, row_cells: list[str]) -> str:
+        for cell_text in row_cells:
+            normalized = strip_accents(self._normalize_spaces(cell_text)).lower()
+            if any(keyword in normalized for keyword in ("processando", "aguardando", "gerando", "concluido")):
+                return normalized
+        return ""
+
+    def _row_request_datetime(self, row_cells: list[str]) -> datetime:
+        for cell_text in row_cells:
+            parsed = self._parse_request_datetime(cell_text)
+            if parsed != datetime.min:
+                return parsed
+        return datetime.min
+
+    def _row_matches_taxpayer_document(self, row_cells: list[str], taxpayer_base_key: str) -> bool:
+        if not taxpayer_base_key:
+            return True
+        for cell_text in row_cells:
+            cell_digits = self._normalize_numeric_document(cell_text)
+            if not cell_digits:
+                continue
+            if cell_digits == taxpayer_base_key or cell_digits.startswith(taxpayer_base_key):
+                return True
+        return False
+
+    def _normalize_download_target(self, value: str, strip_marks: bool = False) -> str:
+        normalized = self._normalize_spaces(value)
+        if strip_marks:
+            normalized = strip_accents(normalized)
+        return normalized.casefold()
+
+    def _extract_download_match_fragments_from_title(self, tela_aba: str) -> dict[str, str]:
+        normalized_target = self._normalize_download_target(tela_aba)
+        tab = ""
+        if "nfc-e" in normalized_target:
+            tab = "nfc-e"
+        elif "ct-e" in normalized_target:
+            tab = "ct-e"
+        elif "nf-e" in normalized_target:
+            tab = "nf-e"
+
+        view = ""
+        if "destinatario" in normalized_target:
+            view = "destinatario"
+        elif "emissor" in normalized_target:
+            view = "emissor"
+        elif "emitente" in normalized_target:
+            view = "emitente"
+        elif "tomador" in normalized_target:
+            view = "tomador"
+
+        month = ""
+        year = ""
+        detail = ""
+        detail_match = re.search(r"detalhamento\s+(.+?)\s+de\s+(\d{4})(?:\s*-\s*(.+))?$", normalized_target, re.IGNORECASE)
+        if detail_match:
+            month = detail_match.group(1).strip()
+            year = detail_match.group(2).strip()
+            if detail_match.lastindex and detail_match.group(3):
+                detail = detail_match.group(3).strip()
+
+        return {
+            "tab": tab,
+            "view": view,
+            "month": month,
+            "year": year,
+            "detail": detail,
+        }
+
     def _is_zero_cnpj_base_row(self, row: Locator) -> bool:
         return self._row_cnpj_base_key(row) == "0"
 
@@ -1695,7 +1957,7 @@ class SigaContributorExtractor:
         digits = self._normalize_numeric_document(cnpj_base_text)
         if not digits:
             return ""
-        return str(int(digits))
+        return digits[:8]
 
     def _taxpayer_base_key(self, taxpayer_document: str) -> str:
         digits = self._normalize_numeric_document(taxpayer_document)
@@ -1703,7 +1965,7 @@ class SigaContributorExtractor:
             return ""
         if len(digits) >= 8:
             digits = digits[:8]
-        return digits.lstrip("0") or "0"
+        return digits
 
     def _extract_download_match_fragments(self, normalized_target: str) -> dict[str, str]:
         tab = ""
@@ -1768,19 +2030,29 @@ class SigaContributorExtractor:
         return taxpayer_key in row_documents
 
     def _document_key(self, value: str) -> str:
-        return self._normalize_numeric_document(value).lstrip("0")
+        return self._normalize_numeric_document(value)
 
     def _capture_download_from_row(
         self,
         page: Page,
         row: Locator,
+        tela_aba: str,
         cgf: str,
         month_reference: str,
         basename: str,
         document_tab: str,
+        taxpayer_document: str,
     ) -> Path:
+        refreshed_row = self._find_visible_download_row_on_current_page(
+            page,
+            tela_aba,
+            taxpayer_document=taxpayer_document,
+        )
+        if refreshed_row is not None:
+            row = refreshed_row
+
         with page.expect_download(timeout=self.settings.download_wait_timeout_ms) as download_info:
-            self._click_download_action(row)
+            self._click_download_action(row, page=page, tela_aba=tela_aba)
         download = download_info.value
         return self._save_download(download, cgf, month_reference, basename, document_tab)
 
@@ -1854,6 +2126,28 @@ class SigaContributorExtractor:
 
         self._save_debug_snapshot(page, f"metric-not-found-{slugify(label)}")
         raise TimeoutError(f"Nao foi possivel extrair o campo {label}.")
+
+    def _extract_metric_with_retry(
+        self,
+        page: Page,
+        label: str,
+        aliases: tuple[str, ...] = (),
+        attempts: int = 4,
+        delay_ms: int = 750,
+    ) -> str:
+        for attempt in range(1, attempts + 1):
+            try:
+                return self._extract_metric(page, label, aliases)
+            except TimeoutError:
+                if attempt < attempts:
+                    page.wait_for_timeout(delay_ms)
+                    continue
+                raise
+            except Error as exc:
+                if attempt < attempts:
+                    page.wait_for_timeout(delay_ms)
+                    continue
+                raise TimeoutError(f"Nao foi possivel extrair o campo {label}.") from exc
 
     def _extract_value_near_label(self, page: Page, label: str) -> str | None:
         script = """
@@ -1951,8 +2245,8 @@ class SigaContributorExtractor:
         document_tab: str,
     ) -> Path:
         output_dir = self._build_taxpayer_output_dir(cgf, month_reference, document_tab)
-        extension = self._resolve_download_extension(download)
-        output_path = output_dir / f"{basename}{extension}"
+        final_name = f"{self._sanitize_filename(basename)}.csv"
+        output_path = output_dir / final_name
         LOGGER.info(
             "Saving download with deterministic name: basename=%s, suggested_filename=%s, final_path=%s",
             basename,
@@ -1962,16 +2256,6 @@ class SigaContributorExtractor:
         download.save_as(str(output_path))
         LOGGER.info("Saved download to %s", output_path)
         return output_path
-
-    def _resolve_download_extension(self, download: Download) -> str:
-        suggested_name = download.suggested_filename or ""
-        suffix = Path(suggested_name).suffix.lower().strip()
-        if suffix in {".csv", ".txt"}:
-            return ".csv"
-        # Some SIGA responses expose UUID-like or extensionless names; enforce CSV.
-        if re.fullmatch(r"[a-f0-9-]{20,}", suggested_name.lower()):
-            return ".csv"
-        return ".csv"
 
     def _save_debug_snapshot(self, page: Page, name: str) -> None:
         self.page_inspector.save_debug_artifacts(page, name)

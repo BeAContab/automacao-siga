@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Modo assistido para executar ações manuais no mesmo navegador da automação."""
+
 import json
 import logging
 from dataclasses import dataclass
@@ -30,23 +32,27 @@ class LiveCommandResult:
 
 
 class LiveAssistRecorder:
+    """Persistência simples do contexto da sessão assistida e do histórico de ações."""
     def __init__(self) -> None:
         self.session_state_path = SESSION_STATE_PATH
         self.actions_log_path = ACTIONS_LOG_PATH
         self.session_state_path.parent.mkdir(parents=True, exist_ok=True)
 
     def save_session_state(self, payload: dict[str, object]) -> None:
+        """Grava o estado atual da sessão para retomada e auditoria."""
         self.session_state_path.write_text(
             json.dumps(payload, ensure_ascii=True, indent=2),
             encoding="utf-8",
         )
 
     def append_action(self, payload: dict[str, object]) -> None:
+        """Acrescenta uma linha no histórico de ações realizadas no navegador."""
         with self.actions_log_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(payload, ensure_ascii=True) + "\n")
 
 
 class LiveAssistSession:
+    """Mantém o navegador aberto para que comandos pontuais possam ser disparados depois."""
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         if not self.settings.connect_browser_url:
@@ -56,6 +62,7 @@ class LiveAssistSession:
         self.extractor = SigaContributorExtractor(settings, allow_manual_login_prompt=False)
 
     def start(self) -> FlowResult:
+        """Abre o SIGA, aguarda login manual e persiste a sessão pronta para uso."""
         process = launch_debug_browser(self.settings)
         if process is None:
             LOGGER.info("Reusing existing browser session for live assist")
@@ -83,10 +90,12 @@ class LiveAssistSession:
         target: str | None = None,
         value: str | None = None,
     ) -> LiveCommandResult:
+        """Executa um comando assistido e registra o estado antes e depois da ação."""
         with BrowserSession(self.settings) as context:
             page = self._select_active_page(context)
             url_before = page.url
 
+            # Cada comando é mapeado explicitamente para manter o fluxo previsível e auditável.
             if command == "click-text":
                 self._require_target(command, target)
                 page.get_by_text(target, exact=False).first.click(timeout=self.settings.timeout_ms)
@@ -134,25 +143,19 @@ class LiveAssistSession:
                 self._require_target(command, target)
                 decision = self.extractor.open_reference_month_if_positive(page, target)
                 if decision.opened:
-                    description = (
-                        f"Mes '{target}' aberto com sucesso porque QTD={decision.qtd:g} "
-                        f"e VALOR R$={decision.valor:g}."
-                    )
+                    description = f"Mes '{target}' aberto com sucesso."
                 else:
-                    description = (
-                        f"Mes '{target}' nao foi aberto porque QTD={decision.qtd:g} "
-                        f"e VALOR R$={decision.valor:g}."
-                    )
+                    description = f"Mes '{target}' nao foi aberto. Motivo: {decision.reason}."
             elif command == "request-positive-details":
                 reports = self.extractor._select_positive_reports(page)
                 if not reports:
-                    description = "Nenhum detalhamento com QTD e VALOR positivos foi encontrado."
+                    description = "Nenhum detalhamento com QTD positiva foi encontrado."
                 else:
                     for report_name in reports:
                         self.extractor._click_report_by_name(page, report_name)
-                        page.wait_for_timeout(1_500)
+                        page.wait_for_timeout(750)
                         self.extractor._request_detail_download(page)
-                    description = f"Solicitei os detalhamentos positivos: {', '.join(reports)}."
+                    description = f"Solicitei os detalhamentos com QTD positiva: {', '.join(reports)}."
             elif command == "close-browser":
                 closed = False
                 if context.browser is not None:
@@ -219,6 +222,7 @@ class LiveAssistSession:
             )
 
     def _ensure_page(self, context: BrowserContext) -> Page:
+        """Garante que exista uma aba útil do SIGA antes de aceitar comandos."""
         page = self._select_active_page(context)
         if page.url == "about:blank":
             LOGGER.info("Opening SIGA page for live assist")
@@ -232,6 +236,7 @@ class LiveAssistSession:
         return page
 
     def _select_active_page(self, context: BrowserContext) -> Page:
+        """Escolhe a aba mais provável de conter a interface do SIGA."""
         pages = [page for page in context.pages if not page.is_closed()]
         if not pages:
             return context.new_page()
@@ -246,6 +251,7 @@ class LiveAssistSession:
         return page
 
     def _persist_session_state(self, page: Page) -> None:
+        """Armazena URL e título atuais para facilitar retomada do contexto."""
         self.recorder.save_session_state(
             {
                 "updated_at": self._timestamp(),
@@ -256,17 +262,20 @@ class LiveAssistSession:
         )
 
     def _save_screenshot(self, page: Page) -> Path:
+        """Salva uma captura rápida do estado atual do navegador assistido."""
         screenshot_path = self.settings.log_dir / f"{self._artifact_name('live-assist')}.png"
         page.screenshot(path=str(screenshot_path), full_page=False)
         return screenshot_path
 
     def _download_table(self, page: Page, basename: str) -> Path:
+        """Baixa a tabela visível e renomeia o arquivo de forma determinística."""
         with page.expect_download(timeout=self.settings.download_wait_timeout_ms) as download_info:
             page.get_by_role("button", name="Baixar Tabela").click(timeout=self.settings.timeout_ms)
         download = download_info.value
         return self._save_download(download, basename)
 
     def _save_download(self, download: Download, basename: str) -> Path:
+        """Move o arquivo baixado para a pasta do modo assistido."""
         output_dir = self.settings.output_dir / "live-assist"
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{basename}.csv"
@@ -280,6 +289,7 @@ class LiveAssistSession:
         return output_path
 
     def _list_pages(self, context: BrowserContext) -> str:
+        """Produz uma visão textual das páginas abertas para diagnóstico rápido."""
         open_pages = [page for page in context.pages if not page.is_closed()]
         lines = []
         for index, page in enumerate(open_pages, start=1):
@@ -287,18 +297,22 @@ class LiveAssistSession:
         return "\n".join(lines) if lines else "Nenhuma pagina aberta."
 
     def _artifact_name(self, prefix: str) -> str:
+        """Gera um nome curto baseado em data e hora para artefatos temporários."""
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         return f"{prefix}-{stamp}"
 
     def _parse_coordinates(self, target: str) -> tuple[int, int]:
+        """Converte a entrada `x,y` em coordenadas inteiras."""
         values = [part.strip() for part in target.split(",", maxsplit=1)]
         if len(values) != 2:
             raise ValueError("Use coordenadas no formato 'x,y'.")
         return int(values[0]), int(values[1])
 
     def _require_target(self, command: str, target: str | None) -> None:
+        """Valida se o comando recebeu o alvo obrigatório."""
         if not target:
             raise ValueError(f"O comando '{command}' exige --target.")
 
     def _timestamp(self) -> str:
+        """Cria uma marca temporal simples para registrar ações."""
         return datetime.now().isoformat(timespec="seconds")

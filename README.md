@@ -1,6 +1,14 @@
 # SIGA Automacao
 
-Automacao por terminal com Selenium para acessar o SIGA, aguardar login manual e extrair os arquivos fiscais por CGF a partir de uma planilha `.xlsx`.
+Automacao por terminal com Selenium para acessar o SIGA, aguardar login manual e extrair os arquivos fiscais por CNPJ a partir de uma planilha `.xlsx`.
+
+## Entrada e saida
+
+- Planilha de entrada: `cnpj.xlsx`
+- CNPJs preservados com 14 digitos, inclusive zeros a esquerda
+- Saida organizada em `saida/<cnpj>/<mes>/<documento>/`
+- Logs em `logs/`
+- Notas de contexto e decisoes em `brain/`
 
 ## Uso
 
@@ -13,18 +21,34 @@ Execute o fluxo interativo:
 Ou informe os parametros diretamente:
 
 ```powershell
-.\.venv\Scripts\python.exe .\main.py --month Maio --spreadsheet .\cgf.xlsx
+.\.venv\Scripts\python.exe .\main.py --month Maio --year 2026 --spreadsheet .\cnpj.xlsx
+```
+
+Para executar multiplos meses na mesma execucao:
+
+```powershell
+.\.venv\Scripts\python.exe .\main.py --month Maio Junho --year 2026 --docs NF-e CT-e
+```
+
+Para escolher quais documentos processar:
+
+```powershell
+.\.venv\Scripts\python.exe .\main.py --month Maio --year 2026 --docs NF-e CT-e
 ```
 
 O terminal vai:
 
-1. pedir o mes de referencia, se nao informado;
-2. pedir a planilha `.xlsx`, se nao informada;
-3. tentar reaproveitar uma aba do SIGA ja autenticada em um Chrome com CDP ativo;
-4. se nao encontrar uma aba valida, abrir o Chrome em um perfil dedicado de automacao para login manual;
-5. aguardar `Enter` antes de anexar o Selenium, somente apos o SIGA estar autenticado;
-6. conectar o Selenium ao navegador ja autenticado;
-7. executar a extracao no mesmo contexto autenticado.
+1. pedir o(s) mes(es) de referencia, se nao informado;
+2. pedir o ano de referencia, se nao informado;
+3. pedir quais documentos executar (NF-e, NFC-e, CT-e ou todos), se nao informado;
+4. pedir a planilha `.xlsx`, se nao informada;
+5. tentar reaproveitar uma aba do SIGA ja autenticada em um Chrome com CDP ativo;
+6. se nao encontrar uma aba valida, abrir o Chrome em um perfil dedicado de automacao para login manual;
+7. aguardar `Enter` antes de anexar o Selenium, somente apos o SIGA estar autenticado;
+8. conectar o Selenium ao navegador ja autenticado;
+9. executar a extracao no mesmo contexto autenticado.
+
+Para validar a saida esperada, voce pode comparar os arquivos gerados com `testes.csv`, que serve como referencia manual para a extração de NFC-e/Emissor.
 
 O Selenium se conecta ao Chrome/Edge pela porta de depuracao somente depois do login manual, para manter a mesma sessao sem controlar a etapa do certificado/recaptcha.
 
@@ -98,4 +122,3 @@ O modo assistido continua disponivel para diagnostico usando a mesma sessao Sele
 - Erros: `logs/errors.log`
 
 Arquivos locais sensiveis, certificados, logs, saidas e a pasta `brain/` ficam fora do controle de versao via `.gitignore`.
-# automacao-siga

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Inspeção e estabilização das páginas do SIGA antes das ações de automação."""
+
 import logging
 from pathlib import Path
 
@@ -11,10 +13,12 @@ LOGGER = logging.getLogger(__name__)
 
 
 class SigaPageInspector:
+    """Detecta telas vazias, falhas de renderização e produz artefatos de diagnóstico."""
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
     def stabilize_after_navigation(self, page: Page, reason: str) -> None:
+        """Aplica tentativas de recuperação quando o SIGA renderiza vazio ou quebrado."""
         for attempt in range(self.settings.blank_page_retry_count + 1):
             self._wait_for_settle(page)
             diagnosis = self.inspect(page)
@@ -40,6 +44,7 @@ class SigaPageInspector:
             page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
 
     def inspect(self, page: Page) -> dict[str, object]:
+        """Resume o estado visual da página para decidir se é preciso recuperar a tela."""
         url = page.url
         body_text = ""
         app_root_count = 0
@@ -83,6 +88,7 @@ class SigaPageInspector:
         }
 
     def save_debug_artifacts(self, page: Page, name: str) -> tuple[Path, Path]:
+        """Salva screenshot e HTML quando a página parece estar em estado inválido."""
         screenshot_path = self.settings.log_dir / f"{name}.png"
         html_path = self.settings.log_dir / f"{name}.html"
         page.screenshot(path=str(screenshot_path), full_page=True)
@@ -91,6 +97,7 @@ class SigaPageInspector:
         return screenshot_path, html_path
 
     def _wait_for_settle(self, page: Page) -> None:
+        """Espera a navegação desacelerar antes de inspecionar a interface."""
         try:
             page.wait_for_load_state("domcontentloaded", timeout=self.settings.timeout_ms)
         except TimeoutError:
