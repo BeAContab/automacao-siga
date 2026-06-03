@@ -139,6 +139,8 @@ class SigaContributorExtractor:
         month_reference: str,
         reference_year: str | None = None,
         selected_tabs: list[str] | None = None,
+        selected_tabs_by_cnpj: dict[str, list[str]] | None = None,
+        selected_tabs_by_row_number: dict[int, list[str]] | None = None,
     ) -> list[BatchExtractionResult]:
         """Abre um contexto próprio de navegador e processa a planilha inteira."""
         with BrowserSession(self.settings) as context:
@@ -148,6 +150,8 @@ class SigaContributorExtractor:
                 month_reference,
                 reference_year,
                 selected_tabs,
+                selected_tabs_by_cnpj,
+                selected_tabs_by_row_number,
             )
 
     def run_batch_from_spreadsheet_in_context(
@@ -157,6 +161,8 @@ class SigaContributorExtractor:
         month_reference: str,
         reference_year: str | None = None,
         selected_tabs: list[str] | None = None,
+        selected_tabs_by_cnpj: dict[str, list[str]] | None = None,
+        selected_tabs_by_row_number: dict[int, list[str]] | None = None,
     ) -> list[BatchExtractionResult]:
         """Reaproveita um contexto já autenticado para processar vários documentos em sequência."""
         normalized_month = month_reference.strip()
@@ -172,12 +178,19 @@ class SigaContributorExtractor:
             # Cada linha da planilha vira uma busca independente dentro do SIGA.
             LOGGER.info("Processing CNPJ %s from spreadsheet row %s", spreadsheet_row.cnpj, spreadsheet_row.row_number)
             self._open_taxpayer_from_home(page, spreadsheet_row.cnpj)
+            tabs_for_row = selected_tabs
+            if selected_tabs_by_row_number is not None:
+                tabs_for_row = selected_tabs_by_row_number.get(spreadsheet_row.row_number)
+            elif selected_tabs_by_cnpj is not None:
+                tabs_for_row = selected_tabs_by_cnpj.get(spreadsheet_row.cnpj)
+            if tabs_for_row is not None:
+                tabs_for_row = [tab for tab in tabs_for_row if tab in {"NF-e", "NFC-e", "CT-e"}]
             fiscal_results = self._extract_fiscal_tables(
                 page,
                 spreadsheet_row.cnpj,
                 normalized_month,
                 normalized_year,
-                selected_tabs,
+                tabs_for_row,
             )
 
             results.append(
@@ -217,7 +230,7 @@ class SigaContributorExtractor:
                     exc,
                 )
                 if attempt < 3:
-                    page.wait_for_timeout(2_000)
+                    page.wait_for_timeout(1_000)
 
         self._save_debug_snapshot(page, f"taxpayer-open-cycle-failed-{cgf}")
         raise TimeoutError(
@@ -321,7 +334,15 @@ class SigaContributorExtractor:
     ) -> list[FiscalDownloadResult]:
         """Extrai uma aba fiscal inteira, incluindo resumo e detalhamento."""
         LOGGER.info("Starting fiscal extraction for tab %s", tab_config.tab_name)
-        self._open_fiscal_information(page)
+        try:
+            self._open_fiscal_information(page)
+        except TimeoutError:
+            LOGGER.info(
+                "Informacoes Fiscais did not open on the current view for %s; returning home and retrying once.",
+                tab_config.tab_name,
+            )
+            self._return_to_home(page)
+            self._open_fiscal_information(page)
         self._open_document_tab(page, tab_config)
 
         summary_paths: dict[str, Path] = {}
@@ -785,12 +806,13 @@ class SigaContributorExtractor:
     def _open_fiscal_information(self, page: Page) -> None:
         """Entra na área de informações fiscais antes de escolher a aba de documento."""
         LOGGER.info("Opening Informacoes Fiscais")
+        self._ensure_side_menu_open(page)
         if self._click_xpath(
             page,
             "xpath=//a[contains(@href,'/informacoes-fiscais')]",
             "Informacoes Fiscais side menu",
         ):
-            page.wait_for_timeout(2_000)
+            page.wait_for_timeout(1_000)
             return
 
         self._click_text_action(
@@ -799,7 +821,7 @@ class SigaContributorExtractor:
             artifact_name="informacoes-fiscais",
             fallback_task="Locate and click the section, tab or button labeled Informacoes Fiscais.",
         )
-        page.wait_for_timeout(2_000)
+        page.wait_for_timeout(1_000)
 
     def _build_fiscal_tab_configs(self) -> tuple[FiscalTabConfig, ...]:
         return (
@@ -899,7 +921,7 @@ class SigaContributorExtractor:
         """Seleciona a aba fiscal correta, usando XPath primeiro e texto como fallback."""
         LOGGER.info("Opening fiscal document tab %s", tab_config.tab_name)
         if self._click_xpath(page, tab_config.tab_xpath, f"{tab_config.tab_name} tab"):
-            page.wait_for_timeout(2_000)
+            page.wait_for_timeout(1_000)
             return
 
         self._click_text_action(
@@ -908,7 +930,7 @@ class SigaContributorExtractor:
             artifact_name=f"tab-{slugify(tab_config.tab_name)}",
             fallback_task=f"Locate and click the fiscal tab labeled {tab_config.tab_name}.",
         )
-        page.wait_for_timeout(2_000)
+        page.wait_for_timeout(1_000)
 
     def _open_named_section(self, page: Page, label: str) -> None:
         """Abre uma seção interna como Emissor, Destinatário, Tomador ou Emitente."""
@@ -920,7 +942,7 @@ class SigaContributorExtractor:
             "Emissor radio",
             force=True,
         ):
-            page.wait_for_timeout(1_500)
+            page.wait_for_timeout(1_000)
             return
         if normalized_label == "destinatario" and self._click_xpath(
             page,
@@ -928,7 +950,7 @@ class SigaContributorExtractor:
             "Destinatario radio",
             force=True,
         ):
-            page.wait_for_timeout(1_500)
+            page.wait_for_timeout(1_000)
             return
         if normalized_label == "tomador" and self._click_xpath(
             page,
@@ -953,7 +975,7 @@ class SigaContributorExtractor:
             artifact_name=f"section-{slugify(label)}",
             fallback_task=f"Locate and click the fiscal section labeled {label}.",
         )
-        page.wait_for_timeout(1_500)
+        page.wait_for_timeout(1_000)
 
     def open_reference_month_if_positive(
         self,
@@ -980,9 +1002,9 @@ class SigaContributorExtractor:
                     month_reference,
                     attempt,
                 )
-                page.wait_for_timeout(1_000)
+                page.wait_for_timeout(750)
                 page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
-                page.wait_for_timeout(1_000)
+                page.wait_for_timeout(750)
 
         if metric is None:
             raise TimeoutError(f"Nao foi possivel localizar o mes de referencia {month_reference}.") from last_error
@@ -1011,12 +1033,12 @@ class SigaContributorExtractor:
 
     def _open_reference_month(self, page: Page, month_reference: str) -> None:
         LOGGER.info("Opening month reference %s", month_reference)
-        page.wait_for_timeout(1_000)
+        page.wait_for_timeout(750)
         month_xpath = (
             f"xpath=//tr[.//span[normalize-space()='{month_reference}']]//td[1]//div"
         )
         if self._click_xpath(page, month_xpath, f"month row {month_reference}"):
-            page.wait_for_timeout(1_500)
+            page.wait_for_timeout(1_000)
             return
 
         normalized_month = strip_accents(month_reference).lower()
@@ -1030,7 +1052,7 @@ class SigaContributorExtractor:
             target = self._first_visible_enabled(locator)
             if target is not None:
                 target.click()
-                page.wait_for_timeout(1_500)
+                page.wait_for_timeout(1_000)
                 return
 
         rows = page.locator("tr, [role='row'], .p-datatable-row, .card, .p-accordion-header")
@@ -1046,10 +1068,10 @@ class SigaContributorExtractor:
                 continue
             if normalized_month in text:
                 row.click()
-                page.wait_for_timeout(1_500)
+                page.wait_for_timeout(1_000)
                 return
 
-        page.wait_for_timeout(1_000)
+        page.wait_for_timeout(750)
         rows = page.locator("tr, [role='row'], .p-datatable-row, .card, .p-accordion-header")
         try:
             row_count = rows.count()
@@ -1063,7 +1085,7 @@ class SigaContributorExtractor:
                 continue
             if normalized_month in text:
                 row.click()
-                page.wait_for_timeout(1_500)
+                page.wait_for_timeout(1_000)
                 return
 
         raise TimeoutError(f"Nao foi possivel localizar o mes de referencia {month_reference}.")
@@ -1134,7 +1156,7 @@ class SigaContributorExtractor:
         requests: list[PendingDetailRequest] = []
         for report_name in positive_reports:
             self._click_report_by_name(page, report_name)
-            page.wait_for_timeout(750)
+            page.wait_for_timeout(500)
             tela_aba = self._build_download_screen_name(
                 month_reference=month_reference,
                 tab_name=tab_config.tab_name,
@@ -1367,12 +1389,13 @@ class SigaContributorExtractor:
     ) -> dict[str, Path]:
         origin_url = page.url
         LOGGER.info("Opening Downloads menu to fetch %s pending detail file(s)", len(pending_requests))
+        self._ensure_side_menu_open(page)
         if self._click_xpath(
             page,
             "xpath=//a[contains(@href,'/downloads-assincronos')]",
             "Downloads side menu",
         ):
-            page.wait_for_timeout(2_000)
+            page.wait_for_timeout(1_000)
         else:
             self._click_text_action(
                 page,
@@ -1380,7 +1403,7 @@ class SigaContributorExtractor:
                 artifact_name="downloads",
                 fallback_task="Locate and click the Downloads area in the side menu.",
             )
-            page.wait_for_timeout(2_000)
+            page.wait_for_timeout(1_000)
 
         detail_paths: dict[str, Path] = {}
         for request in pending_requests:
@@ -1395,7 +1418,7 @@ class SigaContributorExtractor:
             )
 
         page.goto(origin_url, wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
-        page.wait_for_timeout(1_500)
+        page.wait_for_timeout(1_000)
         return detail_paths
 
     def _find_latest_download_row(self, page: Page) -> Locator:
@@ -1608,6 +1631,8 @@ class SigaContributorExtractor:
         match_fragments = self._extract_download_match_fragments_from_title(tela_aba)
         taxpayer_base_key = self._taxpayer_base_key(taxpayer_document)
         deadline = time.time() + (self.settings.download_wait_timeout_ms / 1000)
+        processing_streak = 0
+        empty_streak = 0
         while time.time() < deadline:
             self._go_to_first_downloads_page(page)
             preferred_exact_candidates: list[tuple[Locator, datetime, str]] = []
@@ -1632,14 +1657,20 @@ class SigaContributorExtractor:
                     fallback_fuzzy_candidates.extend(page_result["fuzzy"]["fallback"])
 
                 if page_result["processing"] > 0:
+                    processing_streak += 1
+                    empty_streak = 0
+                    delay_ms = 1_500 if processing_streak == 1 else 2_000
                     LOGGER.info(
-                        "Download still processing for %s (%s matching row(s)); refreshing Downloads page.",
+                        "Download still processing for %s (%s matching row(s)); waiting %s ms before refresh.",
                         tela_aba,
                         page_result["processing"],
+                        delay_ms,
                     )
-                    page.wait_for_timeout(5_000)
-                    page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
-                    page.wait_for_timeout(1_000)
+                    page.wait_for_timeout(delay_ms)
+                    if processing_streak >= 2:
+                        page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
+                        page.wait_for_timeout(750)
+                        processing_streak = 0
                     continue
 
                 if not self._go_to_next_downloads_page(page):
@@ -1687,9 +1718,13 @@ class SigaContributorExtractor:
                     best_text,
                 )
                 return best_row, False
-            page.wait_for_timeout(self.settings.download_poll_interval_ms)
-            page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
-            page.wait_for_timeout(1_000)
+            empty_streak += 1
+            processing_streak = 0
+            page.wait_for_timeout(max(500, self.settings.download_poll_interval_ms // 2))
+            if empty_streak >= 2:
+                page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
+                page.wait_for_timeout(750)
+                empty_streak = 0
 
         LOGGER.warning(
             "Nao foi possivel localizar a solicitacao concluida para %s. "
@@ -2308,6 +2343,29 @@ class SigaContributorExtractor:
             return False
         LOGGER.info("Clicking %s via XPath: %s", label, xpath)
         target.click(force=force)
+        return True
+
+    def _ensure_side_menu_open(self, page: Page) -> bool:
+        """Expande o menu lateral quando ele estiver recolhido, evitando bloqueio de navegação."""
+        menu_toggle_xpath = (
+            "xpath=//*[@id='main-structure-header-id']/div/div[1]/ed-header-v2-track-one/"
+            "div/div/div/div[1]/div/i"
+        )
+        menu_toggle = self._first_visible_enabled(page.locator(menu_toggle_xpath))
+        if menu_toggle is None:
+            return False
+
+        try:
+            body_text = strip_accents(page.locator("body").inner_text(timeout=2_000)).lower()
+        except Error:
+            body_text = ""
+
+        if "informacoes fiscais" in body_text and "downloads" in body_text:
+            return False
+
+        LOGGER.info("Opening side menu via header toggle")
+        menu_toggle.click(force=True)
+        page.wait_for_timeout(750)
         return True
 
     def _first_visible_enabled(self, locator: Locator) -> Locator | None:

@@ -2,6 +2,80 @@
 
 ## [2026-06-03]
 
+### Corrigido
+- Arquivos:
+  - src/main.py
+  - src/gui.py
+- Motivo: a interface grafica ainda estava abrindo o navegador cedo demais.
+- Impacto: a GUI agora abre sozinha e o navegador só inicia ao clicar em `Iniciar navegador`.
+
+## [2026-06-03]
+
+### Alterado
+- Arquivos:
+  - src/gui.py
+- Motivo: separar a abertura do navegador da execução e exigir login manual antes de processar.
+- Impacto: o usuário passa a controlar a etapa de autenticação por um botão próprio na interface.
+
+### Documentação
+- Arquivos:
+  - README.md
+- Motivo: documentar o fluxo de `Iniciar navegador` seguido de login manual e depois `Executar`.
+- Impacto: reduz confusão no uso da GUI.
+
+## [2026-06-03]
+
+### Alterado
+- Arquivos:
+  - src/gui.py
+- Motivo: alinhar melhor as colunas da lista de CNPJs na interface grafica.
+- Impacto: a grade ficou mais legivel e estavel para selecao por linha.
+
+## [2026-06-03]
+
+### Adicionado
+- Arquivos:
+  - src/gui.py
+- Motivo: criar uma interface gráfica para selecionar CNPJs e abas fiscais por item.
+- Impacto: permite operação visual, sem depender do terminal para escolher o lote.
+
+### Alterado
+- Arquivos:
+  - src/main.py
+  - src/extraction/siga_extractor.py
+- Motivo: integrar o novo modo `--gui` e permitir seleção de abas por CNPJ.
+- Impacto: o backend passou a aceitar filtragem individual por contribuinte.
+
+### Documentação
+- Arquivos:
+  - README.md
+- Motivo: documentar o uso da interface gráfica.
+- Impacto: facilita descoberta e adoção do novo modo.
+
+## [2026-06-03]
+
+### Alterado
+- Arquivos:
+  - src/extraction/siga_extractor.py
+- Motivo: abrir automaticamente o menu lateral quando ele estiver recolhido, evitando bloqueios ao acessar Informacoes Fiscais e Downloads.
+- Impacto: reduz TimeoutError de navegacao quando o menu lateral esta fechado.
+
+## [2026-06-03]
+
+### Alterado
+- Arquivos:
+  - src/extraction/siga_extractor.py
+- Motivo: reduzir esperas fixas e tornar a varredura da Central de Downloads mais leve.
+- Impacto: menor tempo gasto em cliques, abertura de seções e polling de arquivos assíncronos.
+
+### Documentação
+- Arquivos:
+  - brain/2026-06-03-performance-download-optimization.md
+- Motivo: registrar o plano de otimização e a medição antes/depois.
+- Impacto: melhora a rastreabilidade da rodada de performance.
+
+## [2026-06-03]
+
 ### Documentação
 - Arquivos:
   - README.md

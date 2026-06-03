@@ -101,6 +101,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Open SIGA for manual login and keep the browser session ready for assisted commands.",
     )
     parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Open the graphical interface to select CNPJs and document tabs.",
+    )
+    parser.add_argument(
         "--live-command",
         help=(
             "Execute a live assisted browser command. Supported values: click-text, click-selector, "
@@ -355,6 +360,24 @@ def run_interactive_terminal(
     return 0
 
 
+def run_gui_mode(
+    settings: Settings,
+    spreadsheet: str | None = None,
+    month: str | None = None,
+    year: int | None = None,
+) -> int:
+    """Abre a interface gráfica e preserva valores iniciais vindos do CLI."""
+    from src.gui import launch_gui
+
+    initial_year = str(year) if year is not None else None
+    return launch_gui(
+        settings,
+        initial_spreadsheet=spreadsheet,
+        initial_month=month,
+        initial_year=initial_year,
+    )
+
+
 def main() -> int:
     """Configura o ambiente e escolhe entre os modos interativo, assistido ou de limpeza."""
     load_dotenv()
@@ -413,6 +436,9 @@ def main() -> int:
             print(f"Pagina atual: {result.page_title}")
             print(f"URL atual: {result.current_url}")
             return 0
+
+        if args.gui:
+            return run_gui_mode(settings, args.spreadsheet, args.month[0] if args.month else None, args.year)
 
         parsed_docs = _normalize_selected_tabs(args.docs) if args.docs else None
         parsed_months = _normalize_selected_months(args.month) if args.month else None

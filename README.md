@@ -12,6 +12,12 @@ Automacao por terminal com Selenium para acessar o SIGA, aguardar login manual e
 
 ## Uso
 
+Para abrir a interface grafica e marcar os CNPJs e abas manualmente:
+
+```powershell
+.\.venv\Scripts\python.exe .\main.py --gui
+```
+
 Execute o fluxo interativo:
 
 ```powershell
@@ -47,6 +53,19 @@ O terminal vai:
 7. aguardar `Enter` antes de anexar o Selenium, somente apos o SIGA estar autenticado;
 8. conectar o Selenium ao navegador ja autenticado;
 9. executar a extracao no mesmo contexto autenticado.
+
+## Interface grafica
+
+A interface grafica permite:
+
+- carregar a planilha `cnpj.xlsx`;
+- visualizar todos os CNPJs do anexo;
+- marcar por CNPJ as abas `NF-e`, `NFC-e` e/ou `CT-e`;
+- iniciar o navegador por um botao proprio antes da execucao;
+- executar apenas o que foi selecionado;
+- acompanhar o log da execucao na propria tela.
+
+Depois de abrir a interface, clique em `Iniciar navegador`, faca o login manual no SIGA e so entao clique em `Executar`.
 
 Para validar a saida esperada, voce pode comparar os arquivos gerados com `testes.csv`, que serve como referencia manual para a extração de NFC-e/Emissor.
 
