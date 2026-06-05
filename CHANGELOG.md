@@ -1,5 +1,77 @@
 # Changelog
 
+## [2026-06-05]
+
+### Corrigido
+- Arquivos:
+  - .gitignore
+- Motivo: arquivos de log temporarios fora da pasta `logs/`, como `perf_after.log`, nao devem ficar no status do Git.
+- Impacto: reduz ruido no repositorio e evita versionamento acidental de logs locais.
+
+### Adicionado
+- Arquivos:
+  - main_gui.py
+  - siga-automacao-gui.spec
+- Motivo: criar uma build dedicada para a interface grafica, sem depender do parametro `--gui`.
+- Impacto: o instalador pode distribuir um executavel especifico da GUI, mais simples para o usuario final.
+
+### Corrigido
+- Arquivos:
+  - dist/siga-automacao-gui.exe
+- Motivo: a build da GUI foi gerada com sucesso a partir do novo spec dedicado.
+- Impacto: o instalador ja pode apontar para o binario grafico pronto para uso.
+
+### Corrigido
+- Arquivos:
+  - installer/siga-automacao.iss
+- Motivo: o instalador tentava criar atalho no desktop comum, o que pode falhar com `0x80070005` em instalacoes sem permissao elevada.
+- Impacto: o atalho passa a ser criado no desktop do usuario (`{userdesktop}`), reduzindo risco de erro de acesso negado.
+
+### Corrigido
+- Arquivos:
+  - installer/siga-automacao.iss
+  - README.md
+- Motivo: o instalador inicial apontava para o binario geral, mas a distribuicao desejada e a versao com GUI aberta por padrao.
+- Impacto: os atalhos e a execucao pos-instalacao agora iniciam a interface grafica diretamente com `--gui`.
+
+### Adicionado
+- Arquivos:
+  - installer/siga-automacao.iss
+- Motivo: criar um script de instalador para o Inno Setup apontando para o executável do PyInstaller.
+- Impacto: o projeto passa a ter um caminho padronizado para gerar um instalador Windows.
+
+### Adicionado
+- Arquivos:
+  - dist/siga-automacao.exe
+- Motivo: o executável Windows foi gerado com sucesso a partir do spec do PyInstaller.
+- Impacto: a aplicação já pode ser distribuída e executada como `.exe` no Windows.
+
+### Alterado
+- Arquivos:
+  - src/gui.py
+- Motivo: a interface grafica passou a permitir a escolha da pasta de saida antes da execucao.
+- Impacto: o usuario agora controla onde os downloads finais serao gravados sem depender do diretorio padrao `saida/`.
+
+### Documentação
+- Arquivos:
+  - README.md
+  - brain/2026-06-05-escolha-pasta-downloads.md
+- Motivo: registrar o novo fluxo da GUI e a decisao tecnica de sincronizar a pasta escolhida com `Settings.output_dir`.
+- Impacto: melhora a rastreabilidade da alteracao e facilita a consulta futura.
+
+### Documentação
+- Arquivos:
+  - README.md
+- Motivo: documentar o comando de build do PyInstaller e o caminho do executavel gerado.
+- Impacto: facilita a reproducao do pacote Windows em novas maquinas.
+
+### Documentação
+- Arquivos:
+  - README.md
+  - brain/2026-06-05-inno-setup-installer.md
+- Motivo: registrar como compilar o instalador com o Inno Setup e onde o `.exe` final será produzido.
+- Impacto: melhora a rastreabilidade e reduz dúvidas no empacotamento.
+
 ## [2026-06-03]
 
 ### Corrigido

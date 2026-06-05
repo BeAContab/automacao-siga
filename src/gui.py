@@ -102,6 +102,8 @@ class SigaAutomationGUI:
         logging.getLogger().addHandler(self.log_handler)
 
         self.spreadsheet_path_var = tk.StringVar(value=initial_spreadsheet or "cnpj.xlsx")
+        self._default_output_dir = Path(self.settings.output_dir)
+        self.output_dir_var = tk.StringVar(value=str(self.settings.output_dir))
         current_month = MONTH_OPTIONS[max(0, min(11, time.localtime().tm_mon - 1))]
         self.month_var = tk.StringVar(value=initial_month or current_month)
         self.year_var = tk.StringVar(value=initial_year or str(time.localtime().tm_year))
@@ -143,13 +145,19 @@ class SigaAutomationGUI:
         ttk.Button(header, text="Abrir", command=self._browse_spreadsheet).grid(row=0, column=2, sticky="ew")
         ttk.Button(header, text="Carregar", command=self._reload_spreadsheet).grid(row=0, column=3, sticky="ew", padx=(8, 0))
 
-        ttk.Label(header, text="Mês").grid(row=1, column=0, sticky="w", pady=(10, 0))
-        month_box = ttk.Combobox(header, textvariable=self.month_var, values=MONTH_OPTIONS, state="readonly", width=18)
-        month_box.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(10, 0))
+        ttk.Label(header, text="Pasta de saída").grid(row=1, column=0, sticky="w", pady=(10, 0))
+        output_entry = ttk.Entry(header, textvariable=self.output_dir_var)
+        output_entry.grid(row=1, column=1, sticky="ew", padx=(8, 8), pady=(10, 0))
+        ttk.Button(header, text="Escolher", command=self._browse_output_dir).grid(row=1, column=2, sticky="ew", pady=(10, 0))
+        ttk.Button(header, text="Padrão", command=self._reset_output_dir).grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(10, 0))
 
-        ttk.Label(header, text="Ano").grid(row=1, column=2, sticky="e", pady=(10, 0))
+        ttk.Label(header, text="Mês").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        month_box = ttk.Combobox(header, textvariable=self.month_var, values=MONTH_OPTIONS, state="readonly", width=18)
+        month_box.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(10, 0))
+
+        ttk.Label(header, text="Ano").grid(row=2, column=2, sticky="e", pady=(10, 0))
         year_entry = ttk.Entry(header, textvariable=self.year_var, width=10)
-        year_entry.grid(row=1, column=3, sticky="w", padx=(8, 0), pady=(10, 0))
+        year_entry.grid(row=2, column=3, sticky="w", padx=(8, 0), pady=(10, 0))
 
         action_bar = ttk.Frame(main)
         action_bar.grid(row=1, column=0, sticky="ew", pady=(12, 8))
@@ -202,6 +210,53 @@ class SigaAutomationGUI:
     def _reload_spreadsheet(self) -> None:
         path = Path(self.spreadsheet_path_var.get()).expanduser()
         self._load_spreadsheet_rows(path)
+
+    def _browse_output_dir(self) -> None:
+        """Abre o seletor de pasta para o usuario apontar o destino dos arquivos."""
+        initial_dir = self._get_output_dir_for_dialog()
+        path = filedialog.askdirectory(
+            title="Selecione a pasta de saída",
+            initialdir=str(initial_dir),
+            mustexist=True,
+        )
+        if path:
+            self._set_output_dir(Path(path))
+            self.status_var.set(f"Pasta de saída selecionada: {self.output_dir_var.get()}")
+
+    def _reset_output_dir(self) -> None:
+        """Restaura a pasta padrao de saida usada pelo projeto."""
+        self._set_output_dir(self._default_output_dir)
+        self.status_var.set(f"Pasta de saída restaurada para o padrão: {self.output_dir_var.get()}")
+
+    def _set_output_dir(self, path: Path) -> None:
+        """Mantem o `Settings.output_dir` e o campo da interface sincronizados."""
+        normalized_path = Path(path).expanduser()
+        self.settings.output_dir = normalized_path
+        self.output_dir_var.set(str(normalized_path))
+
+    def _get_output_dir_for_dialog(self) -> Path:
+        """Define a pasta inicial do dialog com base no valor mais recente exibido."""
+        raw_value = self.output_dir_var.get().strip()
+        if not raw_value:
+            return self._default_output_dir
+        return Path(raw_value).expanduser()
+
+    def _apply_output_dir_selection(self) -> bool:
+        """Valida e cria a pasta escolhida antes de iniciar a execucao."""
+        raw_value = self.output_dir_var.get().strip()
+        if not raw_value:
+            messagebox.showwarning("SIGA Automação", "Informe uma pasta de saída válida.")
+            return False
+
+        output_dir = Path(raw_value).expanduser()
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            messagebox.showerror("SIGA Automação", f"Não foi possível criar a pasta de saída:\n{exc}")
+            return False
+
+        self._set_output_dir(output_dir)
+        return True
 
     def _load_spreadsheet_rows(self, path: Path) -> None:
         for child in self.scrollable_rows.inner.winfo_children():
@@ -308,6 +363,9 @@ class SigaAutomationGUI:
 
         if not self._browser_started:
             messagebox.showwarning("SIGA Automação", "Clique em 'Iniciar navegador' e faça o login antes de executar.")
+            return
+
+        if not self._apply_output_dir_selection():
             return
 
         selected_rows, selected_tabs_by_row_number = self._collect_selection()

@@ -6,7 +6,8 @@ Automacao por terminal com Selenium para acessar o SIGA, aguardar login manual e
 
 - Planilha de entrada: `cnpj.xlsx`
 - CNPJs preservados com 14 digitos, inclusive zeros a esquerda
-- Saida organizada em `saida/<cnpj>/<mes>/<documento>/`
+- Saida organizada em `<pasta-escolhida>/<cnpj>/<mes>/<documento>/`
+- Se nenhuma pasta for informada na GUI, o padrao continua sendo `saida/`
 - Logs em `logs/`
 - Notas de contexto e decisoes em `brain/`
 
@@ -29,6 +30,56 @@ Ou informe os parametros diretamente:
 ```powershell
 .\.venv\Scripts\python.exe .\main.py --month Maio --year 2026 --spreadsheet .\cnpj.xlsx
 ```
+
+## Gerar o EXE no Windows
+
+Com o ambiente virtual ativado, rode:
+
+```powershell
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean siga-automacao.spec
+```
+
+O executável final será gerado em:
+
+```text
+dist\siga-automacao.exe
+```
+
+Para executar a versão empacotada com a interface gráfica:
+
+```powershell
+.\dist\siga-automacao.exe --gui
+```
+
+Se quiser gerar apenas a versão com GUI, use:
+
+```powershell
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean siga-automacao-gui.spec
+```
+
+Nesse caso o executável final será:
+
+```text
+dist\siga-automacao-gui.exe
+```
+
+## Gerar o instalador com Inno Setup
+
+Depois de gerar o executável, abra o arquivo:
+
+```text
+installer\siga-automacao.iss
+```
+
+No Inno Setup Compiler, clique em `Compile` ou pressione `Ctrl+F9`.
+
+O instalador final será gerado em:
+
+```text
+dist\installer\SIGA-Automacao-Setup.exe
+```
+
+O instalador copia o binário da versão com GUI, cria atalhos opcionais e não exige privilégios de administrador.
 
 Para executar multiplos meses na mesma execucao:
 
@@ -59,13 +110,16 @@ O terminal vai:
 A interface grafica permite:
 
 - carregar a planilha `cnpj.xlsx`;
+- escolher a pasta onde os downloads serao salvos;
 - visualizar todos os CNPJs do anexo;
 - marcar por CNPJ as abas `NF-e`, `NFC-e` e/ou `CT-e`;
 - iniciar o navegador por um botao proprio antes da execucao;
 - executar apenas o que foi selecionado;
 - acompanhar o log da execucao na propria tela.
 
-Depois de abrir a interface, clique em `Iniciar navegador`, faca o login manual no SIGA e so entao clique em `Executar`.
+Depois de abrir a interface, se quiser ajustar a pasta de saida use o campo `Pasta de saída`, clique em `Iniciar navegador`, faca o login manual no SIGA e so entao clique em `Executar`.
+
+Se a pasta informada nao existir, ela sera criada antes do inicio da execucao.
 
 Para validar a saida esperada, voce pode comparar os arquivos gerados com `testes.csv`, que serve como referencia manual para a extração de NFC-e/Emissor.
 
