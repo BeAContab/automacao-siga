@@ -11,6 +11,8 @@ a = Analysis(
         'selenium.webdriver.common.actions.action_builder',
         'selenium.webdriver.common.actions.pointer_input',
         'selenium.webdriver.common.actions.key_input',
+        'selenium.webdriver.chrome.options',
+        'selenium.webdriver.edge.options',
     ],
     hookspath=[],
     hooksconfig={},

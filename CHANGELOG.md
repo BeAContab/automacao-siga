@@ -1,5 +1,21 @@
 # Changelog
 
+## [2026-06-09]
+
+### Corrigido
+- Arquivos:
+  - LICENSE
+- Motivo: ajuste da titularidade da licença proprietaria para `Barreira & Associados`, conforme a regra do projeto.
+- Impacto: o repositório passa a exibir o proprietario correto no arquivo de licenciamento.
+
+### Corrigido
+- Arquivos:
+  - src/utils/browser.py
+  - siga-automacao-gui.spec
+  - siga-automacao.spec
+- Motivo: corrigido o erro de empacotamento que impedia a GUI de iniciar em outro computador por falha ao resolver `selenium.webdriver.chrome.options`.
+- Impacto: o executavel passa a incluir os modulos de opcoes do Selenium e usa importacao direta para reduzir dependencia de carregamento dinamico.
+
 ## [2026-06-05]
 
 ### Corrigido

@@ -14,6 +14,8 @@ from pathlib import Path
 
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
+from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.edge.options import Options as EdgeOptions
 
 from src.config import Settings
 from src.utils.selenium_compat import Browser, BrowserContext
@@ -274,9 +276,11 @@ def create_webdriver(settings: Settings):
 def _build_browser_options(settings: Settings, debugger_address: str | None = None):
     """Prepara as opções do navegador com base no modo de execução escolhido."""
     if settings.browser_channel == "msedge":
-        options = webdriver.EdgeOptions()
+        # Importacao direta reduz falhas em empacotamentos com imports dinamicos.
+        options = EdgeOptions()
     else:
-        options = webdriver.ChromeOptions()
+        # Mantemos o acesso explicito ao Chrome para preservar compatibilidade.
+        options = ChromeOptions()
 
     if debugger_address:
         options.add_experimental_option("debuggerAddress", debugger_address)
