@@ -162,17 +162,36 @@ class SigaAutomationGUI:
         action_bar = ttk.Frame(main)
         action_bar.grid(row=1, column=0, sticky="ew", pady=(12, 8))
         action_bar.columnconfigure(0, weight=1)
-        left_actions = ttk.Frame(action_bar)
-        left_actions.grid(row=0, column=0, sticky="w")
-        right_actions = ttk.Frame(action_bar)
-        right_actions.grid(row=0, column=1, sticky="e")
+        action_bar.columnconfigure(1, weight=1)
 
-        ttk.Button(left_actions, text="Marcar todos", command=self._select_all_documents).grid(row=0, column=0, sticky="w")
-        ttk.Button(left_actions, text="Desmarcar todos", command=self._clear_all_documents).grid(row=0, column=1, sticky="w", padx=(8, 0))
-        self.start_browser_button = ttk.Button(right_actions, text="Iniciar navegador", command=self._start_browser_if_needed)
-        self.start_browser_button.grid(row=0, column=0, sticky="e")
-        self.execute_button = ttk.Button(right_actions, text="Executar", command=self._run_selected, state="disabled")
-        self.execute_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
+        document_actions = ttk.LabelFrame(action_bar, text="Ações por documento", padding=8)
+        document_actions.grid(row=0, column=0, sticky="ew")
+        for column in range(3):
+            document_actions.columnconfigure(column, weight=1)
+
+        self.nfe_select_button = ttk.Button(document_actions, text="Marcar NF-e", command=lambda: self._set_document_selection("NF-e", True))
+        self.nfe_select_button.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.nfce_select_button = ttk.Button(document_actions, text="Marcar NFC-e", command=lambda: self._set_document_selection("NFC-e", True))
+        self.nfce_select_button.grid(row=0, column=1, sticky="ew", padx=6)
+        self.cte_select_button = ttk.Button(document_actions, text="Marcar CT-e", command=lambda: self._set_document_selection("CT-e", True))
+        self.cte_select_button.grid(row=0, column=2, sticky="ew", padx=(6, 0))
+
+        self.nfe_clear_button = ttk.Button(document_actions, text="Desmarcar NF-e", command=lambda: self._set_document_selection("NF-e", False))
+        self.nfe_clear_button.grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=(6, 0))
+        self.nfce_clear_button = ttk.Button(document_actions, text="Desmarcar NFC-e", command=lambda: self._set_document_selection("NFC-e", False))
+        self.nfce_clear_button.grid(row=1, column=1, sticky="ew", padx=6, pady=(6, 0))
+        self.cte_clear_button = ttk.Button(document_actions, text="Desmarcar CT-e", command=lambda: self._set_document_selection("CT-e", False))
+        self.cte_clear_button.grid(row=1, column=2, sticky="ew", padx=(6, 0), pady=(6, 0))
+
+        execution_actions = ttk.LabelFrame(action_bar, text="Execução", padding=8)
+        execution_actions.grid(row=0, column=1, sticky="ew", padx=(12, 0))
+        execution_actions.columnconfigure(0, weight=1)
+        execution_actions.columnconfigure(1, weight=1)
+
+        self.start_browser_button = ttk.Button(execution_actions, text="Iniciar navegador", command=self._start_browser_if_needed)
+        self.start_browser_button.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.execute_button = ttk.Button(execution_actions, text="Executar", command=self._run_selected, state="disabled")
+        self.execute_button.grid(row=0, column=1, sticky="ew", padx=(6, 0))
 
         content = ttk.Panedwindow(main, orient=tk.HORIZONTAL)
         content.grid(row=2, column=0, sticky="nsew")
@@ -336,6 +355,19 @@ class SigaAutomationGUI:
             row.nfce_var.set(False)
             row.cte_var.set(False)
 
+    def _set_document_selection(self, document_tab: str, enabled: bool) -> None:
+        """Marca ou desmarca uma coluna inteira da grade para o documento escolhido."""
+        if document_tab not in DOCUMENT_TABS:
+            return
+
+        for row in self.selection_rows:
+            if document_tab == "NF-e":
+                row.nfe_var.set(enabled)
+            elif document_tab == "NFC-e":
+                row.nfce_var.set(enabled)
+            elif document_tab == "CT-e":
+                row.cte_var.set(enabled)
+
     def _start_browser_if_needed(self) -> None:
         if self._browser_started:
             self.status_var.set("O navegador já foi iniciado. Faça o login manual e clique em Executar.")
@@ -354,7 +386,7 @@ class SigaAutomationGUI:
             self._append_log_line("Navegador iniciado. Aguardando login manual do usuário.")
         except Exception as exc:  # noqa: BLE001
             self.status_var.set(f"Nao foi possivel abrir o navegador automaticamente: {exc}")
-            LOGGER.exception("Unable to launch debug browser from GUI")
+            LOGGER.exception("Não foi possível abrir o navegador de depuração pela GUI")
 
     def _run_selected(self) -> None:
         if self._worker_thread and self._worker_thread.is_alive():
@@ -394,9 +426,9 @@ class SigaAutomationGUI:
             try:
                 self._execute_selected(selected_rows, selected_tabs_by_row_number, month_reference, year_value)
             except Exception as exc:  # noqa: BLE001
-                LOGGER.exception("GUI execution failed")
+                LOGGER.exception("Falha na execução pela GUI")
                 self._append_log_line(f"Falha na execução: {exc}")
-                self.root.after(0, lambda: messagebox.showerror("SIGA Automação", str(exc)))
+                self.root.after(0, lambda exc=exc: messagebox.showerror("SIGA Automação", str(exc)))
             finally:
                 self.root.after(0, lambda: self._set_controls_state("normal"))
                 self.root.after(0, self._restore_browser_controls_state)
@@ -428,11 +460,11 @@ class SigaAutomationGUI:
             )
             download_count = sum(len(result.fiscal_results) for result in results)
             self._append_log_line("")
-            self._append_log_line("Processo concluido.")
+            self._append_log_line("Processo concluído.")
             self._append_log_line(f"Contribuintes processados: {len(results)} de {len(selected_rows)}")
             self._append_log_line(f"Detalhamentos baixados: {download_count}")
             if results:
-                self._append_log_line(f"Pasta da ultima saida: {results[-1].taxpayer_folder}")
+                self._append_log_line(f"Pasta da última saída: {results[-1].taxpayer_folder}")
 
     def _collect_selection(self) -> tuple[list[SpreadsheetRow], dict[int, list[str]]]:
         selected_rows: list[SpreadsheetRow] = []

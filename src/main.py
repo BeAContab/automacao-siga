@@ -177,12 +177,12 @@ def _normalize_selected_months(values: list[str] | tuple[str, ...] | None) -> li
         if token.isdigit():
             position = int(token)
             if not (1 <= position <= len(MONTH_OPTIONS)):
-                raise ValueError("Mes invalido. Use nomes de meses validos ou numeros de 1 a 12.")
+                raise ValueError("Mês inválido. Use nomes de meses válidos ou números de 1 a 12.")
             month_name = MONTH_OPTIONS[position - 1]
         else:
             month_name = month_by_name.get(token.casefold())
             if not month_name:
-                raise ValueError("Mes invalido. Use nomes de meses validos ou numeros de 1 a 12.")
+                raise ValueError("Mês inválido. Use nomes de meses válidos ou números de 1 a 12.")
         if month_name not in selected:
             selected.append(month_name)
     return selected
@@ -204,11 +204,11 @@ def _prompt_months() -> list[str]:
         try:
             months = _normalize_selected_months(tokens)
         except ValueError:
-            print("Mes invalido. Exemplo: Maio ou 5,6.")
+            print("Mês inválido. Exemplo: Maio ou 5,6.")
             continue
         if months:
             return months
-        print("Mes invalido. Exemplo: Maio ou 5,6.")
+        print("Mês inválido. Exemplo: Maio ou 5,6.")
 
 
 def _prompt_year() -> str:
@@ -220,7 +220,7 @@ def _prompt_year() -> str:
             return default_year
         if value.isdigit() and len(value) == 4:
             return value
-        print("Ano invalido. Exemplo: 2026.")
+        print("Ano inválido. Exemplo: 2026.")
 
 
 def _prompt_spreadsheet() -> Path:
@@ -236,7 +236,7 @@ def _prompt_spreadsheet() -> Path:
         path = Path(raw_value) if raw_value else default_path
         if path.exists() and path.suffix.lower() == ".xlsx":
             return path
-        print(f"Planilha invalida ou nao encontrada: {path}")
+        print(f"Planilha inválida ou não encontrada: {path}")
 
 
 def _normalize_selected_tabs(values: list[str] | tuple[str, ...] | None) -> list[str]:
@@ -253,7 +253,7 @@ def _normalize_selected_tabs(values: list[str] | tuple[str, ...] | None) -> list
         match = normalized_map.get(normalized)
         if not match:
             raise ValueError(
-                "Valor invalido em --docs. Use apenas: NF-e, NFC-e, CT-e (ou 'all')."
+                "Valor inválido em --docs. Use apenas: NF-e, NFC-e, CT-e (ou 'all')."
             )
         if match not in selected:
             selected.append(match)
@@ -287,23 +287,23 @@ def _prompt_document_tabs() -> list[str]:
             else:
                 expanded.append(token)
         if not expanded:
-            print("Opcao invalida. Exemplo: 1,2 ou NF-e,CT-e.")
+            print("Opção inválida. Exemplo: 1,2 ou NF-e,CT-e.")
             continue
         try:
             return _normalize_selected_tabs(expanded)
         except ValueError:
-            print("Opcao invalida. Use NF-e, NFC-e, CT-e ou Todos.")
+            print("Opção inválida. Use NF-e, NFC-e, CT-e ou Todos.")
 
 
 def _print_batch_summary(results: list[BatchExtractionResult], total_rows: int) -> None:
     """Mostra um resumo compacto do lote ao final da execução."""
     download_count = sum(len(result.fiscal_results) for result in results)
     print("")
-    print("Processo concluido.")
+    print("Processo concluído.")
     print(f"Contribuintes processados: {len(results)} de {total_rows}")
     print(f"Detalhamentos baixados: {download_count}")
     if results:
-        print(f"Pasta da ultima saida: {results[-1].taxpayer_folder}")
+        print(f"Pasta da última saída: {results[-1].taxpayer_folder}")
     for result in results:
         print(f"- {result.cnpj}: {result.message}")
 
@@ -322,8 +322,8 @@ def run_interactive_terminal(
     spreadsheet_path = Path(spreadsheet).expanduser() if spreadsheet else _prompt_spreadsheet()
     spreadsheet_rows = load_cnpjs_from_xlsx(spreadsheet_path)
 
-    print(f"Mes(es) de referencia: {', '.join(month_references)}")
-    print(f"Ano de referencia: {reference_year}")
+    print(f"Mês(es) de referência: {', '.join(month_references)}")
+    print(f"Ano de referência: {reference_year}")
     print(f"Documentos selecionados: {', '.join(selected_tabs)}")
     print(f"Planilha: {spreadsheet_path}")
     # O navegador é aberto antes da extração para que o usuário conclua o login manual.
@@ -332,7 +332,7 @@ def run_interactive_terminal(
         settings.connect_browser_url = get_connect_browser_url(settings)
     launch_debug_browser(settings)
     print("Conclua o login manual no navegador aberto.")
-    print("Se a sessao ja estiver autenticada, apenas pressione Enter.")
+    print("Se a sessão já estiver autenticada, apenas pressione Enter.")
     input("Pressione Enter somente depois que o SIGA estiver aberto/autenticado...")
 
     flow = SigaLoginFlow(settings)
@@ -345,7 +345,7 @@ def run_interactive_terminal(
         results: list[BatchExtractionResult] = []
         # Cada mês é processado separadamente para manter os nomes de saída previsíveis.
         for month_reference in month_references:
-            print(f"Executando extracao para o mes: {month_reference}")
+            print(f"Executando extração para o mês: {month_reference}")
             results.extend(
                 extractor.run_batch_from_spreadsheet_in_context(
                     context,
@@ -403,9 +403,9 @@ def main() -> int:
         if args.clear_certificate_policy:
             removed = clear_auto_certificate_selection(settings)
             print(
-                "Politica de selecao automatica de certificado removida."
+                "Política de seleção automática de certificado removida."
                 if removed
-                else "Nenhuma politica de selecao automatica de certificado foi encontrada."
+                else "Nenhuma política de seleção automática de certificado foi encontrada."
             )
             return 0
 
@@ -413,27 +413,27 @@ def main() -> int:
         if settings.configure_certificate_policy:
             certificate_policy = configure_auto_certificate_selection(settings)
             if certificate_policy.applied and certificate_policy.subject_cn:
-                print(f"Certificado configurado para selecao automatica: {certificate_policy.subject_cn}")
+                print(f"Certificado configurado para seleção automática: {certificate_policy.subject_cn}")
             elif certificate_policy.reg_file_path:
-                print("Nao foi possivel gravar a politica de certificado automaticamente.")
-                print(f"Arquivo .reg gerado para aplicacao manual: {certificate_policy.reg_file_path}")
+                print("Não foi possível gravar a política de certificado automaticamente.")
+                print(f"Arquivo .reg gerado para aplicação manual: {certificate_policy.reg_file_path}")
 
         # O modo assistido reaproveita a infraestrutura de navegador, mas deixa a ação manual guiada.
         if args.live_assist or args.live_command:
             session = LiveAssistSession(settings)
             if args.live_assist:
                 result = session.start()
-                logging.info("Live assist ready at %s", result.final_url)
+                logging.info("Modo assistido pronto em %s", result.final_url)
                 print("Sessao assistida pronta.")
-                print(f"Pagina atual: {result.page_title}")
+                print(f"Página atual: {result.page_title}")
                 print(f"URL atual: {result.final_url}")
-                print("Envie o proximo passo no chat e eu executo conectando no mesmo navegador.")
+                print("Envie o próximo passo no chat e eu executo conectando no mesmo navegador.")
                 return 0
 
             result = session.execute_command(args.live_command, target=args.target, value=args.value)
-            logging.info("Live command executed: %s", result.description)
+            logging.info("Comando assistido executado: %s", result.description)
             print(result.description)
-            print(f"Pagina atual: {result.page_title}")
+            print(f"Página atual: {result.page_title}")
             print(f"URL atual: {result.current_url}")
             return 0
 
@@ -444,7 +444,7 @@ def main() -> int:
         parsed_months = _normalize_selected_months(args.month) if args.month else None
         return run_interactive_terminal(settings, args.spreadsheet, parsed_months, args.year, parsed_docs)
     except Exception:
-        logging.exception("Unhandled fatal error during execution")
+        logging.exception("Erro fatal não tratado durante a execução")
         return 1
 
 

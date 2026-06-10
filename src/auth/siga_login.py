@@ -38,7 +38,7 @@ class SigaLoginFlow:
                 self._open_siga(page)
                 page = self.wait_for_manual_login(page, context, browser=context.browser)
             page.screenshot(path=str(self.settings.screenshot_path), full_page=True)
-            LOGGER.info("Screenshot saved to %s", self.settings.screenshot_path)
+            LOGGER.info("Captura de tela salva em %s", self.settings.screenshot_path)
 
             return FlowResult(
                 final_url=page.url,
@@ -61,14 +61,14 @@ class SigaLoginFlow:
         if self.settings.headless:
             raise TimeoutError("Login manual exige navegador visivel. Execute sem --headless.")
 
-        LOGGER.info("Browser opened for manual login at %s", page.url)
+        LOGGER.info("Navegador aberto para login manual em %s", page.url)
         input("Faca o login manualmente no navegador aberto e pressione Enter para continuar...")
-        LOGGER.info("User confirmed manual login, waiting for authenticated SIGA page")
+        LOGGER.info("Usuário confirmou o login manual; aguardando a página autenticada do SIGA")
         return self.confirm_authenticated_context(context, browser=browser)
 
     def confirm_authenticated_context(self, context: BrowserContext, browser: Browser | None = None) -> Page:
         """Espera até localizar uma página do SIGA já autenticada."""
-        LOGGER.info("Validating authenticated SIGA page")
+        LOGGER.info("Validando a página autenticada do SIGA")
         return self._wait_for_authenticated_page(context, browser=browser)
 
     def attach_to_existing_authenticated_page(
@@ -77,23 +77,23 @@ class SigaLoginFlow:
         browser: Browser | None = None,
     ) -> Page | None:
         """Tenta reaproveitar uma aba autenticada já aberta no navegador."""
-        LOGGER.info("Trying to attach to an existing authenticated SIGA page")
+        LOGGER.info("Tentando conectar a uma página autenticada do SIGA já aberta")
         for active_context in self._iter_contexts(context, browser):
             for candidate in active_context.pages:
                 try:
                     if not self._is_authenticated_siga_page(candidate):
                         continue
                     candidate.bring_to_front()
-                    LOGGER.info("Attached to existing authenticated SIGA page at %s", candidate.url)
+                    LOGGER.info("Conectado à página autenticada do SIGA em %s", candidate.url)
                     return candidate
                 except Error:
                     continue
-        LOGGER.info("No authenticated SIGA page was available for attach")
+        LOGGER.info("Nenhuma página autenticada do SIGA estava disponível para conexão")
         return None
 
     def _open_siga(self, page: Page) -> None:
         """Abre a URL principal do SIGA e aguarda a estabilização inicial da tela."""
-        LOGGER.info("Opening SIGA at %s", self.settings.siga_url)
+        LOGGER.info("Abrindo o SIGA em %s", self.settings.siga_url)
         page.goto(self.settings.siga_url, wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
         if "siga.sefaz.ce.gov.br/ui" in page.url:
             self.page_inspector.stabilize_after_navigation(page, "siga-open")

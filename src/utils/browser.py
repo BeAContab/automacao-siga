@@ -12,10 +12,11 @@ import urllib.request
 from contextlib import suppress
 from pathlib import Path
 
-from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.chrome.webdriver import WebDriver as ChromeWebDriver
 from selenium.webdriver.edge.options import Options as EdgeOptions
+from selenium.webdriver.edge.webdriver import WebDriver as EdgeWebDriver
 
 from src.config import Settings
 from src.utils.selenium_compat import Browser, BrowserContext
@@ -87,14 +88,14 @@ def launch_debug_browser(settings: Settings) -> subprocess.Popen[str] | None:
         terminate_browser_processes(settings)
 
     if is_cdp_available(connect_url):
-        LOGGER.info("A browser with CDP is already available at %s", connect_url)
+        LOGGER.info("Já existe um navegador com CDP disponível em %s", connect_url)
         return None
 
     try:
         return _start_debug_browser_process(settings, executable, port)
     except BrowserLauncherError:
         LOGGER.warning(
-            "CDP did not become available on first attempt; forcing browser restart and trying once more."
+            "O CDP nao ficou disponivel na primeira tentativa; reiniciando o navegador e tentando novamente."
         )
         terminate_browser_processes(settings)
         return _start_debug_browser_process(settings, executable, port)
@@ -110,13 +111,13 @@ def _start_debug_browser_process(settings: Settings, executable: Path, port: int
     ]
     # Quando o login depende do certificado do usuário, o perfil do sistema pode ser necessário.
     if settings.use_system_browser_profile:
-        LOGGER.info("Launching browser with the system user profile for certificate selection")
+        LOGGER.info("Abrindo o navegador com o perfil do usuário do sistema para seleção de certificado")
         if settings.chrome_profile_directory:
             command.append(f"--profile-directory={settings.chrome_profile_directory}")
     else:
         command.append(f"--user-data-dir={settings.browser_debug_profile_dir}")
     command.append(settings.siga_url)
-    LOGGER.info("Launching browser with remote debugging: %s", executable)
+    LOGGER.info("Abrindo o navegador com depuracao remota: %s", executable)
     process = subprocess.Popen(command)
     get_debug_browser_pid_path(settings).write_text(str(process.pid), encoding="ascii")
     wait_for_cdp(settings)
@@ -127,10 +128,10 @@ def terminate_browser_processes(settings: Settings) -> None:
     """Encerra processos do navegador para limpar sessões antigas antes de relançar."""
     image_name = BROWSER_IMAGE_NAMES.get(settings.browser_channel)
     if not image_name:
-        LOGGER.warning("Skipping forced browser restart for unknown channel: %s", settings.browser_channel)
+        LOGGER.warning("Ignorando reinicio forcado do navegador para canal desconhecido: %s", settings.browser_channel)
         return
 
-    LOGGER.info("Forcing browser restart by terminating '%s' processes", image_name)
+    LOGGER.info("Forcando reinicio do navegador encerrando processos '%s'", image_name)
     result = subprocess.run(
         ["taskkill", "/IM", image_name, "/T", "/F"],
         capture_output=True,
@@ -139,9 +140,9 @@ def terminate_browser_processes(settings: Settings) -> None:
     )
 
     if result.returncode == 0:
-        LOGGER.info("Terminated existing '%s' processes", image_name)
+        LOGGER.info("Processos '%s' existentes encerrados", image_name)
     else:
-        LOGGER.info("No running '%s' process found or taskkill returned %s", image_name, result.returncode)
+        LOGGER.info("Nenhum processo '%s' em execucao foi encontrado ou o taskkill retornou %s", image_name, result.returncode)
 
     with suppress(OSError):
         get_debug_browser_pid_path(settings).unlink()
@@ -161,14 +162,14 @@ def shutdown_debug_browser(settings: Settings) -> bool:
     closed = False
 
     if is_cdp_available(connect_url):
-        LOGGER.info("Closing browser via Selenium debugger attach at %s", connect_url)
+        LOGGER.info("Fechando o navegador via conexao do Selenium debugger em %s", connect_url)
         driver = None
         try:
             driver = create_debugger_driver(settings, connect_url)
             driver.execute_cdp_cmd("Browser.close", {})
             closed = True
         except Exception:
-            LOGGER.exception("Failed to close browser via CDP")
+            LOGGER.exception("Falha ao fechar o navegador via CDP")
         finally:
             if driver is not None:
                 with suppress(Exception):
@@ -181,7 +182,7 @@ def shutdown_debug_browser(settings: Settings) -> bool:
             pid_value = 0
 
         if pid_value > 0:
-            LOGGER.info("Closing browser process via taskkill for PID %s", pid_value)
+            LOGGER.info("Fechando o processo do navegador via taskkill para o PID %s", pid_value)
             result = subprocess.run(
                 ["taskkill", "/PID", str(pid_value), "/T", "/F"],
                 capture_output=True,
@@ -190,7 +191,7 @@ def shutdown_debug_browser(settings: Settings) -> bool:
             )
             closed = result.returncode == 0
             if not closed:
-                LOGGER.warning("taskkill did not confirm browser shutdown for PID %s", pid_value)
+                LOGGER.warning("O taskkill nao confirmou o encerramento do navegador para o PID %s", pid_value)
 
     with suppress(OSError):
         pid_path.unlink()
@@ -232,7 +233,7 @@ class BrowserSession:
 
         if self.settings.connect_browser_url:
             connect_url = get_connect_browser_url(self.settings)
-            LOGGER.info("Connecting to existing browser via Selenium debugger at %s", connect_url)
+            LOGGER.info("Conectando ao navegador existente via Selenium debugger em %s", connect_url)
             if is_cdp_available(connect_url):
                 self._connected_over_cdp = True
                 driver = create_debugger_driver(self.settings, connect_url)
@@ -241,10 +242,10 @@ class BrowserSession:
                 self.context.browser = self.browser
                 return self.context
             else:
-                LOGGER.info("Debugger not available at %s. Falling back to WebDriver launch.", connect_url)
+                LOGGER.info("Debugger indisponivel em %s. Usando a abertura via WebDriver.", connect_url)
 
         if self.settings.reset_browser_profile and self.settings.browser_profile_dir.exists():
-            LOGGER.warning("Resetting browser profile at %s", self.settings.browser_profile_dir)
+            LOGGER.warning("Redefinindo o perfil do navegador em %s", self.settings.browser_profile_dir)
             shutil.rmtree(self.settings.browser_profile_dir, ignore_errors=True)
             self.settings.browser_profile_dir.mkdir(parents=True, exist_ok=True)
 
@@ -291,7 +292,7 @@ def _build_browser_options(settings: Settings, debugger_address: str | None = No
     if settings.headless:
         options.add_argument("--headless=new")
     if settings.use_system_browser_profile:
-        LOGGER.info("Launching WebDriver with the system user profile for certificate selection")
+        LOGGER.info("Abrindo o WebDriver com o perfil do usuario do sistema para selecao de certificado")
         if settings.chrome_profile_directory:
             options.add_argument(f"--profile-directory={settings.chrome_profile_directory}")
     else:
@@ -315,8 +316,8 @@ def _create_driver(settings: Settings, options):
     """Instancia o driver do Selenium e traduz falhas em uma exceção mais amigável."""
     try:
         if settings.browser_channel == "msedge":
-            return webdriver.Edge(options=options)
-        return webdriver.Chrome(options=options)
+            return EdgeWebDriver(options=options)
+        return ChromeWebDriver(options=options)
     except WebDriverException as exc:
         raise BrowserLauncherError(
             "Nao foi possivel iniciar/conectar o Selenium WebDriver. "

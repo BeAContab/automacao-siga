@@ -65,6 +65,25 @@ class PendingDetailRequest:
 
 
 @dataclass(slots=True)
+class DownloadLookupTarget:
+    request: PendingDetailRequest
+    normalized_target: str
+    match_fragments: dict[str, str]
+    taxpayer_base_key: str
+
+
+@dataclass(slots=True)
+class DownloadRowMatch:
+    request_key: str
+    page_number: int
+    requested_at: datetime
+    row_text: str
+    exact_match: bool
+    preferred: bool
+    score: float
+
+
+@dataclass(slots=True)
 class IndicatorMetric:
     name: str
     qtd: float
@@ -123,7 +142,7 @@ class SigaContributorExtractor:
 
             screenshot_path = self.settings.log_dir / f"{normalized_cnpj}.png"
             page.screenshot(path=str(screenshot_path), full_page=True)
-            LOGGER.info("Saved extraction screenshot to %s", screenshot_path)
+            LOGGER.info("Captura de extração salva em %s", screenshot_path)
 
             return ExtractionResult(
                 cnpj=normalized_cnpj,
@@ -176,7 +195,7 @@ class SigaContributorExtractor:
 
         for spreadsheet_row in spreadsheet_rows:
             # Cada linha da planilha vira uma busca independente dentro do SIGA.
-            LOGGER.info("Processing CNPJ %s from spreadsheet row %s", spreadsheet_row.cnpj, spreadsheet_row.row_number)
+            LOGGER.info("Processando o CNPJ %s da linha %s da planilha", spreadsheet_row.cnpj, spreadsheet_row.row_number)
             self._open_taxpayer_from_home(page, spreadsheet_row.cnpj)
             tabs_for_row = selected_tabs
             if selected_tabs_by_row_number is not None:
@@ -185,13 +204,37 @@ class SigaContributorExtractor:
                 tabs_for_row = selected_tabs_by_cnpj.get(spreadsheet_row.cnpj)
             if tabs_for_row is not None:
                 tabs_for_row = [tab for tab in tabs_for_row if tab in {"NF-e", "NFC-e", "CT-e"}]
-            fiscal_results = self._extract_fiscal_tables(
+            pending_requests = self._extract_fiscal_tables(
                 page,
                 spreadsheet_row.cnpj,
                 normalized_month,
                 normalized_year,
                 tabs_for_row,
             )
+            detail_paths: dict[str, Path] = {}
+            if pending_requests:
+                LOGGER.info(
+                    "All fiscal requests for %s were prepared; now opening Downloads to fetch %s file(s).",
+                    spreadsheet_row.cnpj,
+                    len(pending_requests),
+                )
+                detail_paths = self._download_pending_detail_requests(
+                    page,
+                    spreadsheet_row.cnpj,
+                    normalized_month,
+                    pending_requests,
+                )
+            fiscal_results = [
+                FiscalDownloadResult(
+                    document_tab=request.document_tab,
+                    profile_name=request.profile_name,
+                    summary_path=request.summary_path,
+                    detail_path=detail_paths[request.tela_aba],
+                    selected_report_name=request.report_name,
+                    month_reference=normalized_month,
+                )
+                for request in pending_requests
+            ]
 
             results.append(
                 BatchExtractionResult(
@@ -224,7 +267,7 @@ class SigaContributorExtractor:
             except (TimeoutError, Error) as exc:
                 last_error = exc
                 LOGGER.warning(
-                    "Attempt %s to search and open taxpayer %s did not complete: %s",
+                    "A tentativa %s de pesquisar e abrir o contribuinte %s nao foi concluida: %s",
                     attempt,
                     cgf,
                     exc,
@@ -256,7 +299,7 @@ class SigaContributorExtractor:
             try:
                 rows = page.locator(row_selector)
                 if rows.count() > 0:
-                    LOGGER.info("Taxpayer list is visible before search")
+                    LOGGER.info("A lista de contribuintes está visível antes da pesquisa")
                     return True
             except Error:
                 pass
@@ -273,7 +316,7 @@ class SigaContributorExtractor:
                         "nao foram encontrados",
                     )
                 ):
-                    LOGGER.info("Taxpayer list reported empty state before search")
+                    LOGGER.info("A lista de contribuintes indicou estado vazio antes da pesquisa")
                     return True
             except Error:
                 pass
@@ -281,7 +324,7 @@ class SigaContributorExtractor:
             page.wait_for_timeout(500)
 
         LOGGER.info(
-            "Taxpayer list did not visibly finish loading before search; continuing because search input is the source of truth."
+            "A lista de contribuintes não terminou de carregar visualmente antes da pesquisa; continuando porque o campo de busca é a fonte da verdade."
         )
         return False
 
@@ -292,15 +335,15 @@ class SigaContributorExtractor:
         month_reference: str,
         reference_year: str,
         selected_tabs: list[str] | None = None,
-    ) -> list[FiscalDownloadResult]:
-        """Percorre as abas fiscais selecionadas e agrega os downloads encontrados."""
-        results: list[FiscalDownloadResult] = []
+    ) -> list[PendingDetailRequest]:
+        """Percorre as abas fiscais selecionadas e agrega as solicitações de download."""
+        results: list[PendingDetailRequest] = []
         allowed_tabs = self._normalize_selected_tabs(selected_tabs)
         for tab_config in self._build_fiscal_tab_configs():
             if tab_config.tab_name not in allowed_tabs:
-                LOGGER.info("Skipping fiscal tab %s because it is not selected", tab_config.tab_name)
+                LOGGER.info("Ignorando a aba fiscal %s porque ela não foi selecionada", tab_config.tab_name)
                 continue
-            results.extend(self._extract_fiscal_tab(page, cgf, month_reference, reference_year, tab_config))
+            results.extend(self._collect_fiscal_tab_requests(page, cgf, month_reference, reference_year, tab_config))
         return results
 
     def _normalize_selected_tabs(self, selected_tabs: list[str] | None) -> set[str]:
@@ -324,16 +367,16 @@ class SigaContributorExtractor:
             resolved.add(tab_name)
         return resolved or set(available_tabs.keys())
 
-    def _extract_fiscal_tab(
+    def _collect_fiscal_tab_requests(
         self,
         page: Page,
         cgf: str,
         month_reference: str,
         reference_year: str,
         tab_config: FiscalTabConfig,
-    ) -> list[FiscalDownloadResult]:
-        """Extrai uma aba fiscal inteira, incluindo resumo e detalhamento."""
-        LOGGER.info("Starting fiscal extraction for tab %s", tab_config.tab_name)
+    ) -> list[PendingDetailRequest]:
+        """Extrai uma aba fiscal inteira e guarda apenas as solicitações de detalhamento."""
+        LOGGER.info("Iniciando a extração fiscal da aba %s", tab_config.tab_name)
         try:
             self._open_fiscal_information(page)
         except TimeoutError:
@@ -422,37 +465,20 @@ class SigaContributorExtractor:
                     taxpayer_document=self._current_taxpayer_document(page),
                 )
             )
-
-        if not pending_requests:
-            return []
-
-        detail_paths = self._download_pending_detail_requests(page, cgf, month_reference, pending_requests)
-        results: list[FiscalDownloadResult] = []
-        for request in pending_requests:
-            results.append(
-                FiscalDownloadResult(
-                    document_tab=request.document_tab,
-                    profile_name=request.profile_name,
-                    summary_path=request.summary_path,
-                    detail_path=detail_paths[request.tela_aba],
-                    selected_report_name=request.report_name,
-                    month_reference=month_reference,
-                )
-            )
-        return results
+        return pending_requests
 
     def _ensure_authenticated(self, page: Page, context: BrowserContext) -> Page:
         """Garante que a sessão esteja autenticada antes de mexer na interface do SIGA."""
-        LOGGER.info("Opening SIGA to reuse authenticated session")
+        LOGGER.info("Abrindo o SIGA para reutilizar a sessão autenticada")
         page.goto(self.settings.siga_url, wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
         if "siga.sefaz.ce.gov.br/ui" in page.url:
             self.page_inspector.stabilize_after_navigation(page, "extract-open")
 
         if self._has_taxpayer_search(page):
-            LOGGER.info("Authenticated SIGA page detected")
+            LOGGER.info("Página autenticada do SIGA detectada")
             return page
 
-        LOGGER.info("Authenticated area not detected yet, starting manual login handoff")
+        LOGGER.info("Área autenticada ainda não detectada; iniciando o handoff do login manual")
         login_flow = SigaLoginFlow(self.settings)
         if not self.allow_manual_login_prompt:
             self._save_debug_snapshot(page, "auth-required")
@@ -489,7 +515,7 @@ class SigaContributorExtractor:
 
     def _search_taxpayer(self, page: Page, document_value: str) -> None:
         """Envia o CGF ou CNPJ para a busca e aguarda o resultado filtrado."""
-        LOGGER.info("Searching taxpayer %s", document_value)
+        LOGGER.info("Pesquisando contribuinte %s", document_value)
         search_input = self._find_search_input(page)
         search_input.click()
         search_input.fill("")
@@ -545,7 +571,7 @@ class SigaContributorExtractor:
                 state = page.evaluate(script, target_digits)
                 if state.get("matchCount", 0) > 0:
                     LOGGER.info(
-                        "Taxpayer search result ready for %s with %s matching row(s)",
+                        "Resultado da pesquisa do contribuinte pronto para %s com %s linha(s) correspondente(s)",
                         document_value,
                         state.get("matchCount", 0),
                     )
@@ -566,12 +592,12 @@ class SigaContributorExtractor:
             except TimeoutError:
                 raise
             except Error as exc:
-                LOGGER.warning("Could not inspect taxpayer search result yet: %s", exc)
+                LOGGER.warning("Ainda nao foi possivel inspecionar o resultado da pesquisa do contribuinte: %s", exc)
 
             page.wait_for_timeout(500)
 
         self._save_debug_snapshot(page, f"taxpayer-search-timeout-{document_value}")
-        raise TimeoutError(f"A pesquisa do contribuinte {document_value} não retornou uma linha clicável.")
+        raise TimeoutError(f"A pesquisa do contribuinte {document_value} nao retornou uma linha clicavel.")
 
     def _find_search_input(self, page: Page) -> Locator:
         """Localiza o campo de pesquisa do contribuinte com várias estratégias de fallback."""
@@ -579,7 +605,7 @@ class SigaContributorExtractor:
             page.locator("xpath=//input[contains(@placeholder,'CGF') or contains(@placeholder,'Raz')]")
         )
         if xpath_input is not None:
-            LOGGER.info("Using XPath selector for taxpayer search input")
+            LOGGER.info("Usando seletor XPath para o campo de pesquisa do contribuinte")
             return xpath_input
 
         candidate_selectors = (
@@ -599,9 +625,9 @@ class SigaContributorExtractor:
 
     def _open_taxpayer(self, page: Page, document_value: str) -> None:
         """Abre o contribuinte encontrado usando a linha ou célula que melhor bater com o documento."""
-        LOGGER.info("Opening taxpayer row for %s", document_value)
+        LOGGER.info("Abrindo a linha do contribuinte %s", document_value)
         if self._is_taxpayer_detail_page(page):
-            LOGGER.info("Taxpayer detail view already detected; skipping row selection for %s", document_value)
+            LOGGER.info("A visualização de detalhes do contribuinte já foi detectada; ignorando a seleção de linha para %s", document_value)
             return
 
         last_error: Exception | None = None
@@ -619,11 +645,11 @@ class SigaContributorExtractor:
                         return
 
                 if self._click_taxpayer_cgf_cell(row):
-                    LOGGER.info("Opening taxpayer detail by clicking the CGF cell (attempt %s)", attempt)
+                    LOGGER.info("Abrindo os detalhes do contribuinte clicando na célula do CGF (tentativa %s)", attempt)
                     if self._wait_for_taxpayer_detail_page(page, document_value, attempt):
                         return
 
-                LOGGER.info("Opening taxpayer detail by clicking the matched row (attempt %s)", attempt)
+                LOGGER.info("Abrindo os detalhes do contribuinte clicando na linha encontrada (tentativa %s)", attempt)
                 try:
                     row.click(timeout=5_000)
                 except Error:
@@ -633,7 +659,7 @@ class SigaContributorExtractor:
             except Error as exc:
                 last_error = exc
                 LOGGER.warning(
-                    "Attempt %s to open taxpayer %s failed before detail confirmation: %s",
+                    "A tentativa %s de abrir o contribuinte %s falhou antes da confirmação dos detalhes: %s",
                     attempt,
                     document_value,
                     exc,
@@ -642,7 +668,7 @@ class SigaContributorExtractor:
 
         self._save_debug_snapshot(page, f"open-taxpayer-not-confirmed-{document_value}")
         if last_error is not None:
-            LOGGER.warning("Last error while opening taxpayer %s: %s", document_value, last_error)
+            LOGGER.warning("Último erro ao abrir o contribuinte %s: %s", document_value, last_error)
         raise TimeoutError(
             f"O contribuinte {document_value} foi clicado, mas a tela de detalhes nao foi confirmada."
         )
@@ -653,7 +679,7 @@ class SigaContributorExtractor:
             try:
                 if self._is_taxpayer_detail_page(page):
                     LOGGER.info(
-                        "Taxpayer detail view confirmed for %s on attempt %s",
+                        "Visualização de detalhes do contribuinte confirmada para %s na tentativa %s",
                         document_value,
                         attempt,
                     )
@@ -687,7 +713,7 @@ class SigaContributorExtractor:
             target = self._first_visible_enabled(locator)
             if target is None:
                 continue
-            LOGGER.info("Opening taxpayer detail using Detalhamento action")
+            LOGGER.info("Abrindo os detalhes do contribuinte usando a ação Detalhamento")
             target.click(timeout=5_000, force=True)
             return True
 
@@ -723,7 +749,7 @@ class SigaContributorExtractor:
             xpath_row = page.locator(f"xpath=//tr[.//td[contains(normalize-space(.),'{value}')]]")
             candidate = self._first_visible_enabled(xpath_row)
             if candidate is not None:
-                LOGGER.info("Using XPath selector for taxpayer row %s", value)
+                LOGGER.info("Usando seletor XPath para a linha do contribuinte %s", value)
                 return candidate
 
         row_candidates = (
@@ -797,20 +823,20 @@ class SigaContributorExtractor:
         try:
             clicked = bool(page.evaluate(script, target_digits))
         except Error as exc:
-            LOGGER.warning("DOM fallback could not click taxpayer row %s: %s", target_digits, exc)
+            LOGGER.warning("O fallback por DOM não conseguiu clicar na linha do contribuinte %s: %s", target_digits, exc)
             return False
         if clicked:
-            LOGGER.info("Opening taxpayer detail using DOM fallback for digits %s", target_digits)
+            LOGGER.info("Abrindo os detalhes do contribuinte usando o fallback por DOM para os dígitos %s", target_digits)
         return clicked
 
     def _open_fiscal_information(self, page: Page) -> None:
         """Entra na área de informações fiscais antes de escolher a aba de documento."""
-        LOGGER.info("Opening Informacoes Fiscais")
+        LOGGER.info("Abrindo Informações Fiscais")
         self._ensure_side_menu_open(page)
         if self._click_xpath(
             page,
             "xpath=//a[contains(@href,'/informacoes-fiscais')]",
-            "Informacoes Fiscais side menu",
+            "Menu lateral Informações Fiscais",
         ):
             page.wait_for_timeout(1_000)
             return
@@ -819,7 +845,7 @@ class SigaContributorExtractor:
             page,
             names=("Informacoes Fiscais", "Informacoes fiscais"),
             artifact_name="informacoes-fiscais",
-            fallback_task="Locate and click the section, tab or button labeled Informacoes Fiscais.",
+            fallback_task="Localize e clique na seção, aba ou botão chamado Informações Fiscais.",
         )
         page.wait_for_timeout(1_000)
 
@@ -919,7 +945,7 @@ class SigaContributorExtractor:
 
     def _open_document_tab(self, page: Page, tab_config: FiscalTabConfig) -> None:
         """Seleciona a aba fiscal correta, usando XPath primeiro e texto como fallback."""
-        LOGGER.info("Opening fiscal document tab %s", tab_config.tab_name)
+        LOGGER.info("Abrindo a aba fiscal %s", tab_config.tab_name)
         if self._click_xpath(page, tab_config.tab_xpath, f"{tab_config.tab_name} tab"):
             page.wait_for_timeout(1_000)
             return
@@ -928,13 +954,13 @@ class SigaContributorExtractor:
             page,
             names=(tab_config.tab_name,),
             artifact_name=f"tab-{slugify(tab_config.tab_name)}",
-            fallback_task=f"Locate and click the fiscal tab labeled {tab_config.tab_name}.",
+            fallback_task=f"Localize e clique na aba fiscal chamada {tab_config.tab_name}.",
         )
         page.wait_for_timeout(1_000)
 
     def _open_named_section(self, page: Page, label: str) -> None:
         """Abre uma seção interna como Emissor, Destinatário, Tomador ou Emitente."""
-        LOGGER.info("Opening fiscal section %s", label)
+        LOGGER.info("Abrindo a seção fiscal %s", label)
         normalized_label = strip_accents(label).lower()
         if normalized_label == "emissor" and self._click_xpath(
             page,
@@ -973,7 +999,7 @@ class SigaContributorExtractor:
             page,
             names=(label,),
             artifact_name=f"section-{slugify(label)}",
-            fallback_task=f"Locate and click the fiscal section labeled {label}.",
+            fallback_task=f"Localize e clique na seção fiscal chamada {label}.",
         )
         page.wait_for_timeout(1_000)
 
@@ -983,7 +1009,7 @@ class SigaContributorExtractor:
         month_reference: str,
         require_positive_value: bool = True,
     ) -> MonthOpenDecision:
-        LOGGER.info("Checking month reference %s before opening it", month_reference)
+        LOGGER.info("Verificando o mês de referência %s antes de abri-lo", month_reference)
         metric = None
         last_error: TimeoutError | None = None
         for attempt in range(1, 5):
@@ -998,7 +1024,7 @@ class SigaContributorExtractor:
 
             if attempt < 4:
                 LOGGER.info(
-                    "Month reference %s not ready yet (attempt %s/4); waiting before retrying.",
+                    "O mês de referência %s ainda não está pronto (tentativa %s/4); aguardando antes de tentar novamente.",
                     month_reference,
                     attempt,
                 )
@@ -1032,7 +1058,7 @@ class SigaContributorExtractor:
         )
 
     def _open_reference_month(self, page: Page, month_reference: str) -> None:
-        LOGGER.info("Opening month reference %s", month_reference)
+        LOGGER.info("Abrindo o mês de referência %s", month_reference)
         page.wait_for_timeout(750)
         month_xpath = (
             f"xpath=//tr[.//span[normalize-space()='{month_reference}']]//td[1]//div"
@@ -1088,10 +1114,185 @@ class SigaContributorExtractor:
                 page.wait_for_timeout(1_000)
                 return
 
+        script = """
+        (targetMonth) => {
+            const normalize = (value) => String(value || "")
+                .normalize("NFD")
+                .replace(/[\\u0300-\\u036f]/g, "")
+                .replace(/\\s+/g, " ")
+                .trim()
+                .toLowerCase();
+
+            const wanted = normalize(targetMonth);
+            const candidates = [...document.querySelectorAll("tr, [role='row'], .p-datatable-row, .card")];
+
+            for (const row of candidates) {
+                const rowText = normalize(row.innerText || row.textContent || "");
+                if (!rowText || !rowText.includes(wanted)) {
+                    continue;
+                }
+
+                const clickableElements = [
+                    ...row.querySelectorAll("td, button, a, span, div"),
+                ];
+                for (const element of clickableElements) {
+                    const elementText = normalize(
+                        element.innerText || element.textContent || element.getAttribute("aria-label") || element.getAttribute("title")
+                    );
+                    if (elementText === wanted || elementText.includes(wanted)) {
+                        element.scrollIntoView({block: "center", inline: "center"});
+                        element.click();
+                        return true;
+                    }
+                }
+
+                row.scrollIntoView({block: "center", inline: "center"});
+                row.click();
+                return true;
+            }
+
+            return false;
+        }
+        """
+        try:
+            if bool(page.evaluate(script, month_reference)):
+                page.wait_for_timeout(1_000)
+                return
+        except Error:
+            pass
+
         raise TimeoutError(f"Nao foi possivel localizar o mes de referencia {month_reference}.")
 
+    def _wait_for_detail_xlsx_button_ready(self, page: Page) -> Locator:
+        """Espera o splitbutton de detalhamento renderizar e ficar clicavel antes do clique."""
+        LOGGER.info("Aguardando o botão de detalhamento Baixar Tabela (XLSX) ficar pronto")
+        deadline = time.time() + 35
+        candidates = (
+            page.locator(
+                "button.p-element.p-splitbutton-defaultbutton.p-button.p-component.ng-star-inserted"
+            ),
+            page.locator("xpath=//button[contains(@class,'p-splitbutton-defaultbutton')]"),
+            page.get_by_role("button", name=re.compile(r"Baixar Tabela\s*\(XLSX\)", re.IGNORECASE)),
+        )
+
+        last_error: Error | None = None
+        last_status: str | None = None
+        while time.time() < deadline:
+            status = self._describe_detail_xlsx_button_state(page)
+            status_text = status.get("summary", "")
+            if status_text and status_text != last_status:
+                LOGGER.info("Estado do botão de detalhamento: %s", status_text)
+                last_status = status_text
+            if status.get("ready"):
+                for locator in candidates:
+                    try:
+                        count = locator.count()
+                    except Error as exc:
+                        last_error = exc
+                        continue
+
+                    for index in range(count):
+                        candidate = locator.nth(index)
+                        try:
+                            if candidate.is_visible() and candidate.is_enabled():
+                                LOGGER.info("Botão Baixar Tabela (XLSX) pronto para clique")
+                                return candidate
+                        except Error as exc:
+                            last_error = exc
+                            continue
+
+            for locator in candidates:
+                try:
+                    count = locator.count()
+                except Error as exc:
+                    last_error = exc
+                    continue
+
+                for index in range(count):
+                    candidate = locator.nth(index)
+                    try:
+                        if candidate.is_visible() and candidate.is_enabled():
+                            return candidate
+                    except Error as exc:
+                        last_error = exc
+                        continue
+
+            page.wait_for_timeout(500)
+
+        raise TimeoutError(
+            "Não foi possível aguardar o botão Baixar Tabela (XLSX) ficar visível e clicável."
+        ) from last_error
+
+    def _describe_detail_xlsx_button_state(self, page: Page) -> dict[str, object]:
+        """Lê o estado atual do splitbutton para ajudar no aguardo e no debug do layout novo."""
+        script = """
+        () => {
+            const normalize = (value) => String(value || "")
+                .normalize("NFD")
+                .replace(/[\\u0300-\\u036f]/g, "")
+                .replace(/\\s+/g, " ")
+                .trim()
+                .toLowerCase();
+
+            const candidates = [...document.querySelectorAll(
+                "button.p-element.p-splitbutton-defaultbutton.p-button.p-component.ng-star-inserted, button.p-splitbutton-defaultbutton, button, a, [role='button']"
+            )];
+            const matches = [];
+            const wantedFragments = ["baixar tabela", "xlsx"];
+
+            for (const element of candidates) {
+                const text = normalize(
+                    element.innerText ||
+                    element.textContent ||
+                    element.getAttribute("aria-label") ||
+                    element.getAttribute("title")
+                );
+                if (!text) {
+                    continue;
+                }
+                if (!wantedFragments.every((fragment) => text.includes(fragment))) {
+                    continue;
+                }
+
+                const style = window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                const ready = !!rect.width
+                    && !!rect.height
+                    && style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && style.pointerEvents !== "none"
+                    && !element.disabled
+                    && element.getAttribute("aria-disabled") !== "true";
+
+                matches.push({
+                    text,
+                    className: element.className || "",
+                    ready,
+                    visible: !!rect.width && !!rect.height,
+                    enabled: !element.disabled && element.getAttribute("aria-disabled") !== "true",
+                });
+            }
+
+            const readyCount = matches.filter((item) => item.ready).length;
+            return {
+                count: matches.length,
+                ready: readyCount > 0,
+                readyCount,
+                summary: matches.length
+                    ? `${matches.length} candidato(s), ${readyCount} pronto(s)`
+                    : "nenhum candidato localizado ainda",
+                matches,
+            };
+        }
+        """
+        try:
+            result = page.evaluate(script)
+        except Error as exc:
+            return {"count": 0, "ready": False, "readyCount": 0, "summary": f"erro ao inspecionar o botao: {exc}"}
+        return result if isinstance(result, dict) else {"count": 0, "ready": False, "readyCount": 0, "summary": "estado desconhecido"}
+
     def _select_positive_reports(self, page: Page) -> list[str]:
-        LOGGER.info("Selecting reports with QTD greater than zero")
+        LOGGER.info("Selecionando relatórios com QTD maior que zero")
         reports = ("Interna", "Interestadual", "Externa")
         metrics = self._collect_indicator_metrics(page, reports)
         selected_reports: list[str] = []
@@ -1102,10 +1303,10 @@ class SigaContributorExtractor:
                 selected_reports.append(report_name)
 
         if selected_reports:
-            LOGGER.info("Positive reports selected for detail download: %s", ", ".join(selected_reports))
+            LOGGER.info("Relatórios positivos selecionados para o download do detalhamento: %s", ", ".join(selected_reports))
             return selected_reports
 
-        LOGGER.info("No detail reports with positive QTD were found on the page")
+        LOGGER.info("Nenhuma linha de detalhamento com QTD positiva foi encontrada na página")
         return []
 
     def _should_download_profile_summary(
@@ -1253,8 +1454,54 @@ class SigaContributorExtractor:
         try:
             result = page.evaluate(script, list(names))
         except Error:
+            result = {}
+
+        if isinstance(result, dict) and result:
+            return result
+
+        fallback = self._collect_indicator_metrics_from_rows(page, names)
+        if fallback:
+            LOGGER.info(
+                "Indicator metrics recovered directly from the table rows for %s",
+                ", ".join(names),
+            )
+        return fallback
+
+    def _collect_indicator_metrics_from_rows(self, page: Page, names: tuple[str, ...]) -> dict[str, dict[str, float]]:
+        """Lê a tabela visível diretamente quando a varredura em JavaScript nao encontra os dados."""
+        wanted = {strip_accents(name).lower() for name in names if name}
+        if not wanted:
             return {}
-        return result if isinstance(result, dict) else {}
+
+        results: dict[str, dict[str, float]] = {}
+        rows = page.locator("tr")
+        try:
+            row_count = rows.count()
+        except Error:
+            return {}
+
+        for index in range(row_count):
+            row = rows.nth(index)
+            try:
+                if not row.is_visible():
+                    continue
+                row_cells = self._row_cell_texts(row)
+            except Error:
+                continue
+
+            if len(row_cells) < 3:
+                continue
+
+            row_name = strip_accents(self._normalize_spaces(row_cells[0])).lower()
+            if row_name not in wanted:
+                continue
+
+            results[row_name] = {
+                "qtd": self._parse_decimal_value(row_cells[1]),
+                "valor": self._parse_decimal_value(row_cells[2]),
+            }
+
+        return results
 
     def _get_indicator_metric(self, page: Page, name: str) -> IndicatorMetric | None:
         metrics = self._collect_indicator_metrics(page, (name,))
@@ -1267,14 +1514,60 @@ class SigaContributorExtractor:
         report_xpath = f"xpath=//tr[./td[1][normalize-space()='{report_name}']]/td[1]"
         if self._click_xpath(page, report_xpath, f"detail row {report_name}"):
             page.wait_for_timeout(750)
+            self._wait_for_detail_xlsx_button_ready(page)
             return
 
-        self._click_text_action(
-            page,
-            names=(report_name,),
-            artifact_name=f"report-{slugify(report_name)}",
-            fallback_task=f"Locate and click the report named {report_name}.",
-        )
+        try:
+            self._click_text_action(
+                page,
+                names=(report_name,),
+                artifact_name=f"report-{slugify(report_name)}",
+            fallback_task=f"Localize e clique no relatório chamado {report_name}.",
+            )
+            page.wait_for_timeout(750)
+            self._wait_for_detail_xlsx_button_ready(page)
+            return
+        except TimeoutError:
+            pass
+
+        script = """
+        (targetReport) => {
+            const normalize = (value) => String(value || "")
+                .normalize("NFD")
+                .replace(/[\\u0300-\\u036f]/g, "")
+                .replace(/\\s+/g, " ")
+                .trim()
+                .toLowerCase();
+
+            const wanted = normalize(targetReport);
+            const candidates = [...document.querySelectorAll("tr, td, span, div, button, a")];
+
+            for (const element of candidates) {
+                const text = normalize(
+                    element.innerText ||
+                    element.textContent ||
+                    element.getAttribute("aria-label") ||
+                    element.getAttribute("title")
+                );
+                if (!text || text !== wanted) {
+                    continue;
+                }
+                element.scrollIntoView({block: "center", inline: "center"});
+                element.click();
+                return true;
+            }
+            return false;
+        }
+        """
+        try:
+            if bool(page.evaluate(script, report_name)):
+                page.wait_for_timeout(750)
+                self._wait_for_detail_xlsx_button_ready(page)
+                return
+        except Error:
+            pass
+
+        raise TimeoutError(f"Nao foi possivel clicar no detalhamento {report_name}.")
 
     def _download_current_table(
         self,
@@ -1287,42 +1580,41 @@ class SigaContributorExtractor:
         return self._capture_direct_download(page, cgf, month_reference, basename, document_tab)
 
     def _click_download_table_button(self, page: Page) -> None:
-        LOGGER.info("Clicking Baixar Tabela")
+        LOGGER.info("Clicando em Baixar Tabela")
         self._click_text_action(
             page,
             names=("Baixar Tabela",),
             artifact_name="baixar-tabela",
-            fallback_task="Locate and click the action button Baixar Tabela.",
+            fallback_task="Localize e clique no botão de ação Baixar Tabela.",
         )
         page.wait_for_timeout(750)
 
     def _click_summary_download_button(self, page: Page) -> None:
         target = self._find_download_button(page, expected_index=0)
         if target is not None:
-            LOGGER.info("Clicking summary download button")
+            LOGGER.info("Clicando no botão de download do resumo")
             target.click()
             page.wait_for_timeout(750)
             return
         self._click_download_table_button(page)
 
     def _request_detail_download(self, page: Page) -> None:
-        target = self._find_download_button(page, expected_index=1)
-        if target is None:
-            raise TimeoutError("Nao foi possivel localizar o botao Baixar Tabela do bloco de detalhamento.")
-        LOGGER.info("Requesting detail download using the detail section button")
-        target.click()
+        target = self._wait_for_detail_xlsx_button_ready(page)
+        LOGGER.info("Solicitando o download do detalhamento usando o botão XLSX")
+        if not self._click_detail_xlsx_button(page):
+            target.click(force=True)
         page.wait_for_timeout(750)
 
-    def _find_download_button(self, page: Page, expected_index: int) -> Locator | None:
+    def _find_download_button(self, page: Page, expected_index: int = 0, button_text: str = "Baixar Tabela") -> Locator | None:
         xpath_locator = page.locator(
-            f"xpath=(//button[.//span[contains(normalize-space(.),'Baixar Tabela')]])[{expected_index + 1}]"
+            f"xpath=(//button[contains(normalize-space(.),'{button_text}')])[{expected_index + 1}]"
         )
         xpath_target = self._first_visible_enabled(xpath_locator)
         if xpath_target is not None:
-            LOGGER.info("Using XPath selector for Baixar Tabela button index %s", expected_index)
+            LOGGER.info("Usando seletor XPath para o botão %s no índice %s", button_text, expected_index)
             return xpath_target
 
-        locator = page.get_by_role("button", name="Baixar Tabela")
+        locator = page.get_by_role("button", name=button_text)
         try:
             count = locator.count()
         except Error:
@@ -1343,6 +1635,68 @@ class SigaContributorExtractor:
             return visible_buttons[-1]
         return None
 
+    def _find_xlsx_detail_download_button(self, page: Page) -> Locator | None:
+        """Localiza diretamente o botao novo do detalhamento, sem depender de indice."""
+        candidates = (
+            page.locator("xpath=//button[contains(normalize-space(.), 'Baixar Tabela (XLSX)')]"),
+            page.get_by_role("button", name=re.compile(r"Baixar Tabela\s*\(XLSX\)", re.IGNORECASE)),
+        )
+        for locator in candidates:
+            try:
+                count = locator.count()
+            except Error:
+                continue
+            for index in range(count):
+                candidate = locator.nth(index)
+                try:
+                    if candidate.is_enabled():
+                        return candidate
+                except Error:
+                    continue
+        return None
+
+    def _click_detail_xlsx_button(self, page: Page) -> bool:
+        """Clica diretamente no splitbutton principal do detalhamento."""
+        script = """
+        () => {
+            const normalize = (value) => String(value || "")
+                .normalize("NFD")
+                .replace(/[\\u0300-\\u036f]/g, "")
+                .replace(/\\s+/g, " ")
+                .trim()
+                .toLowerCase();
+
+            const buttons = [...document.querySelectorAll(
+                "button.p-element.p-splitbutton-defaultbutton.p-button.p-component.ng-star-inserted, button.p-splitbutton-defaultbutton"
+            )];
+            for (const button of buttons) {
+                const text = normalize(
+                    button.innerText || button.textContent || button.getAttribute("aria-label") || button.getAttribute("title")
+                );
+                const style = window.getComputedStyle(button);
+                const rect = button.getBoundingClientRect();
+                const ready = !!rect.width
+                    && !!rect.height
+                    && style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && style.pointerEvents !== "none"
+                    && !button.disabled
+                    && button.getAttribute("aria-disabled") !== "true";
+
+                if (text.includes("baixar tabela") && text.includes("xlsx") && ready) {
+                    button.scrollIntoView({block: "center", inline: "center"});
+                    button.click();
+                    return true;
+                }
+            }
+            return false;
+        }
+        """
+        try:
+            return bool(page.evaluate(script))
+        except Error:
+            return False
+
     def _capture_direct_download(
         self,
         page: Page,
@@ -1351,14 +1705,33 @@ class SigaContributorExtractor:
         basename: str,
         document_tab: str,
     ) -> Path:
-        try:
-            with page.expect_download(timeout=10_000) as download_info:
-                self._click_summary_download_button(page)
-            download = download_info.value
-            return self._save_download(download, cgf, month_reference, basename, document_tab)
-        except TimeoutError:
-            LOGGER.info("Direct download did not start immediately for %s", basename)
-            return self._download_from_download_center(page, cgf, month_reference, basename, document_tab)
+        attempts = max(1, self.settings.download_retry_count)
+        last_error: TimeoutError | None = None
+
+        # O download direto recebe uma segunda chance antes de cair para a Central de Downloads.
+        for attempt in range(1, attempts + 1):
+            try:
+                with page.expect_download(timeout=self.settings.download_wait_timeout_ms) as download_info:
+                    self._click_summary_download_button(page)
+                download = download_info.value
+                return self._save_download(download, cgf, month_reference, basename, document_tab)
+            except TimeoutError as exc:
+                last_error = exc
+                if attempt < attempts:
+                    LOGGER.warning(
+                        "O download direto para %s nao iniciou na tentativa %s/%s; tentando novamente em %s ms.",
+                        basename,
+                        attempt,
+                        attempts,
+                        self.settings.download_retry_delay_ms,
+                    )
+                    page.wait_for_timeout(self.settings.download_retry_delay_ms)
+                    continue
+
+        LOGGER.info("O download direto nao iniciou apos %s tentativa(s) para %s", attempts, basename)
+        if last_error is not None:
+            LOGGER.debug("Ultimo erro do download direto para %s: %s", basename, last_error)
+        return self._download_from_download_center(page, cgf, month_reference, basename, document_tab)
 
     def _download_from_download_center(
         self,
@@ -1388,12 +1761,12 @@ class SigaContributorExtractor:
         pending_requests: list[PendingDetailRequest],
     ) -> dict[str, Path]:
         origin_url = page.url
-        LOGGER.info("Opening Downloads menu to fetch %s pending detail file(s)", len(pending_requests))
+        LOGGER.info("Abrindo o menu de Downloads para buscar %s arquivo(s) de detalhamento pendente(s)", len(pending_requests))
         self._ensure_side_menu_open(page)
         if self._click_xpath(
             page,
             "xpath=//a[contains(@href,'/downloads-assincronos')]",
-            "Downloads side menu",
+            "Menu lateral Downloads",
         ):
             page.wait_for_timeout(1_000)
         else:
@@ -1401,25 +1774,396 @@ class SigaContributorExtractor:
                 page,
                 names=("Downloads",),
                 artifact_name="downloads",
-                fallback_task="Locate and click the Downloads area in the side menu.",
+                fallback_task="Localize e clique na área Downloads no menu lateral.",
             )
             page.wait_for_timeout(1_000)
 
-        detail_paths: dict[str, Path] = {}
-        for request in pending_requests:
-            detail_paths[request.tela_aba] = self._download_requested_file(
-                page,
-                cgf,
-                month_reference,
-                request.tela_aba,
-                request.document_tab,
-                request.requested_after,
-                request.taxpayer_document,
-            )
+        targets = self._build_download_lookup_targets(pending_requests)
+        matches = self._find_pending_download_matches(page, targets)
+        detail_paths = self._download_found_pending_requests(
+            page,
+            cgf,
+            month_reference,
+            targets,
+            matches,
+        )
 
         page.goto(origin_url, wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
         page.wait_for_timeout(1_000)
         return detail_paths
+
+    def _build_download_lookup_targets(
+        self,
+        pending_requests: list[PendingDetailRequest],
+    ) -> list[DownloadLookupTarget]:
+        """Prepara os filtros uma unica vez antes de varrer a Central de Downloads."""
+        targets: list[DownloadLookupTarget] = []
+        for request in pending_requests:
+            targets.append(
+                DownloadLookupTarget(
+                    request=request,
+                    normalized_target=self._normalize_download_target(request.tela_aba),
+                    match_fragments=self._extract_download_match_fragments_from_title(request.tela_aba),
+                    taxpayer_base_key=self._taxpayer_base_key(request.taxpayer_document),
+                )
+            )
+        return targets
+
+    def _find_pending_download_matches(
+        self,
+        page: Page,
+        targets: list[DownloadLookupTarget],
+    ) -> dict[str, DownloadRowMatch]:
+        """Varre todas as paginas e escolhe o melhor match por solicitacao."""
+        deadline = time.time() + (self.settings.download_wait_timeout_ms / 1000)
+        latest_matches: dict[str, DownloadRowMatch] = {}
+        target_keys = {target.request.tela_aba for target in targets}
+
+        while time.time() < deadline:
+            latest_matches, processing_counts = self._scan_downloads_table_once(page, targets)
+            waiting_keys = self._download_keys_still_processing(targets, latest_matches, processing_counts)
+            missing_keys = sorted(target_keys - set(latest_matches.keys()))
+
+            if not waiting_keys:
+                if missing_keys:
+                    LOGGER.warning(
+                        "Downloads nao localizados apos a varredura completa: %s",
+                        ", ".join(missing_keys),
+                    )
+                return latest_matches
+
+            delay_ms = 1_500 if len(waiting_keys) <= 2 else 2_000
+            LOGGER.info(
+                "Downloads ainda em processamento para %s; nova varredura completa em %s ms.",
+                ", ".join(waiting_keys),
+                delay_ms,
+            )
+            page.wait_for_timeout(delay_ms)
+            page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
+            page.wait_for_timeout(750)
+
+        if latest_matches:
+            LOGGER.warning(
+                "A Central de Downloads expirou antes de concluir todas as linhas pendentes; usando os matches encontrados ate agora."
+            )
+        return latest_matches
+
+    def _scan_downloads_table_once(
+        self,
+        page: Page,
+        targets: list[DownloadLookupTarget],
+    ) -> tuple[dict[str, DownloadRowMatch], dict[str, int]]:
+        """Le todas as paginas uma vez e monta o melhor match por TELA/ABA."""
+        matches: dict[str, DownloadRowMatch] = {}
+        processing_counts: dict[str, int] = {}
+        self._go_to_first_downloads_page(page)
+        page_number = 1
+
+        while True:
+            self._scan_downloads_current_page_for_targets(
+                page,
+                targets,
+                page_number,
+                matches,
+                processing_counts,
+            )
+            if not self._go_to_next_downloads_page(page):
+                break
+            page_number += 1
+
+        return matches, processing_counts
+
+    def _scan_downloads_current_page_for_targets(
+        self,
+        page: Page,
+        targets: list[DownloadLookupTarget],
+        page_number: int,
+        matches: dict[str, DownloadRowMatch],
+        processing_counts: dict[str, int],
+    ) -> None:
+        rows = page.locator("tr")
+        try:
+            row_count = rows.count()
+        except Error:
+            row_count = 0
+
+        for index in range(1, row_count):
+            row = rows.nth(index)
+            try:
+                if not row.is_visible():
+                    continue
+                row_cells = self._row_cell_texts(row)
+            except Error:
+                continue
+
+            row_text = self._normalize_download_target(" ".join(row_cells))
+            status_text = self._row_status_text(row_cells)
+            requested_at = self._row_request_datetime(row_cells)
+
+            for target in targets:
+                request_key = target.request.tela_aba
+                if not self._row_matches_download_target(
+                    row_cells,
+                    target.normalized_target,
+                    target.match_fragments,
+                ):
+                    continue
+                if target.taxpayer_base_key and not self._row_matches_taxpayer_document(
+                    row_cells,
+                    target.taxpayer_base_key,
+                ):
+                    continue
+
+                if any(status_key in status_text for status_key in ("processando", "aguardando", "gerando")):
+                    processing_counts[request_key] = processing_counts.get(request_key, 0) + 1
+                    continue
+                if "concluido" not in status_text:
+                    continue
+
+                candidate = DownloadRowMatch(
+                    request_key=request_key,
+                    page_number=page_number,
+                    requested_at=requested_at,
+                    row_text=row_text,
+                    exact_match=self._row_matches_download_target(
+                        row_cells,
+                        target.normalized_target,
+                        target.match_fragments,
+                        exact_only=True,
+                    ),
+                    preferred=requested_at >= target.request.requested_after,
+                    score=self._download_match_score(
+                        row_text,
+                        target.normalized_target,
+                        target.match_fragments,
+                    ),
+                )
+                self._store_best_download_match(matches, candidate)
+
+    def _store_best_download_match(
+        self,
+        matches: dict[str, DownloadRowMatch],
+        candidate: DownloadRowMatch,
+    ) -> None:
+        current = matches.get(candidate.request_key)
+        if current is None or self._is_better_download_match(candidate, current):
+            matches[candidate.request_key] = candidate
+
+    def _is_better_download_match(
+        self,
+        candidate: DownloadRowMatch,
+        current: DownloadRowMatch,
+    ) -> bool:
+        candidate_rank = (
+            1 if candidate.exact_match else 0,
+            1 if candidate.preferred else 0,
+            candidate.score,
+            candidate.requested_at,
+        )
+        current_rank = (
+            1 if current.exact_match else 0,
+            1 if current.preferred else 0,
+            current.score,
+            current.requested_at,
+        )
+        return candidate_rank > current_rank
+
+    def _download_keys_still_processing(
+        self,
+        targets: list[DownloadLookupTarget],
+        matches: dict[str, DownloadRowMatch],
+        processing_counts: dict[str, int],
+    ) -> list[str]:
+        """Se houver linha mais nova em processamento, evitamos cair cedo no fallback antigo."""
+        waiting_keys: list[str] = []
+        for target in targets:
+            request_key = target.request.tela_aba
+            if processing_counts.get(request_key, 0) <= 0:
+                continue
+            current_match = matches.get(request_key)
+            if current_match is None or not current_match.preferred:
+                waiting_keys.append(request_key)
+        return sorted(waiting_keys)
+
+    def _download_found_pending_requests(
+        self,
+        page: Page,
+        cgf: str,
+        month_reference: str,
+        targets: list[DownloadLookupTarget],
+        matches: dict[str, DownloadRowMatch],
+    ) -> dict[str, Path]:
+        """Baixa os itens encontrados em lote, paginando apenas por pagina com match."""
+        detail_paths: dict[str, Path] = {}
+        page_targets: dict[int, list[DownloadLookupTarget]] = {}
+
+        for target in targets:
+            request_key = target.request.tela_aba
+            basename = self._build_download_output_basename(request_key)
+            match = matches.get(request_key)
+            if match is None:
+                detail_paths[request_key] = self._save_unavailable_download_notice(
+                    cgf=cgf,
+                    month_reference=month_reference,
+                    basename=basename,
+                    document_tab=target.request.document_tab,
+                    tela_aba=request_key,
+                )
+                continue
+            page_targets.setdefault(match.page_number, []).append(target)
+
+        if not page_targets:
+            return detail_paths
+
+        self._go_to_first_downloads_page(page)
+        current_page = 1
+        max_page = max(page_targets.keys())
+
+        while current_page <= max_page:
+            for target in page_targets.get(current_page, []):
+                match = matches[target.request.tela_aba]
+                detail_paths[target.request.tela_aba] = self._capture_download_for_match(
+                    page=page,
+                    target=target,
+                    match=match,
+                    cgf=cgf,
+                    month_reference=month_reference,
+                )
+
+            if current_page == max_page:
+                break
+            if not self._go_to_next_downloads_page(page):
+                raise TimeoutError(
+                    "Nao foi possivel navegar ate a pagina esperada da Central de Downloads durante o lote."
+                )
+            current_page += 1
+
+        return detail_paths
+
+    def _capture_download_for_match(
+        self,
+        page: Page,
+        target: DownloadLookupTarget,
+        match: DownloadRowMatch,
+        cgf: str,
+        month_reference: str,
+    ) -> Path:
+        attempts = max(1, self.settings.download_retry_count)
+        last_error: TimeoutError | None = None
+
+        for attempt in range(1, attempts + 1):
+            row = self._find_download_row_for_match_on_current_page(page, target, match)
+            if row is None:
+                raise TimeoutError(
+                    f"Nao foi possivel reencontrar a linha '{target.request.tela_aba}' na pagina {match.page_number}."
+                )
+
+            basename = self._build_download_output_basename(target.request.tela_aba)
+            try:
+                with page.expect_download(timeout=self.settings.download_wait_timeout_ms) as download_info:
+                    self._click_download_action(row, page=page, tela_aba=target.request.tela_aba)
+                download = download_info.value
+                output_path = self._save_download(
+                    download,
+                    cgf,
+                    month_reference,
+                    basename,
+                    target.request.document_tab,
+                )
+                LOGGER.info(
+                    "Download salvo para %s na pagina %s em %s",
+                    target.request.tela_aba,
+                    match.page_number,
+                    output_path,
+                )
+                return output_path
+            except TimeoutError as exc:
+                last_error = exc
+                if attempt < attempts:
+                    LOGGER.warning(
+                        "O download de %s nao iniciou na tentativa %s/%s; tentando novamente em %s ms.",
+                        target.request.tela_aba,
+                        attempt,
+                        attempts,
+                        self.settings.download_retry_delay_ms,
+                    )
+                    page.wait_for_timeout(self.settings.download_retry_delay_ms)
+                    continue
+
+        if last_error is not None:
+            raise last_error
+        raise TimeoutError(f"Nao foi possivel baixar '{target.request.tela_aba}'.")
+
+    def _find_download_row_for_match_on_current_page(
+        self,
+        page: Page,
+        target: DownloadLookupTarget,
+        match: DownloadRowMatch,
+    ) -> Locator | None:
+        rows = page.locator("tr")
+        try:
+            row_count = rows.count()
+        except Error:
+            row_count = 0
+
+        candidates: list[tuple[Locator, tuple[int, int, float, datetime, str]]] = []
+        for index in range(1, row_count):
+            row = rows.nth(index)
+            try:
+                if not row.is_visible():
+                    continue
+                row_cells = self._row_cell_texts(row)
+            except Error:
+                continue
+
+            if not self._row_matches_download_target(
+                row_cells,
+                target.normalized_target,
+                target.match_fragments,
+            ):
+                continue
+            if target.taxpayer_base_key and not self._row_matches_taxpayer_document(
+                row_cells,
+                target.taxpayer_base_key,
+            ):
+                continue
+
+            status_text = self._row_status_text(row_cells)
+            if "concluido" not in status_text:
+                continue
+
+            row_text = self._normalize_download_target(" ".join(row_cells))
+            requested_at = self._row_request_datetime(row_cells)
+            exact_match = int(
+                target.normalized_target in row_text
+                or self._normalize_download_target(row_text, strip_marks=True)
+                .find(self._normalize_download_target(target.normalized_target, strip_marks=True))
+                >= 0
+            )
+            preferred = int(requested_at >= target.request.requested_after)
+            score = self._download_match_score(
+                row_text,
+                target.normalized_target,
+                target.match_fragments,
+            )
+            candidates.append(
+                (
+                    row,
+                    (
+                        exact_match,
+                        preferred,
+                        score,
+                        requested_at,
+                        row_text,
+                    ),
+                )
+            )
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda item: item[1], reverse=True)
+        return candidates[0][0]
 
     def _find_latest_download_row(self, page: Page) -> Locator:
         deadline = time.time() + (self.settings.download_wait_timeout_ms / 1000)
@@ -1536,7 +2280,7 @@ class SigaContributorExtractor:
         requested_after: datetime,
         taxpayer_document: str,
     ) -> Path:
-        LOGGER.info("Downloading requested file for TELA/ABA: %s", tela_aba)
+        LOGGER.info("Baixando o arquivo solicitado para TELA/ABA: %s", tela_aba)
         row_match = self._find_download_row_by_screen_name(
             page,
             tela_aba,
@@ -1556,7 +2300,7 @@ class SigaContributorExtractor:
         if unidentified_client:
             basename = f"{basename} - cliente-nao-identificado"
             LOGGER.warning(
-                "Download selected with CNPJ nao identificado para %s; appending suffix '%s'.",
+                "Download selecionado com CNPJ nao identificado para %s; adicionando sufixo '%s'.",
                 tela_aba,
                 "cliente-nao-identificado",
             )
@@ -1570,7 +2314,7 @@ class SigaContributorExtractor:
             document_tab=document_tab,
             taxpayer_document=taxpayer_document,
         )
-        LOGGER.info("Saved download center file via Selenium download capture to %s", output_path)
+        LOGGER.info("Arquivo da Central de Downloads salvo via captura de download do Selenium em %s", output_path)
         return output_path
 
     def _build_download_output_basename(self, tela_aba: str) -> str:
@@ -1661,7 +2405,7 @@ class SigaContributorExtractor:
                     empty_streak = 0
                     delay_ms = 1_500 if processing_streak == 1 else 2_000
                     LOGGER.info(
-                        "Download still processing for %s (%s matching row(s)); waiting %s ms before refresh.",
+                        "Download ainda em processamento para %s (%s linha(s) correspondente(s)); aguardando %s ms antes de atualizar.",
                         tela_aba,
                         page_result["processing"],
                         delay_ms,
@@ -1680,7 +2424,7 @@ class SigaContributorExtractor:
                 preferred_exact_candidates.sort(key=lambda item: item[1], reverse=True)
                 best_row, best_dt, best_text = preferred_exact_candidates[0]
                 LOGGER.info(
-                    "Download row match strategy: exact-latest preferred by title (candidates=%s, requested_at=%s, chosen='%s')",
+                    "Estratégia de correspondência da linha de download: exata e mais recente por título (candidatos=%s, solicitado_em=%s, escolhido='%s')",
                     len(preferred_exact_candidates),
                     best_dt.isoformat(sep=" ", timespec="seconds"),
                     best_text,
@@ -1690,7 +2434,7 @@ class SigaContributorExtractor:
                 fallback_exact_candidates.sort(key=lambda item: item[1], reverse=True)
                 best_row, best_dt, best_text = fallback_exact_candidates[0]
                 LOGGER.info(
-                    "Download row match strategy: exact-latest fallback by title (candidates=%s, requested_at=%s, chosen='%s')",
+                    "Estratégia de correspondência da linha de download: exata e mais recente por título no fallback (candidatos=%s, solicitado_em=%s, escolhido='%s')",
                     len(fallback_exact_candidates),
                     best_dt.isoformat(sep=" ", timespec="seconds"),
                     best_text,
@@ -1700,7 +2444,7 @@ class SigaContributorExtractor:
                 preferred_fuzzy_candidates.sort(key=lambda item: (item[1], item[2]), reverse=True)
                 best_row, best_score, best_dt, best_text = preferred_fuzzy_candidates[0]
                 LOGGER.info(
-                    "Download row match strategy: fuzzy-latest preferred by title (score=%s, candidates=%s, requested_at=%s, chosen='%s')",
+                    "Estratégia de correspondência da linha de download: aproximada e mais recente por título (pontuacao=%s, candidatos=%s, solicitado_em=%s, escolhido='%s')",
                     best_score,
                     len(preferred_fuzzy_candidates),
                     best_dt.isoformat(sep=" ", timespec="seconds"),
@@ -1711,7 +2455,7 @@ class SigaContributorExtractor:
                 fallback_fuzzy_candidates.sort(key=lambda item: (item[1], item[2]), reverse=True)
                 best_row, best_score, best_dt, best_text = fallback_fuzzy_candidates[0]
                 LOGGER.info(
-                    "Download row match strategy: fuzzy-latest fallback by title (score=%s, candidates=%s, requested_at=%s, chosen='%s')",
+                    "Estratégia de correspondência da linha de download: aproximada e mais recente por título no fallback (pontuacao=%s, candidatos=%s, solicitado_em=%s, escolhido='%s')",
                     best_score,
                     len(fallback_fuzzy_candidates),
                     best_dt.isoformat(sep=" ", timespec="seconds"),
@@ -1749,7 +2493,7 @@ class SigaContributorExtractor:
             "Criterios tentados: correspondencia de TELA/ABA, CNPJ na mesma linha e status Concluido.\n"
         )
         output_path.write_text(message, encoding="utf-8")
-        LOGGER.warning("Saved unavailable download notice to %s", output_path)
+        LOGGER.warning("Aviso de download indisponivel salvo em %s", output_path)
         return output_path
 
     def _scan_downloads_current_page(
@@ -2261,7 +3005,7 @@ class SigaContributorExtractor:
 
         output_path = self.settings.output_dir / f"{cnpj}.xlsx"
         workbook.save(output_path)
-        LOGGER.info("Saved XLSX output to %s", output_path)
+        LOGGER.info("Saida XLSX salva em %s", output_path)
         return output_path
 
     def _build_taxpayer_output_dir(self, cgf: str, month_reference: str, document_tab: str | None = None) -> Path:
@@ -2280,17 +3024,25 @@ class SigaContributorExtractor:
         document_tab: str,
     ) -> Path:
         output_dir = self._build_taxpayer_output_dir(cgf, month_reference, document_tab)
-        final_name = f"{self._sanitize_filename(basename)}.csv"
+        final_suffix = self._download_output_suffix(download.suggested_filename)
+        final_name = f"{self._sanitize_filename(basename)}{final_suffix}"
         output_path = output_dir / final_name
         LOGGER.info(
-            "Saving download with deterministic name: basename=%s, suggested_filename=%s, final_path=%s",
+            "Salvando download com nome deterministico: nome_base=%s, nome_sugerido=%s, caminho_final=%s",
             basename,
             download.suggested_filename,
             output_path,
         )
         download.save_as(str(output_path))
-        LOGGER.info("Saved download to %s", output_path)
+        LOGGER.info("Download salvo em %s", output_path)
         return output_path
+
+    def _download_output_suffix(self, suggested_filename: str) -> str:
+        """Preserva a extensão original informada pelo navegador, com fallback seguro para CSV."""
+        suffix = "".join(Path(suggested_filename).suffixes).strip()
+        if not suffix:
+            return ".csv"
+        return suffix
 
     def _save_debug_snapshot(self, page: Page, name: str) -> None:
         self.page_inspector.save_debug_artifacts(page, name)
@@ -2341,7 +3093,7 @@ class SigaContributorExtractor:
         target = self._first_visible_enabled(page.locator(xpath))
         if target is None:
             return False
-        LOGGER.info("Clicking %s via XPath: %s", label, xpath)
+        LOGGER.info("Clicando em %s via XPath: %s", label, xpath)
         target.click(force=force)
         return True
 
@@ -2363,7 +3115,7 @@ class SigaContributorExtractor:
         if "informacoes fiscais" in body_text and "downloads" in body_text:
             return False
 
-        LOGGER.info("Opening side menu via header toggle")
+        LOGGER.info("Abrindo o menu lateral pelo alternador do cabecalho")
         menu_toggle.click(force=True)
         page.wait_for_timeout(750)
         return True
@@ -2383,6 +3135,48 @@ class SigaContributorExtractor:
                 continue
         return None
 
+    def _click_xlsx_detail_download_button(self, page: Page) -> bool:
+        """Clica no botao XLSX por locator ou, se preciso, direto pelo DOM."""
+        target = self._find_xlsx_detail_download_button(page)
+        if target is not None:
+            target.click(force=True)
+            return True
+
+        script = """
+        (buttonText) => {
+            const normalize = (value) => String(value || "")
+                .normalize("NFD")
+                .replace(/[\\u0300-\\u036f]/g, "")
+                .replace(/\\s+/g, " ")
+                .trim()
+                .toLowerCase();
+            const wanted = normalize(buttonText);
+            const candidates = [...document.querySelectorAll("button, a, [role='button']")];
+
+            for (const element of candidates) {
+                const text = normalize(
+                    element.innerText ||
+                    element.textContent ||
+                    element.getAttribute("aria-label") ||
+                    element.getAttribute("title")
+                );
+                if (!text) {
+                    continue;
+                }
+                if (text === wanted || (text.includes("baixar tabela") && text.includes("xlsx"))) {
+                    element.scrollIntoView({block: "center", inline: "center"});
+                    element.click();
+                    return true;
+                }
+            }
+            return false;
+        }
+        """
+        try:
+            return bool(page.evaluate(script, "Baixar Tabela (XLSX)"))
+        except Error:
+            return False
+
     def _find_row_by_digits(self, page: Page, target_digits: str, max_candidates: int = 80) -> Locator | None:
         candidates = page.locator("tr, [role='row'], .p-datatable-row, .card")
         try:
@@ -2392,7 +3186,7 @@ class SigaContributorExtractor:
 
         if count > max_candidates:
             LOGGER.info(
-                "Limiting taxpayer digit scan to %s of %s candidate row/card elements",
+                "Limitando a varredura de digitos do contribuinte a %s de %s elementos candidatos de linha/cartao",
                 max_candidates,
                 count,
             )

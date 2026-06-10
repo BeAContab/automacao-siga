@@ -65,9 +65,9 @@ class LiveAssistSession:
         """Abre o SIGA, aguarda login manual e persiste a sessão pronta para uso."""
         process = launch_debug_browser(self.settings)
         if process is None:
-            LOGGER.info("Reusing existing browser session for live assist")
+            LOGGER.info("Reutilizando a sessão de navegador existente para o modo assistido")
         else:
-            LOGGER.info("Browser launched for live assist with PID %s", process.pid)
+            LOGGER.info("Navegador aberto para o modo assistido com PID %s", process.pid)
 
         input(
             "Conclua o login manual no navegador aberto e pressione Enter "
@@ -174,7 +174,7 @@ class LiveAssistSession:
                 description = self._list_pages(context)
             else:
                 raise ValueError(
-                    "Comando invalido. Use um dos comandos suportados: "
+                "Comando inválido. Use um dos comandos suportados: "
                     "click-text, click-selector, click-label, fill-selector, fill-label, "
                     "press, wait-text, click-coordinates, screenshot, "
                     "download-table, open-month-if-positive, request-positive-details, "
@@ -225,7 +225,7 @@ class LiveAssistSession:
         """Garante que exista uma aba útil do SIGA antes de aceitar comandos."""
         page = self._select_active_page(context)
         if page.url == "about:blank":
-            LOGGER.info("Opening SIGA page for live assist")
+            LOGGER.info("Abrindo a página do SIGA para o modo assistido")
             page.goto(
                 self.settings.siga_url,
                 wait_until="domcontentloaded",
@@ -269,18 +269,27 @@ class LiveAssistSession:
 
     def _download_table(self, page: Page, basename: str) -> Path:
         """Baixa a tabela visível e renomeia o arquivo de forma determinística."""
-        with page.expect_download(timeout=self.settings.download_wait_timeout_ms) as download_info:
-            page.get_by_role("button", name="Baixar Tabela").click(timeout=self.settings.timeout_ms)
-        download = download_info.value
-        return self._save_download(download, basename)
+        attempts = max(1, self.settings.download_retry_count)
+        for attempt in range(1, attempts + 1):
+            try:
+                with page.expect_download(timeout=self.settings.download_wait_timeout_ms) as download_info:
+                    page.get_by_role("button", name="Baixar Tabela").click(timeout=self.settings.timeout_ms)
+                download = download_info.value
+                return self._save_download(download, basename)
+            except TimeoutError:
+                if attempt < attempts:
+                    page.wait_for_timeout(self.settings.download_retry_delay_ms)
+                    continue
+                raise
 
     def _save_download(self, download: Download, basename: str) -> Path:
         """Move o arquivo baixado para a pasta do modo assistido."""
         output_dir = self.settings.output_dir / "live-assist"
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / f"{basename}.csv"
+        suffix = "".join(Path(download.suggested_filename).suffixes).strip() or ".csv"
+        output_path = output_dir / f"{basename}{suffix}"
         LOGGER.info(
-            "Saving live assist download: basename=%s suggested_filename=%s final_path=%s",
+            "Salvando download do modo assistido: nome_base=%s nome_sugerido=%s caminho_final=%s",
             basename,
             download.suggested_filename,
             output_path,
@@ -294,7 +303,7 @@ class LiveAssistSession:
         lines = []
         for index, page in enumerate(open_pages, start=1):
             lines.append(f"[{index}] {page.title()} -> {page.url}")
-        return "\n".join(lines) if lines else "Nenhuma pagina aberta."
+        return "\n".join(lines) if lines else "Nenhuma página aberta."
 
     def _artifact_name(self, prefix: str) -> str:
         """Gera um nome curto baseado em data e hora para artefatos temporários."""

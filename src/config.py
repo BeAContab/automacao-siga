@@ -31,7 +31,9 @@ class Settings:
     certificate_dir: Path = DEFAULT_CERTIFICATE_DIR
     output_dir: Path = DEFAULT_OUTPUT_DIR
     download_poll_interval_ms: int = 1_000
-    download_wait_timeout_ms: int = 60_000
+    download_wait_timeout_ms: int = 90_000
+    download_retry_count: int = 2
+    download_retry_delay_ms: int = 2_000
     click_certificate_option: bool = False
     manual_login_timeout_ms: int = 300_000
     reset_browser_profile: bool = False

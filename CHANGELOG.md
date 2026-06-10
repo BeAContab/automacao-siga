@@ -1,5 +1,100 @@
 # Changelog
 
+## [2026-06-10]
+
+### Alterado
+- Arquivos:
+  - src/extraction/siga_extractor.py
+  - src/live_assist.py
+  - src/config.py
+- Motivo: aumentar a tolerância do fluxo de download com timeout maior e uma nova tentativa automática, além de preservar a extensão real informada pelo arquivo baixado.
+- Impacto: o processo ficou mais resiliente quando o SIGA demora para disparar o download e os arquivos finais passaram a manter a extensão coerente com o que o navegador informou.
+
+## [2026-06-10]
+
+### Alterado
+- Arquivos:
+  - src/extraction/siga_extractor.py
+  - src/gui.py
+  - src/main.py
+  - src/utils/browser.py
+  - src/utils/certificate_policy.py
+  - src/utils/siga_page.py
+  - src/live_assist.py
+- Motivo: padronizar as mensagens exibidas no terminal e nos logs da execução para português, facilitando o acompanhamento do fluxo pelo usuário.
+- Impacto: a saída da automação ficou mais clara para operação e diagnóstico, com logs e mensagens de console em português na maior parte do fluxo.
+
+## [2026-06-10]
+
+### Corrigido
+- Arquivos:
+  - src/extraction/siga_extractor.py
+- Motivo: o splitbutton do detalhamento podia ser localizado, mas o clique ainda podia atingir um elemento interno do texto em vez do botao principal.
+- Impacto: o programa agora dispara o clique diretamente no `button` principal do `Baixar Tabela (XLSX)` por JavaScript quando o componente estiver pronto.
+
+### Corrigido
+- Arquivos:
+  - src/extraction/siga_extractor.py
+- Motivo: a espera do detalhamento precisava reconhecer quando o splitbutton novo estava pronto de verdade, e nao apenas quando o texto aparecia.
+- Impacto: o fluxo agora inspeciona o estado visual e funcional do botao `Baixar Tabela (XLSX)` antes de clicar, com log de progresso durante a espera.
+
+### Corrigido
+- Arquivos:
+  - src/extraction/siga_extractor.py
+- Motivo: o detalhamento novo usa um splitbutton cujo botao principal precisa ficar visivel e habilitado antes do clique apos a selecao do mes ou do subitem.
+- Impacto: o fluxo agora aguarda o botao `p-element p-splitbutton-defaultbutton p-button p-component ng-star-inserted` ficar clicavel antes de solicitar o `Baixar Tabela (XLSX)`.
+
+### Corrigido
+- Arquivos:
+  - src/extraction/siga_extractor.py
+  - src/gui.py
+- Motivo: a busca da linha na Central de Downloads exigia correspondencia exata demais e podia falhar depois da varredura; a GUI ainda mascarava a falha original com um `NameError` no callback de erro.
+- Impacto: a rotina de download agora aceita a melhor linha concluida compatível com os fragmentos da TELA/ABA, e a interface passa a exibir corretamente o erro real quando houver falha.
+
+### Corrigido
+- Arquivos:
+  - src/extraction/siga_extractor.py
+- Motivo: a leitura do mes de referencia e o clique nos itens de detalhamento ficaram sensiveis ao layout novo do SIGA, especialmente antes do botao `Baixar Tabela (XLSX)`.
+- Impacto: o fluxo agora usa fallback direto na tabela para localizar o mes e tenta clicar o relatorio e o botao XLSX com mais tolerancia ao DOM antes de desistir.
+
+### Alterado
+- Arquivos:
+  - src/extraction/siga_extractor.py
+- Motivo: o fluxo de detalhamento passou a buscar explicitamente o botão `Baixar Tabela (XLSX)`, que agora representa a solicitação dos downloads assíncronos.
+- Impacto: todos os detalhamentos passam a acionar o novo botão do layout atual, sem depender do rótulo antigo `Baixar Tabela`.
+
+### Alterado
+- Arquivos:
+  - src/extraction/siga_extractor.py
+- Motivo: a Central de Downloads passou a montar a lista completa de TELA/ABA, varrer todas as paginas uma unica vez por ciclo e so depois baixar em lote os arquivos encontrados.
+- Impacto: reduz a repaginacao repetitiva por item, prioriza o registro mais recente por data/hora e continua gerando `.txt` para o que nao for localizado.
+
+### Corrigido
+- Arquivos:
+  - main_gui.py
+- Motivo: a entrada dedicada da GUI estava herdando a configuração automática de certificado na inicialização, o que podia travar a abertura da interface ao consultar o PowerShell.
+- Impacto: a GUI passa a iniciar com `--skip-certificate-policy`, evitando bloqueio logo na abertura; a política continua disponível no fluxo de terminal quando necessário.
+
+### Alterado
+- Arquivos:
+  - src/extraction/siga_extractor.py
+- Motivo: o fluxo de extração passou a preparar todas as solicitações de NF-e, NFC-e e CT-e antes de abrir a Central de Downloads.
+- Impacto: o sistema agora solicita primeiro todos os arquivos de uma linha de contribuinte e só depois executa o download em lote, reduzindo alternâncias desnecessárias entre as abas do SIGA.
+
+### Corrigido
+- Arquivos:
+  - src/utils/browser.py
+  - siga-automacao-gui.spec
+  - siga-automacao.spec
+- Motivo: o executável empacotado falhava ao resolver dinamicamente `selenium.webdriver.chrome.webdriver` durante a abertura da GUI.
+- Impacto: a criação do WebDriver passou a usar imports explícitos e os specs passaram a incluir os módulos do driver do Chrome e do Edge, reduzindo risco de erro no instalador e na build.
+
+### Alterado
+- Arquivos:
+  - src/gui.py
+- Motivo: a barra de ações da GUI foi reorganizada para expor botões separados por documento, com marcação e desmarcação direta de NF-e, NFC-e e CT-e.
+- Impacto: o usuario consegue controlar cada tipo de documento com mais clareza, sem depender apenas das seleções individuais da grade.
+
 ## [2026-06-09]
 
 ### Corrigido

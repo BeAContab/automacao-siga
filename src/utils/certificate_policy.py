@@ -42,12 +42,12 @@ def configure_auto_certificate_selection(settings: Settings) -> CertificatePolic
     """Cria ou atualiza a política de seleção automática do certificado de cliente."""
     policy_path = POLICY_PATHS.get(settings.browser_channel)
     if not policy_path:
-        LOGGER.info("Skipping certificate policy for unsupported browser channel: %s", settings.browser_channel)
+        LOGGER.info("Ignorando a politica de certificado para canal de navegador nao suportado: %s", settings.browser_channel)
         return CertificatePolicyResult(subject_cn=None, applied=False)
 
     subject_cn = _find_client_auth_certificate_cn()
     if not subject_cn:
-        LOGGER.warning("No client-auth certificate with private key was found in CurrentUser\\My")
+        LOGGER.warning("Nenhum certificado de autenticacao de cliente com chave privada foi encontrado em CurrentUser\\My")
         return CertificatePolicyResult(subject_cn=None, applied=False, registry_path=policy_path)
 
     try:
@@ -57,7 +57,7 @@ def configure_auto_certificate_selection(settings: Settings) -> CertificatePolic
     except PermissionError:
         reg_file_path = _write_reg_file(policy_path, subject_cn)
         LOGGER.warning(
-            "Could not write certificate policy to HKCU due to permission error. Generated %s",
+            "Nao foi possivel gravar a politica de certificado em HKCU por erro de permissao. Arquivo gerado: %s",
             reg_file_path,
         )
         return CertificatePolicyResult(
@@ -68,7 +68,7 @@ def configure_auto_certificate_selection(settings: Settings) -> CertificatePolic
         )
 
     LOGGER.info(
-        "Configured certificate auto-selection policy for %s using SUBJECT CN '%s'",
+        "Politica de selecao automatica de certificado configurada para %s usando o CN '%s'",
         settings.browser_channel,
         subject_cn,
     )
@@ -97,7 +97,7 @@ def clear_auto_certificate_selection(settings: Settings) -> bool:
             f"Sem permissao para remover a politica de certificado em HKCU\\{policy_path}"
         ) from exc
 
-    LOGGER.info("Cleared certificate auto-selection policy for %s", settings.browser_channel)
+    LOGGER.info("Politica de selecao automatica de certificado removida para %s", settings.browser_channel)
     return removed
 
 
@@ -119,7 +119,7 @@ def _find_client_auth_certificate_cn() -> str | None:
         check=False,
     )
     if result.returncode != 0:
-        raise CertificatePolicyError(result.stderr.strip() or "Failed to read CurrentUser certificate store")
+        raise CertificatePolicyError(result.stderr.strip() or "Falha ao ler o armazenamento de certificados CurrentUser")
 
     subject_cn = result.stdout.strip()
     return subject_cn or None

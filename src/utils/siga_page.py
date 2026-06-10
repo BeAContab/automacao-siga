@@ -24,7 +24,7 @@ class SigaPageInspector:
             diagnosis = self.inspect(page)
             if not diagnosis["needs_recovery"]:
                 if attempt > 0:
-                    LOGGER.info("Recovered SIGA page after %s reload(s)", attempt)
+                    LOGGER.info("Pagina do SIGA recuperada apos %s recarga(s)", attempt)
                 return
 
             artifact_name = f"{reason}-blank-{attempt + 1}"
@@ -36,7 +36,7 @@ class SigaPageInspector:
                 )
 
             LOGGER.warning(
-                "Detected problematic SIGA render state (%s). Reloading page (%s/%s).",
+                "Estado problematico de renderizacao do SIGA detectado (%s). Recarregando a pagina (%s/%s).",
                 diagnosis["reason"],
                 attempt + 1,
                 self.settings.blank_page_retry_count,
@@ -93,7 +93,7 @@ class SigaPageInspector:
         html_path = self.settings.log_dir / f"{name}.html"
         page.screenshot(path=str(screenshot_path), full_page=True)
         html_path.write_text(page.content(), encoding="utf-8")
-        LOGGER.info("Saved debug snapshot to %s and %s", screenshot_path, html_path)
+        LOGGER.info("Captura de depuracao salva em %s e %s", screenshot_path, html_path)
         return screenshot_path, html_path
 
     def _wait_for_settle(self, page: Page) -> None:
