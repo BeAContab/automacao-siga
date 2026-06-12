@@ -59,6 +59,26 @@ def load_cnpjs_from_xlsx(path: Path) -> list[SpreadsheetRow]:
     return rows
 
 
+def load_cnpjs_from_text(text: str) -> list[SpreadsheetRow]:
+    """Lê CNPJs informados manualmente, um por linha ou separados por pontuação."""
+    rows: list[SpreadsheetRow] = []
+    seen: set[str] = set()
+
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        # A interface permite colar CNPJs em vários formatos; tudo é normalizado para 14 dígitos.
+        normalized_values = _extract_documents_from_text(raw_line)
+        for value in normalized_values:
+            if value in seen:
+                continue
+            seen.add(value)
+            rows.append(SpreadsheetRow(row_number=line_number, cnpj=value))
+
+    if not rows:
+        raise ValueError("Nenhum CNPJ valido foi informado manualmente.")
+
+    return rows
+
+
 def _normalize_header(value: object) -> str:
     """Remove acentos e padroniza o cabeçalho para comparação segura."""
     if value is None:
@@ -74,3 +94,22 @@ def _normalize_document(value: object) -> str:
     if not text:
         return ""
     return text.zfill(14) if len(text) <= 14 else text
+
+
+def _extract_documents_from_text(value: object) -> list[str]:
+    """Extrai todos os blocos numéricos de 14 dígitos presentes em um texto livre."""
+    if value is None:
+        return []
+
+    text = str(value)
+    matches = []
+    for token in text.replace("\t", " ").replace(";", " ").replace(",", " ").split():
+        digits = _normalize_document(token)
+        if len(digits) == 14:
+            matches.append(digits)
+
+    if matches:
+        return matches
+
+    digits = _normalize_document(text)
+    return [digits] if len(digits) == 14 else []

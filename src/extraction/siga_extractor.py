@@ -53,15 +53,22 @@ class BatchExtractionResult:
     message: str
 
 
+class TaxpayerNotFoundError(Exception):
+    """Indica que o CNPJ pesquisado nao retornou contribuinte selecionavel no SIGA."""
+
+
 @dataclass(slots=True)
 class PendingDetailRequest:
+    request_key: str
     document_tab: str
     profile_name: str
     summary_path: Path
     report_name: str
     tela_aba: str
     requested_after: datetime
+    taxpayer_cnpj: str
     taxpayer_document: str
+    month_reference: str
 
 
 @dataclass(slots=True)
@@ -133,8 +140,7 @@ class SigaContributorExtractor:
         with BrowserSession(self.settings) as context:
             page = context.pages[0] if context.pages else context.new_page()
             page = self._ensure_authenticated(page, context)
-            self._search_taxpayer(page, normalized_cnpj)
-            self._open_taxpayer(page, normalized_cnpj)
+            self._open_taxpayer_from_home(page, normalized_cnpj)
 
             valor_contabil = self._extract_metric(page, "Valor Contabil")
             icms = self._extract_metric(page, "ICMS")
@@ -190,13 +196,37 @@ class SigaContributorExtractor:
         normalized_year = self._normalize_reference_year(reference_year)
 
         results: list[BatchExtractionResult] = []
+        pending_requests_by_row_number: dict[int, list[PendingDetailRequest]] = {}
+        all_pending_requests: list[PendingDetailRequest] = []
+        not_found_row_numbers: set[int] = set()
+        prebuilt_results_by_row_number: dict[int, BatchExtractionResult] = {}
         page = context.pages[0] if context.pages else context.new_page()
         page = self._ensure_authenticated(page, context)
 
         for spreadsheet_row in spreadsheet_rows:
             # Cada linha da planilha vira uma busca independente dentro do SIGA.
             LOGGER.info("Processando o CNPJ %s da linha %s da planilha", spreadsheet_row.cnpj, spreadsheet_row.row_number)
-            self._open_taxpayer_from_home(page, spreadsheet_row.cnpj)
+            try:
+                self._open_taxpayer_from_home(page, spreadsheet_row.cnpj)
+            except TaxpayerNotFoundError as exc:
+                LOGGER.warning("CNPJ %s nao foi encontrado na pesquisa do SIGA; seguindo para o proximo.", spreadsheet_row.cnpj)
+                notice_path = self._save_taxpayer_not_found_notice(
+                    cgf=spreadsheet_row.cnpj,
+                    month_reference=normalized_month,
+                    message=str(exc),
+                )
+                prebuilt_results_by_row_number[spreadsheet_row.row_number] = BatchExtractionResult(
+                    cnpj=spreadsheet_row.cnpj,
+                    month_reference=normalized_month,
+                    taxpayer_folder=notice_path.parent,
+                    fiscal_results=[],
+                    final_url=page.url,
+                    status="taxpayer_not_found",
+                    message=f"CNPJ {spreadsheet_row.cnpj} nao foi encontrado no SIGA.",
+                )
+                pending_requests_by_row_number[spreadsheet_row.row_number] = []
+                not_found_row_numbers.add(spreadsheet_row.row_number)
+                continue
             tabs_for_row = selected_tabs
             if selected_tabs_by_row_number is not None:
                 tabs_for_row = selected_tabs_by_row_number.get(spreadsheet_row.row_number)
@@ -211,25 +241,29 @@ class SigaContributorExtractor:
                 normalized_year,
                 tabs_for_row,
             )
-            detail_paths: dict[str, Path] = {}
-            if pending_requests:
-                LOGGER.info(
-                    "All fiscal requests for %s were prepared; now opening Downloads to fetch %s file(s).",
-                    spreadsheet_row.cnpj,
-                    len(pending_requests),
-                )
-                detail_paths = self._download_pending_detail_requests(
-                    page,
-                    spreadsheet_row.cnpj,
-                    normalized_month,
-                    pending_requests,
-                )
+            pending_requests_by_row_number[spreadsheet_row.row_number] = pending_requests
+            all_pending_requests.extend(pending_requests)
+
+        detail_paths: dict[str, Path] = {}
+        if all_pending_requests:
+            LOGGER.info(
+                "Todas as solicitacoes fiscais foram preparadas para %s CNPJ(s); abrindo a Central de Downloads uma unica vez para buscar %s arquivo(s).",
+                len(spreadsheet_rows),
+                len(all_pending_requests),
+            )
+            detail_paths = self._download_pending_detail_requests(page, all_pending_requests)
+
+        for spreadsheet_row in spreadsheet_rows:
+            if spreadsheet_row.row_number in not_found_row_numbers:
+                results.append(prebuilt_results_by_row_number[spreadsheet_row.row_number])
+                continue
+            pending_requests = pending_requests_by_row_number.get(spreadsheet_row.row_number, [])
             fiscal_results = [
                 FiscalDownloadResult(
                     document_tab=request.document_tab,
                     profile_name=request.profile_name,
                     summary_path=request.summary_path,
-                    detail_path=detail_paths[request.tela_aba],
+                    detail_path=detail_paths[request.request_key],
                     selected_report_name=request.report_name,
                     month_reference=normalized_month,
                 )
@@ -264,6 +298,8 @@ class SigaContributorExtractor:
                 self._search_taxpayer(page, cgf)
                 self._open_taxpayer(page, cgf)
                 return
+            except TaxpayerNotFoundError:
+                raise
             except (TimeoutError, Error) as exc:
                 last_error = exc
                 LOGGER.warning(
@@ -324,7 +360,7 @@ class SigaContributorExtractor:
             page.wait_for_timeout(500)
 
         LOGGER.info(
-            "A lista de contribuintes não terminou de carregar visualmente antes da pesquisa; continuando porque o campo de busca é a fonte da verdade."
+            "A lista de contribuintes não terminou de carregar visualmente; continuando porque a busca agora é feita por paginação direta."
         )
         return False
 
@@ -345,6 +381,40 @@ class SigaContributorExtractor:
                 continue
             results.extend(self._collect_fiscal_tab_requests(page, cgf, month_reference, reference_year, tab_config))
         return results
+
+    def _build_pending_request(
+        self,
+        *,
+        cgf: str,
+        month_reference: str,
+        document_tab: str,
+        profile_name: str,
+        summary_path: Path,
+        report_name: str,
+        tela_aba: str,
+        requested_after: datetime,
+        taxpayer_document: str,
+    ) -> PendingDetailRequest:
+        """Cria uma solicitacao com chave unica para nao misturar downloads de CNPJs diferentes."""
+        request_key = "|".join(
+            (
+                self._normalize_numeric_document(cgf),
+                slugify(month_reference),
+                self._sanitize_filename(tela_aba),
+            )
+        )
+        return PendingDetailRequest(
+            request_key=request_key,
+            document_tab=document_tab,
+            profile_name=profile_name,
+            summary_path=summary_path,
+            report_name=report_name,
+            tela_aba=tela_aba,
+            requested_after=requested_after,
+            taxpayer_cnpj=cgf,
+            taxpayer_document=taxpayer_document,
+            month_reference=month_reference,
+        )
 
     def _normalize_selected_tabs(self, selected_tabs: list[str] | None) -> set[str]:
         """Converte a seleção do usuário em um conjunto válido de abas fiscais."""
@@ -436,6 +506,7 @@ class SigaContributorExtractor:
                 pending_requests.extend(
                     self._request_report_details_for_profile(
                         page,
+                        cgf,
                         tab_config,
                         profile,
                         month_reference,
@@ -455,7 +526,9 @@ class SigaContributorExtractor:
             requested_after = datetime.now() - timedelta(seconds=30)
             self._request_detail_download(page)
             pending_requests.append(
-                PendingDetailRequest(
+                self._build_pending_request(
+                    cgf=cgf,
+                    month_reference=month_reference,
                     document_tab=tab_config.tab_slug,
                     profile_name=profile.label,
                     summary_path=summary_paths[profile.label],
@@ -585,7 +658,9 @@ class SigaContributorExtractor:
                         empty_result_seen_at = time.time()
                     if time.time() - empty_result_seen_at >= 3:
                         self._save_debug_snapshot(page, f"taxpayer-search-empty-{document_value}")
-                        raise TimeoutError(f"Nenhum contribuinte foi encontrado para {document_value}.")
+                        raise TaxpayerNotFoundError(
+                            f"Nenhum contribuinte foi encontrado para {self._format_cnpj(document_value)}."
+                        )
                     page.wait_for_timeout(500)
                     continue
                 empty_result_seen_at = None
@@ -597,7 +672,9 @@ class SigaContributorExtractor:
             page.wait_for_timeout(500)
 
         self._save_debug_snapshot(page, f"taxpayer-search-timeout-{document_value}")
-        raise TimeoutError(f"A pesquisa do contribuinte {document_value} nao retornou uma linha clicavel.")
+        raise TaxpayerNotFoundError(
+            f"Nenhum contribuinte foi encontrado para {self._format_cnpj(document_value)}."
+        )
 
     def _find_search_input(self, page: Page) -> Locator:
         """Localiza o campo de pesquisa do contribuinte com várias estratégias de fallback."""
@@ -737,6 +814,15 @@ class SigaContributorExtractor:
             return False
 
     def _find_taxpayer_row(self, page: Page, document_value: str) -> Locator | None:
+        candidate = self._find_taxpayer_row_on_current_page(page, document_value)
+        if candidate is not None:
+            return candidate
+        self._save_debug_snapshot(page, f"row-not-found-{document_value}")
+        raise TaxpayerNotFoundError(
+            f"Nao foi possivel localizar o contribuinte {self._format_cnpj(document_value)} na lista filtrada."
+        )
+
+    def _find_taxpayer_row_on_current_page(self, page: Page, document_value: str) -> Locator | None:
         patterns = (
             document_value,
             self._format_cnpj(document_value),
@@ -778,14 +864,11 @@ class SigaContributorExtractor:
         # Fallback por dígitos: encontra linhas/cards mesmo quando o CGF aparece formatado.
         digits = self._normalize_numeric_document(document_value)
         if digits:
-            if self._click_taxpayer_row_by_digits(page, digits):
-                return None
             row = self._find_row_by_digits(page, digits)
             if row is not None:
                 return row
 
-        self._save_debug_snapshot(page, f"row-not-found-{document_value}")
-        raise TimeoutError(f"Nao foi possivel localizar o contribuinte {document_value} na lista.")
+        return None
 
     def _click_taxpayer_row_by_digits(self, page: Page, target_digits: str) -> bool:
         """Usa uma checagem via DOM para clicar na linha do contribuinte quando o Selenium falha."""
@@ -828,6 +911,35 @@ class SigaContributorExtractor:
         if clicked:
             LOGGER.info("Abrindo os detalhes do contribuinte usando o fallback por DOM para os dígitos %s", target_digits)
         return clicked
+
+    def _go_to_next_contributor_page(self, page: Page) -> bool:
+        candidates = (
+            page.locator("button.p-paginator-next:not([disabled]):not(.p-disabled)"),
+            page.locator("xpath=//button[contains(@class,'p-paginator-next') and not(@disabled) and not(contains(@class,'p-disabled'))]"),
+            page.get_by_role("button", name=re.compile(r"proxima|next", re.IGNORECASE)),
+        )
+        for locator in candidates:
+            target = self._first_visible_enabled(locator)
+            if target is None:
+                continue
+            target.click()
+            page.wait_for_timeout(1_000)
+            return True
+        return False
+
+    def _go_to_first_contributor_page(self, page: Page) -> None:
+        candidates = (
+            page.locator("button.p-paginator-first:not([disabled]):not(.p-disabled)"),
+            page.locator("xpath=//button[contains(@class,'p-paginator-first') and not(@disabled) and not(contains(@class,'p-disabled'))]"),
+            page.get_by_role("button", name=re.compile(r"primeira|first", re.IGNORECASE)),
+        )
+        for locator in candidates:
+            target = self._first_visible_enabled(locator)
+            if target is None:
+                continue
+            target.click()
+            page.wait_for_timeout(1_000)
+            return
 
     def _open_fiscal_information(self, page: Page) -> None:
         """Entra na área de informações fiscais antes de escolher a aba de documento."""
@@ -1010,9 +1122,10 @@ class SigaContributorExtractor:
         require_positive_value: bool = True,
     ) -> MonthOpenDecision:
         LOGGER.info("Verificando o mês de referência %s antes de abri-lo", month_reference)
+        self._wait_for_month_reference_table(page, month_reference)
         metric = None
         last_error: TimeoutError | None = None
-        for attempt in range(1, 5):
+        for attempt in range(1, 7):
             try:
                 metric = self._get_indicator_metric(page, month_reference)
             except TimeoutError as exc:
@@ -1022,15 +1135,14 @@ class SigaContributorExtractor:
             if metric is not None:
                 break
 
-            if attempt < 4:
+            if attempt < 6:
                 LOGGER.info(
-                    "O mês de referência %s ainda não está pronto (tentativa %s/4); aguardando antes de tentar novamente.",
+                    "O mês de referência %s ainda não está pronto (tentativa %s/6); aguardando antes de tentar novamente.",
                     month_reference,
                     attempt,
                 )
-                page.wait_for_timeout(750)
-                page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
-                page.wait_for_timeout(750)
+                self._wait_for_month_reference_table(page, month_reference, timeout_seconds=5)
+                page.wait_for_timeout(1_000)
 
         if metric is None:
             raise TimeoutError(f"Nao foi possivel localizar o mes de referencia {month_reference}.") from last_error
@@ -1056,6 +1168,42 @@ class SigaContributorExtractor:
             opened=True,
             reason="Mes aberto com sucesso",
         )
+
+    def _wait_for_month_reference_table(
+        self,
+        page: Page,
+        month_reference: str,
+        timeout_seconds: int = 12,
+    ) -> None:
+        """Espera a tabela do mes aparecer antes de tentar ler os indicadores."""
+        normalized_month = strip_accents(month_reference).lower()
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            try:
+                body_text = strip_accents(page.locator("body").inner_text(timeout=3_000)).lower()
+                if normalized_month in body_text:
+                    return
+            except Error:
+                pass
+
+            rows = page.locator("tr, [role='row'], .p-datatable-row, .card, .p-accordion-header")
+            try:
+                row_count = rows.count()
+            except Error:
+                row_count = 0
+
+            for index in range(row_count):
+                row = rows.nth(index)
+                try:
+                    if not row.is_visible():
+                        continue
+                    text = strip_accents(row.inner_text(timeout=1_500)).lower()
+                except Error:
+                    continue
+                if normalized_month in text:
+                    return
+
+            page.wait_for_timeout(500)
 
     def _open_reference_month(self, page: Page, month_reference: str) -> None:
         LOGGER.info("Abrindo o mês de referência %s", month_reference)
@@ -1338,6 +1486,7 @@ class SigaContributorExtractor:
     def _request_report_details_for_profile(
         self,
         page: Page,
+        cgf: str,
         tab_config: FiscalTabConfig,
         profile: FiscalProfileConfig,
         month_reference: str,
@@ -1368,7 +1517,9 @@ class SigaContributorExtractor:
             requested_after = datetime.now() - timedelta(seconds=30)
             self._request_detail_download(page)
             requests.append(
-                PendingDetailRequest(
+                self._build_pending_request(
+                    cgf=cgf,
+                    month_reference=month_reference,
                     document_tab=tab_config.tab_slug,
                     profile_name=profile.label,
                     summary_path=summary_path,
@@ -1741,7 +1892,9 @@ class SigaContributorExtractor:
         basename: str,
         document_tab: str,
     ) -> Path:
-        request = PendingDetailRequest(
+        request = self._build_pending_request(
+            cgf=cgf,
+            month_reference=month_reference,
             document_tab=document_tab,
             profile_name="unknown",
             summary_path=Path("."),
@@ -1750,14 +1903,12 @@ class SigaContributorExtractor:
             requested_after=datetime.min,
             taxpayer_document=self._current_taxpayer_document(page),
         )
-        detail_paths = self._download_pending_detail_requests(page, cgf, month_reference, [request])
-        return detail_paths[request.tela_aba]
+        detail_paths = self._download_pending_detail_requests(page, [request])
+        return detail_paths[request.request_key]
 
     def _download_pending_detail_requests(
         self,
         page: Page,
-        cgf: str,
-        month_reference: str,
         pending_requests: list[PendingDetailRequest],
     ) -> dict[str, Path]:
         origin_url = page.url
@@ -1782,8 +1933,6 @@ class SigaContributorExtractor:
         matches = self._find_pending_download_matches(page, targets)
         detail_paths = self._download_found_pending_requests(
             page,
-            cgf,
-            month_reference,
             targets,
             matches,
         )
@@ -1809,6 +1958,14 @@ class SigaContributorExtractor:
             )
         return targets
 
+    def _pending_request_labels(self, targets: list[DownloadLookupTarget], request_keys: list[str]) -> list[str]:
+        """Traduz as chaves internas em labels legiveis para os logs do lote."""
+        labels_by_key = {
+            target.request.request_key: f"{self._normalize_numeric_document(target.request.taxpayer_cnpj)} - {target.request.tela_aba}"
+            for target in targets
+        }
+        return [labels_by_key.get(request_key, request_key) for request_key in request_keys]
+
     def _find_pending_download_matches(
         self,
         page: Page,
@@ -1817,7 +1974,7 @@ class SigaContributorExtractor:
         """Varre todas as paginas e escolhe o melhor match por solicitacao."""
         deadline = time.time() + (self.settings.download_wait_timeout_ms / 1000)
         latest_matches: dict[str, DownloadRowMatch] = {}
-        target_keys = {target.request.tela_aba for target in targets}
+        target_keys = {target.request.request_key for target in targets}
 
         while time.time() < deadline:
             latest_matches, processing_counts = self._scan_downloads_table_once(page, targets)
@@ -1828,14 +1985,14 @@ class SigaContributorExtractor:
                 if missing_keys:
                     LOGGER.warning(
                         "Downloads nao localizados apos a varredura completa: %s",
-                        ", ".join(missing_keys),
+                        ", ".join(self._pending_request_labels(targets, missing_keys)),
                     )
                 return latest_matches
 
             delay_ms = 1_500 if len(waiting_keys) <= 2 else 2_000
             LOGGER.info(
                 "Downloads ainda em processamento para %s; nova varredura completa em %s ms.",
-                ", ".join(waiting_keys),
+                ", ".join(self._pending_request_labels(targets, waiting_keys)),
                 delay_ms,
             )
             page.wait_for_timeout(delay_ms)
@@ -1901,7 +2058,7 @@ class SigaContributorExtractor:
             requested_at = self._row_request_datetime(row_cells)
 
             for target in targets:
-                request_key = target.request.tela_aba
+                request_key = target.request.request_key
                 if not self._row_matches_download_target(
                     row_cells,
                     target.normalized_target,
@@ -1977,7 +2134,7 @@ class SigaContributorExtractor:
         """Se houver linha mais nova em processamento, evitamos cair cedo no fallback antigo."""
         waiting_keys: list[str] = []
         for target in targets:
-            request_key = target.request.tela_aba
+            request_key = target.request.request_key
             if processing_counts.get(request_key, 0) <= 0:
                 continue
             current_match = matches.get(request_key)
@@ -1988,8 +2145,6 @@ class SigaContributorExtractor:
     def _download_found_pending_requests(
         self,
         page: Page,
-        cgf: str,
-        month_reference: str,
         targets: list[DownloadLookupTarget],
         matches: dict[str, DownloadRowMatch],
     ) -> dict[str, Path]:
@@ -1998,16 +2153,16 @@ class SigaContributorExtractor:
         page_targets: dict[int, list[DownloadLookupTarget]] = {}
 
         for target in targets:
-            request_key = target.request.tela_aba
-            basename = self._build_download_output_basename(request_key)
+            request_key = target.request.request_key
+            basename = self._build_download_output_basename(target.request.tela_aba)
             match = matches.get(request_key)
             if match is None:
                 detail_paths[request_key] = self._save_unavailable_download_notice(
-                    cgf=cgf,
-                    month_reference=month_reference,
+                    cgf=target.request.taxpayer_cnpj,
+                    month_reference=target.request.month_reference,
                     basename=basename,
                     document_tab=target.request.document_tab,
-                    tela_aba=request_key,
+                    tela_aba=target.request.tela_aba,
                 )
                 continue
             page_targets.setdefault(match.page_number, []).append(target)
@@ -2021,13 +2176,11 @@ class SigaContributorExtractor:
 
         while current_page <= max_page:
             for target in page_targets.get(current_page, []):
-                match = matches[target.request.tela_aba]
-                detail_paths[target.request.tela_aba] = self._capture_download_for_match(
+                match = matches[target.request.request_key]
+                detail_paths[target.request.request_key] = self._capture_download_for_match(
                     page=page,
                     target=target,
                     match=match,
-                    cgf=cgf,
-                    month_reference=month_reference,
                 )
 
             if current_page == max_page:
@@ -2045,8 +2198,6 @@ class SigaContributorExtractor:
         page: Page,
         target: DownloadLookupTarget,
         match: DownloadRowMatch,
-        cgf: str,
-        month_reference: str,
     ) -> Path:
         attempts = max(1, self.settings.download_retry_count)
         last_error: TimeoutError | None = None
@@ -2065,8 +2216,8 @@ class SigaContributorExtractor:
                 download = download_info.value
                 output_path = self._save_download(
                     download,
-                    cgf,
-                    month_reference,
+                    target.request.taxpayer_cnpj,
+                    target.request.month_reference,
                     basename,
                     target.request.document_tab,
                 )
@@ -2494,6 +2645,24 @@ class SigaContributorExtractor:
         )
         output_path.write_text(message, encoding="utf-8")
         LOGGER.warning("Aviso de download indisponivel salvo em %s", output_path)
+        return output_path
+
+    def _save_taxpayer_not_found_notice(
+        self,
+        cgf: str,
+        month_reference: str,
+        message: str,
+    ) -> Path:
+        output_dir = self._build_taxpayer_output_dir(cgf, month_reference)
+        output_path = output_dir / "CNPJ nao encontrado.txt"
+        formatted_cnpj = self._format_cnpj(cgf)
+        content = (
+            "O CNPJ informado nao foi encontrado na barra de pesquisa do SIGA.\n"
+            f"CNPJ pesquisado: {formatted_cnpj}\n"
+            f"Detalhe: {message}\n"
+        )
+        output_path.write_text(content, encoding="utf-8")
+        LOGGER.warning("Aviso de CNPJ nao encontrado salvo em %s", output_path)
         return output_path
 
     def _scan_downloads_current_page(

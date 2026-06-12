@@ -14,7 +14,7 @@ from tkinter import filedialog, messagebox, ttk
 from src.auth.siga_login import SigaLoginFlow
 from src.config import Settings
 from src.extraction.siga_extractor import SigaContributorExtractor
-from src.extraction.spreadsheet import SpreadsheetRow, load_cnpjs_from_xlsx
+from src.extraction.spreadsheet import SpreadsheetRow, load_cnpjs_from_text, load_cnpjs_from_xlsx
 from src.utils.browser import BrowserSession, get_connect_browser_url, launch_debug_browser
 from src.utils.logging_setup import configure_logging
 from src.months import MONTH_OPTIONS
@@ -107,7 +107,7 @@ class SigaAutomationGUI:
         current_month = MONTH_OPTIONS[max(0, min(11, time.localtime().tm_mon - 1))]
         self.month_var = tk.StringVar(value=initial_month or current_month)
         self.year_var = tk.StringVar(value=initial_year or str(time.localtime().tm_year))
-        self.status_var = tk.StringVar(value="Clique em 'Iniciar navegador' para abrir o SIGA e fazer o login manual.")
+        self.status_var = tk.StringVar(value="Carregue uma planilha XLSX ou informe CNPJs manualmente para iniciar.")
 
         self.selection_rows: list[RowSelectionWidgets] = []
         self._worker_thread: threading.Thread | None = None
@@ -116,6 +116,7 @@ class SigaAutomationGUI:
         self._browser_started = False
         self.start_browser_button: ttk.Button | None = None
         self.execute_button: ttk.Button | None = None
+        self.manual_cnpjs_text: tk.Text | None = None
 
         self._build_ui()
         self._load_spreadsheet_rows(Path(self.spreadsheet_path_var.get()))
@@ -132,7 +133,7 @@ class SigaAutomationGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main.columnconfigure(0, weight=1)
-        main.rowconfigure(2, weight=1)
+        main.rowconfigure(3, weight=1)
 
         header = ttk.LabelFrame(main, text="Configurações da execução", padding=10)
         header.grid(row=0, column=0, sticky="ew")
@@ -159,8 +160,40 @@ class SigaAutomationGUI:
         year_entry = ttk.Entry(header, textvariable=self.year_var, width=10)
         year_entry.grid(row=2, column=3, sticky="w", padx=(8, 0), pady=(10, 0))
 
+        manual = ttk.LabelFrame(main, text="Entrada manual de CNPJs", padding=8)
+        manual.grid(row=1, column=0, sticky="ew", pady=(12, 8))
+        manual.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            manual,
+            text="Cole um CNPJ por linha, ou vários separados por vírgula, ponto e vírgula ou espaço.",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+        manual_text_frame = ttk.Frame(manual)
+        manual_text_frame.grid(row=1, column=0, sticky="ew")
+        manual_text_frame.columnconfigure(0, weight=1)
+        manual_text_frame.rowconfigure(0, weight=1)
+
+        self.manual_cnpjs_text = tk.Text(manual_text_frame, height=4, wrap="word")
+        manual_scroll = ttk.Scrollbar(manual_text_frame, orient="vertical", command=self.manual_cnpjs_text.yview)
+        self.manual_cnpjs_text.configure(yscrollcommand=manual_scroll.set)
+        self.manual_cnpjs_text.grid(row=0, column=0, sticky="ew")
+        manual_scroll.grid(row=0, column=1, sticky="ns")
+
+        manual_buttons = ttk.Frame(manual)
+        manual_buttons.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        manual_buttons.columnconfigure(0, weight=1)
+        manual_buttons.columnconfigure(1, weight=1)
+
+        ttk.Button(manual_buttons, text="Carregar CNPJs manuais", command=self._load_manual_rows).grid(
+            row=0, column=0, sticky="ew", padx=(0, 6)
+        )
+        ttk.Button(manual_buttons, text="Limpar campo", command=self._clear_manual_input).grid(
+            row=0, column=1, sticky="ew", padx=(6, 0)
+        )
+
         action_bar = ttk.Frame(main)
-        action_bar.grid(row=1, column=0, sticky="ew", pady=(12, 8))
+        action_bar.grid(row=2, column=0, sticky="ew", pady=(12, 8))
         action_bar.columnconfigure(0, weight=1)
         action_bar.columnconfigure(1, weight=1)
 
@@ -194,7 +227,7 @@ class SigaAutomationGUI:
         self.execute_button.grid(row=0, column=1, sticky="ew", padx=(6, 0))
 
         content = ttk.Panedwindow(main, orient=tk.HORIZONTAL)
-        content.grid(row=2, column=0, sticky="nsew")
+        content.grid(row=3, column=0, sticky="nsew")
 
         left = ttk.Labelframe(content, text="CNPJs do anexo", padding=8)
         right = ttk.Labelframe(content, text="Log da execução", padding=8)
@@ -215,7 +248,7 @@ class SigaAutomationGUI:
         right.rowconfigure(0, weight=1)
 
         status = ttk.Label(main, textvariable=self.status_var, anchor="w")
-        status.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        status.grid(row=4, column=0, sticky="ew", pady=(8, 0))
 
     def _browse_spreadsheet(self) -> None:
         path = filedialog.askopenfilename(
@@ -229,6 +262,31 @@ class SigaAutomationGUI:
     def _reload_spreadsheet(self) -> None:
         path = Path(self.spreadsheet_path_var.get()).expanduser()
         self._load_spreadsheet_rows(path)
+
+    def _load_manual_rows(self) -> None:
+        """Carrega CNPJs digitados manualmente sem depender de planilha."""
+        if self.manual_cnpjs_text is None:
+            return
+
+        raw_text = self.manual_cnpjs_text.get("1.0", "end").strip()
+        if not raw_text:
+            messagebox.showwarning("SIGA Automação", "Digite pelo menos um CNPJ no campo manual.")
+            return
+
+        try:
+            spreadsheet_rows = load_cnpjs_from_text(raw_text)
+        except Exception as exc:  # noqa: BLE001
+            self.status_var.set(f"Falha ao carregar CNPJs manuais: {exc}")
+            messagebox.showerror("SIGA Automação", f"Falha ao carregar CNPJs manuais:\n{exc}")
+            return
+
+        self._render_rows(spreadsheet_rows, source_label="Entrada manual")
+        self.status_var.set(f"CNPJs manuais carregados com {len(spreadsheet_rows)} item(ns).")
+
+    def _clear_manual_input(self) -> None:
+        """Limpa o campo de entrada manual sem alterar a lista já carregada."""
+        if self.manual_cnpjs_text is not None:
+            self.manual_cnpjs_text.delete("1.0", "end")
 
     def _browse_output_dir(self) -> None:
         """Abre o seletor de pasta para o usuario apontar o destino dos arquivos."""
@@ -278,20 +336,28 @@ class SigaAutomationGUI:
         return True
 
     def _load_spreadsheet_rows(self, path: Path) -> None:
-        for child in self.scrollable_rows.inner.winfo_children():
-            child.destroy()
-        self.selection_rows.clear()
-
+        """Carrega CNPJs a partir da planilha e atualiza a grade da interface."""
         if not path.exists():
+            self._render_rows([], source_label=f"Planilha nao encontrada: {path}")
             self.status_var.set(f"Planilha nao encontrada: {path}")
             return
 
         try:
             spreadsheet_rows = load_cnpjs_from_xlsx(path)
         except Exception as exc:  # noqa: BLE001
+            self._render_rows([], source_label=f"Falha ao carregar planilha: {exc}")
             self.status_var.set(f"Falha ao carregar planilha: {exc}")
             messagebox.showerror("SIGA Automação", f"Falha ao carregar planilha:\n{exc}")
             return
+
+        self._render_rows(spreadsheet_rows, source_label=f"Planilha carregada com {len(spreadsheet_rows)} CNPJ(s)")
+        self.status_var.set(f"Planilha carregada com {len(spreadsheet_rows)} CNPJ(s).")
+
+    def _render_rows(self, spreadsheet_rows: list[SpreadsheetRow], source_label: str) -> None:
+        """Atualiza a lista de CNPJs exibida mantendo o alinhamento da grade."""
+        for child in self.scrollable_rows.inner.winfo_children():
+            child.destroy()
+        self.selection_rows.clear()
 
         table = ttk.Frame(self.scrollable_rows.inner)
         table.grid(row=0, column=0, sticky="nsew")
@@ -300,22 +366,25 @@ class SigaAutomationGUI:
         ttk.Label(table, text="Marque os CNPJs e as abas que deseja processar.").grid(
             row=0, column=0, columnspan=4, sticky="w", pady=(0, 8)
         )
+        ttk.Label(table, text=source_label, foreground="#555555").grid(
+            row=1, column=0, columnspan=4, sticky="w", pady=(0, 6)
+        )
         ttk.Separator(table, orient="horizontal").grid(
-            row=1, column=0, columnspan=4, sticky="ew", pady=(0, 8)
+            row=2, column=0, columnspan=4, sticky="ew", pady=(0, 8)
         )
 
         header = self._create_selection_row(
             parent=table,
-            row_index=2,
+            row_index=3,
             cnpj_text="CNPJ",
             nfe_widget=self._create_header_cell,
             nfce_widget=self._create_header_cell,
             cte_widget=self._create_header_cell,
             is_header=True,
         )
-        header.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        header.grid(row=3, column=0, sticky="ew", pady=(0, 4))
 
-        for index, spreadsheet_row in enumerate(spreadsheet_rows, start=3):
+        for index, spreadsheet_row in enumerate(spreadsheet_rows, start=4):
             nfe_var = tk.BooleanVar(value=True)
             nfce_var = tk.BooleanVar(value=True)
             cte_var = tk.BooleanVar(value=True)
@@ -341,7 +410,10 @@ class SigaAutomationGUI:
                 )
             )
 
-        self.status_var.set(f"Planilha carregada com {len(spreadsheet_rows)} CNPJ(s).")
+        if not spreadsheet_rows:
+            ttk.Label(table, text="Nenhum CNPJ disponivel.", foreground="#aa0000").grid(
+                row=4, column=0, columnspan=4, sticky="w", pady=(8, 0)
+            )
 
     def _select_all_documents(self) -> None:
         for row in self.selection_rows:
@@ -459,9 +531,11 @@ class SigaAutomationGUI:
                 selected_tabs_by_row_number=selected_tabs_by_row_number,
             )
             download_count = sum(len(result.fiscal_results) for result in results)
+            not_found_count = sum(1 for result in results if result.status == "taxpayer_not_found")
             self._append_log_line("")
             self._append_log_line("Processo concluído.")
             self._append_log_line(f"Contribuintes processados: {len(results)} de {len(selected_rows)}")
+            self._append_log_line(f"CNPJs nao encontrados: {not_found_count}")
             self._append_log_line(f"Detalhamentos baixados: {download_count}")
             if results:
                 self._append_log_line(f"Pasta da última saída: {results[-1].taxpayer_folder}")

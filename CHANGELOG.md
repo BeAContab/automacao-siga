@@ -1,5 +1,44 @@
 # Changelog
 
+## [2026-06-12]
+
+### Alterado
+- Arquivos:
+  - src/gui.py
+  - src/extraction/spreadsheet.py
+  - README.md
+- Motivo: a interface passou a aceitar CNPJs informados manualmente, sem depender de planilha XLSX, mantendo o fluxo antigo como alternativa.
+- Impacto: o usuario pode colar um ou varios CNPJs diretamente na GUI, carregar a lista na tela e executar a automacao normalmente.
+
+### Alterado
+- Arquivos:
+  - src/extraction/siga_extractor.py
+  - src/gui.py
+- Motivo: a localizacao de contribuintes voltou a usar apenas a barra de pesquisa do SIGA, sem paginar a lista de CNPJs, e o lote passou a tratar CNPJ nao encontrado como aviso recuperavel.
+- Impacto: quando um CNPJ como `04.419.796/0003-34` nao aparece na pesquisa, a automacao gera `CNPJ nao encontrado.txt`, segue para o proximo contribuinte e informa a contagem na GUI sem interromper o processamento.
+
+## [2026-06-12]
+
+### Corrigido
+- Arquivos:
+  - src/extraction/siga_extractor.py
+- Motivo: a leitura do mês de referência estava falhando em alguns CNPJs apesar da tabela já estar visível, causando interrupção precoce do lote.
+- Impacto: a automação agora aguarda a tabela de indicadores ficar visível e tenta a leitura do mês com mais folga antes de desistir.
+
+### Alterado
+- Arquivos:
+  - src/extraction/siga_extractor.py
+- Motivo: reorganizar o lote para solicitar primeiro os downloads de todos os CNPJs e abrir a Central de Downloads apenas uma vez no final.
+- Impacto: o fluxo reduz alternâncias repetidas para a aba de Downloads e mantém o vínculo de cada arquivo com o CNPJ e o mês corretos durante o download em lote.
+
+## [2026-06-11]
+
+### Adicionado
+- Arquivos:
+  - dist/siga-automacao-gui.exe
+- Motivo: gerar novamente o executável da GUI com a versão atual do projeto para uso na criação do instalador via Inno Setup.
+- Impacto: a build da interface gráfica ficou atualizada com as correções mais recentes e pronta para empacotamento.
+
 ## [2026-06-10]
 
 ### Alterado
