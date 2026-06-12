@@ -1,197 +1,112 @@
-# SIGA Automacao
+# 🚀 SIGA Automação
 
-Automacao por terminal com Selenium para acessar o SIGA, aguardar login manual e extrair os arquivos fiscais por CNPJ a partir de uma planilha `.xlsx`.
+**Otimize seu tempo e elimine o trabalho manual na extração de arquivos fiscais.**
 
-## Entrada e saida
+O **SIGA Automação** é uma solução corporativa de alta performance desenvolvida para interagir com o portal SIGA (Sefaz-CE). Com ele, você automatiza a extração em lote de documentos fiscais (NF-e, NFC-e e CT-e) a partir de uma lista de CNPJs, trazendo eficiência, segurança e confiabilidade para a sua rotina contábil e fiscal.
 
-- Planilha de entrada: `cnpj.xlsx`
-- CNPJs preservados com 14 digitos, inclusive zeros a esquerda
-- Saida organizada em `<pasta-escolhida>/<cnpj>/<mes>/<documento>/`
-- Se nenhuma pasta for informada na GUI, o padrao continua sendo `saida/`
-- Logs em `logs/`
-- Notas de contexto e decisoes em `brain/`
+---
 
-## Uso
+## 🌟 Principais Benefícios
 
-Para abrir a interface grafica e marcar os CNPJs e abas manualmente:
+- **Ganho de Produtividade:** Elimina horas de navegação repetitiva e cliques manuais.
+- **Precisão e Confiabilidade:** Reduz drasticamente o erro humano na seleção e download de arquivos XML/PDF.
+- **Integração Perfeita:** Funciona a partir de planilhas `.xlsx` padronizadas, extraindo arquivos automaticamente para pastas organizadas por CNPJ, mês e tipo de documento.
+- **Flexibilidade de Interface:** Oferece tanto uma Interface Gráfica (GUI) intuitiva para usuários de negócio, quanto uma Interface de Linha de Comando (CLI) para integrações e uso avançado.
+- **Segurança de Dados:** Mantém o controle total no ambiente local do usuário, utilizando perfis dedicados de navegador e respeitando as políticas de segurança corporativas.
+
+---
+
+## 💻 Funcionalidades em Destaque
+
+- **Automação Inteligente:** Reaproveitamento de sessões já autenticadas do navegador para evitar múltiplos logins.
+- **Gestão de Certificados:** Configuração automatizada para lidar com certificados digitais A1/A3 sem fricção no Windows.
+- **Execução Seletiva:** Escolha quais tipos de documentos (NF-e, NFC-e, CT-e) e quais meses/anos deseja processar em uma única rodada.
+- **Logs e Rastreabilidade:** Registro detalhado de cada ação do robô (`run.log`) e capturas de erros (`errors.log`).
+
+---
+
+## 🛠️ Como Utilizar
+
+### 1. Preparação dos Dados
+Crie ou edite a planilha de entrada chamada `cnpj.xlsx`.
+*Nota: Os CNPJs devem ser preservados com 14 dígitos, incluindo zeros à esquerda.*
+
+### 2. Interface Gráfica (Recomendado)
+A forma mais amigável de utilizar o sistema. Permite carregar planilhas, selecionar diretórios de saída e visualizar logs em tempo real.
 
 ```powershell
 .\.venv\Scripts\python.exe .\main.py --gui
+# Ou caso esteja usando o executável:
+.\dist\siga-automacao-gui.exe
 ```
 
-Execute o fluxo interativo:
+**Passo a passo na GUI:**
+1. Carregue sua planilha `cnpj.xlsx`.
+2. (Opcional) Escolha a **Pasta de saída**. Por padrão, os arquivos vão para a pasta `saida/`.
+3. Clique em **Iniciar navegador** e realize o login manual no portal do SIGA.
+4. Após o login concluído, clique em **Executar** para iniciar as extrações.
+
+### 3. Modo Terminal / CLI
+Para operações rápidas ou integrações. O terminal guiará você por parâmetros como Mês, Ano e Documentos desejados.
 
 ```powershell
+# Execução iterativa (o robô fará as perguntas no terminal)
 .\.venv\Scripts\python.exe .\main.py
+
+# Execução parametrizada direta
+.\.venv\Scripts\python.exe .\main.py --month Maio --year 2026 --spreadsheet .\cnpj.xlsx --docs NF-e CT-e
 ```
 
-Ou informe os parametros diretamente:
+---
 
-```powershell
-.\.venv\Scripts\python.exe .\main.py --month Maio --year 2026 --spreadsheet .\cnpj.xlsx
-```
+## ⚙️ Configurações Avançadas de Sistema
 
-## Gerar o EXE no Windows
+### Organização dos Arquivos Gerados
+Os downloads são estruturados automaticamente no seguinte formato:
+`<pasta-escolhida>/<cnpj>/<mes>/<documento>/`
+*Dica de validação: Compare as saídas geradas com `testes.csv`, que serve de referência manual para extração de NFC-e/Emissor.*
 
-Com o ambiente virtual ativado, rode:
+### Certificados Digitais
+A automação cria um perfil isolado do navegador, contornando bloqueios de segurança recentes, e configura políticas locais para selecionar o certificado do usuário silenciosamente.
+- **Ignorar política de certificado:** `--skip-certificate-policy`
+- **Remover política local gerada:** `--clear-certificate-policy`
+- **Usar perfil padrão do sistema:** `--system-browser-profile`
+- **Forçar encerramento de processos antes de rodar:** `--force-restart-browser`
 
-```powershell
-.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean siga-automacao.spec
-```
+### Reaproveitamento de Sessão Web
+Por padrão, o sistema tenta usar uma aba já autenticada no SIGA (`https://siga.sefaz.ce.gov.br/ui/`) para acelerar o processo sem precisar repetir a etapa de certificado/recaptcha.
+- Para desativar esse comportamento no terminal: `--disable-attach`
+- Via `.env`: defina `PREFER_EXISTING_SIGA_SESSION=false`
 
-O executável final será gerado em:
-
-```text
-dist\siga-automacao.exe
-```
-
-Para executar a versão empacotada com a interface gráfica:
-
-```powershell
-.\dist\siga-automacao.exe --gui
-```
-
-Se quiser gerar apenas a versão com GUI, use:
-
-```powershell
-.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean siga-automacao-gui.spec
-```
-
-Nesse caso o executável final será:
-
-```text
-dist\siga-automacao-gui.exe
-```
-
-## Gerar o instalador com Inno Setup
-
-Depois de gerar o executável, abra o arquivo:
-
-```text
-installer\siga-automacao.iss
-```
-
-No Inno Setup Compiler, clique em `Compile` ou pressione `Ctrl+F9`.
-
-O instalador final será gerado em:
-
-```text
-dist\installer\SIGA-Automacao-Setup.exe
-```
-
-O instalador copia o binário da versão com GUI, cria atalhos opcionais e não exige privilégios de administrador.
-
-Para executar multiplos meses na mesma execucao:
-
-```powershell
-.\.venv\Scripts\python.exe .\main.py --month Maio Junho --year 2026 --docs NF-e CT-e
-```
-
-Para escolher quais documentos processar:
-
-```powershell
-.\.venv\Scripts\python.exe .\main.py --month Maio --year 2026 --docs NF-e CT-e
-```
-
-O terminal vai:
-
-1. pedir o(s) mes(es) de referencia, se nao informado;
-2. pedir o ano de referencia, se nao informado;
-3. pedir quais documentos executar (NF-e, NFC-e, CT-e ou todos), se nao informado;
-4. pedir a planilha `.xlsx`, se nao informada;
-5. tentar reaproveitar uma aba do SIGA ja autenticada em um Chrome com CDP ativo;
-6. se nao encontrar uma aba valida, abrir o Chrome em um perfil dedicado de automacao para login manual;
-7. aguardar `Enter` antes de anexar o Selenium, somente apos o SIGA estar autenticado;
-8. conectar o Selenium ao navegador ja autenticado;
-9. executar a extracao no mesmo contexto autenticado.
-
-## Interface grafica
-
-A interface grafica permite:
-
-- carregar a planilha `cnpj.xlsx`;
-- escolher a pasta onde os downloads serao salvos;
-- visualizar todos os CNPJs do anexo;
-- marcar por CNPJ as abas `NF-e`, `NFC-e` e/ou `CT-e`;
-- iniciar o navegador por um botao proprio antes da execucao;
-- executar apenas o que foi selecionado;
-- acompanhar o log da execucao na propria tela.
-
-Depois de abrir a interface, se quiser ajustar a pasta de saida use o campo `Pasta de saída`, clique em `Iniciar navegador`, faca o login manual no SIGA e so entao clique em `Executar`.
-
-Se a pasta informada nao existir, ela sera criada antes do inicio da execucao.
-
-Para validar a saida esperada, voce pode comparar os arquivos gerados com `testes.csv`, que serve como referencia manual para a extração de NFC-e/Emissor.
-
-O Selenium se conecta ao Chrome/Edge pela porta de depuracao somente depois do login manual, para manter a mesma sessao sem controlar a etapa do certificado/recaptcha.
-
-## Certificado digital
-
-O navegador e aberto em um perfil dedicado de automacao com CDP ativo. No Windows, a selecao de `Seu certificado digital` usa os certificados instalados no repositario do usuario do Windows.
-
-Esse perfil dedicado evita bloqueios recentes do Chrome ao usar `--remote-debugging-port` com o perfil normal do usuario.
-
-Antes de abrir o navegador, o programa configura a politica local do Chrome/Edge para selecionar automaticamente o certificado de cliente instalado no usuario atual para os dominios do SIGA e SSO.
-
-Para executar sem alterar a politica de certificado:
-
-```powershell
-.\.venv\Scripts\python.exe .\main.py --skip-certificate-policy
-```
-
-Para remover a politica criada pelo programa:
-
-```powershell
-.\.venv\Scripts\python.exe .\main.py --clear-certificate-policy
-```
-
-Se o Windows bloquear a gravacao automatica da politica, o programa gera o arquivo `logs/chrome-certificate-policy.reg`. Nesse caso, aplique o arquivo manualmente com uma conta que tenha permissao para alterar politicas do Chrome.
-
-Se quiser tentar usar o perfil normal do Chrome:
-
-```powershell
-.\.venv\Scripts\python.exe .\main.py --system-browser-profile
-```
-
-Se seus certificados estiverem em outro perfil do Chrome:
-
-```powershell
-.\.venv\Scripts\python.exe .\main.py --chrome-profile-directory "Profile 1"
-```
-
-Se quiser encerrar os processos existentes do Chrome antes de iniciar a automacao:
-
-```powershell
-.\.venv\Scripts\python.exe .\main.py --force-restart-browser
-```
-
-## Reaproveitamento de sessao
-
-Se existir um Chrome com CDP ativo e uma aba em `https://siga.sefaz.ce.gov.br/ui/` ja autenticada, a automacao tenta se anexar a essa aba antes de pedir login manual.
-
-Para desabilitar esse comportamento em uma execucao especifica:
-
-```powershell
-.\.venv\Scripts\python.exe .\main.py --disable-attach
-```
-
-Para desabilitar por configuracao:
-
-```env
-PREFER_EXISTING_SIGA_SESSION=false
-```
-
-## Live assist
-
-O modo assistido continua disponivel para diagnostico usando a mesma sessao Selenium:
-
+### Modo Assistido (Live Assist)
+Disponível para diagnóstico acompanhando a sessão do Selenium visualmente:
 ```powershell
 .\.venv\Scripts\python.exe .\main.py --live-assist
 ```
 
-## Logs
+---
 
-- Execucao geral: `logs/run.log`
-- Erros: `logs/errors.log`
+## 📦 Compilação e Distribuição
 
-Arquivos locais sensiveis, certificados, logs, saidas e a pasta `brain/` ficam fora do controle de versao via `.gitignore`.
+A solução pode ser empacotada em arquivos `.exe` independentes, dispensando a instalação do Python nas máquinas dos usuários finais.
+
+**Gerar executável completo (CLI + GUI):**
+```powershell
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean siga-automacao.spec
+```
+
+**Gerar executável exclusivo com Interface Gráfica:**
+```powershell
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean siga-automacao-gui.spec
+```
+
+**Gerar o Instalador (Inno Setup):**
+Abra o arquivo `installer\siga-automacao.iss` no Inno Setup Compiler e clique em **Compile** (ou `Ctrl+F9`). O instalador final (`SIGA-Automacao-Setup.exe`) será gerado na pasta `dist\installer\`, pronto para distribuição sem exigir privilégios de administrador.
+
+---
+
+## 🔒 Licenciamento e Propriedade
+
+**Copyright © 2026 Barreira & Associados. Todos os direitos reservados.**
+
+Este software é de propriedade privada e confidencial. O uso deste projeto é restrito exclusivamente às pessoas, empresas ou equipes autorizadas pelo proprietário. Consulte o arquivo `LICENSE` na raiz do projeto para mais detalhes. Arquivos sensíveis e a pasta de base de conhecimento (`brain/`) ficam protegidos fora do controle de versão.
