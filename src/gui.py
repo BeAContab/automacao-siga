@@ -53,7 +53,7 @@ class ScrollableFrame(ttk.Frame):
 
     def __init__(self, parent: tk.Widget) -> None:
         super().__init__(parent)
-        self.canvas = tk.Canvas(self, highlightthickness=0)
+        self.canvas = tk.Canvas(self, highlightthickness=0, bg="#ffffff", bd=0)
         self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.inner = ttk.Frame(self.canvas)
 
@@ -108,6 +108,7 @@ class SigaAutomationGUI:
         self.month_var = tk.StringVar(value=initial_month or current_month)
         self.year_var = tk.StringVar(value=initial_year or str(time.localtime().tm_year))
         self.status_var = tk.StringVar(value="Carregue uma planilha XLSX ou informe CNPJs manualmente para iniciar.")
+        self.loaded_count_var = tk.StringVar(value="Total carregados: 0")
 
         self.selection_rows: list[RowSelectionWidgets] = []
         self._worker_thread: threading.Thread | None = None
@@ -117,6 +118,13 @@ class SigaAutomationGUI:
         self.start_browser_button: ttk.Button | None = None
         self.execute_button: ttk.Button | None = None
         self.manual_cnpjs_text: tk.Text | None = None
+        self.import_path_entry: ttk.Entry | None = None
+        self.input_notebook: ttk.Notebook | None = None
+        self.rows_container: ttk.Frame | None = None
+        self.progress_var = tk.DoubleVar(value=0.0)
+        self.nfe_doc_var = tk.BooleanVar(value=True)
+        self.nfce_doc_var = tk.BooleanVar(value=True)
+        self.cte_doc_var = tk.BooleanVar(value=True)
 
         self._build_ui()
         self._load_spreadsheet_rows(Path(self.spreadsheet_path_var.get()))
@@ -127,128 +135,262 @@ class SigaAutomationGUI:
         """Executa o loop principal da interface."""
         self.root.mainloop()
 
+    def _apply_theme(self) -> None:
+        """Configura a aparência base da interface com uma paleta corporativa clara."""
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        colors = {
+            "surface": "#f8f9fa",
+            "surface_container": "#edeeef",
+            "surface_low": "#f3f4f5",
+            "surface_lowest": "#ffffff",
+            "outline": "#c5c6ce",
+            "outline_strong": "#75777e",
+            "primary": "#031632",
+            "primary_container": "#1a2b48",
+            "on_surface": "#191c1d",
+            "on_surface_variant": "#44474d",
+            "success": "#28a745",
+            "error": "#ba1a1a",
+            "console": "#1e1e1e",
+            "console_header": "#2d2d2d",
+            "console_line": "#3d3d3d",
+        }
+        self._theme_colors = colors
+
+        self.root.configure(bg=colors["surface"])
+        style.configure("App.TFrame", background=colors["surface"])
+        style.configure("Topbar.TFrame", background=colors["surface_lowest"])
+        style.configure("Sidebar.TFrame", background=colors["surface_container"], relief="solid", borderwidth=1)
+        style.configure("Center.TFrame", background=colors["surface"])
+        style.configure("ConsolePanel.TFrame", background=colors["surface_lowest"], relief="solid", borderwidth=1)
+        style.configure("Card.TFrame", background=colors["surface_lowest"], relief="solid", borderwidth=1)
+        style.configure("Console.TFrame", background=colors["console"])
+        style.configure("ConsoleHeader.TFrame", background=colors["console_header"])
+        style.configure("ConsoleFooter.TFrame", background=colors["console_header"])
+
+        style.configure("BrandTitle.TLabel", background=colors["surface_lowest"], foreground=colors["primary"], font=("Segoe UI", 22, "bold"))
+        style.configure("VersionBadge.TLabel", background="#ececec", foreground=colors["on_surface"], font=("Segoe UI", 9, "bold"), padding=(8, 3))
+        style.configure("Section.TLabel", background=colors["surface"], foreground=colors["on_surface_variant"], font=("Segoe UI", 10, "bold"))
+        style.configure("SidebarTitle.TLabel", background=colors["surface_container"], foreground=colors["on_surface_variant"], font=("Segoe UI", 10, "bold"))
+        style.configure("CardTitle.TLabel", background=colors["surface_lowest"], foreground=colors["primary"], font=("Segoe UI", 17, "bold"))
+        style.configure("CountChip.TLabel", background=colors["primary_container"], foreground="#ffffff", font=("Segoe UI", 10, "bold"), padding=(12, 6))
+        style.configure("Status.TLabel", background=colors["surface"], foreground=colors["on_surface_variant"], font=("Segoe UI", 9))
+        style.configure("Body.TLabel", background=colors["surface"], foreground=colors["on_surface"], font=("Segoe UI", 10))
+        style.configure("BodyMuted.TLabel", background=colors["surface"], foreground=colors["on_surface_variant"], font=("Segoe UI", 9))
+        style.configure("Panel.TLabel", background=colors["surface_lowest"], foreground=colors["on_surface"], font=("Segoe UI", 10))
+        style.configure("CardSubtle.TLabel", background=colors["surface_lowest"], foreground=colors["on_surface_variant"], font=("Segoe UI", 9, "italic"))
+        style.configure("ConsoleTitle.TLabel", background=colors["console_header"], foreground="#a0a0a0", font=("Segoe UI", 9, "bold"))
+        style.configure("ConsoleStatus.TLabel", background=colors["console_header"], foreground="#ffffff", font=("Segoe UI", 9, "bold"))
+        style.configure("Panel.TCheckbutton", background=colors["surface_container"], foreground=colors["on_surface"], font=("Segoe UI", 10))
+        style.map("Panel.TCheckbutton", background=[("active", colors["surface_container"])], foreground=[("disabled", colors["outline_strong"])])
+
+        style.configure("Primary.TButton", background=colors["primary"], foreground="#ffffff", font=("Segoe UI", 10, "bold"), padding=(12, 8))
+        style.map("Primary.TButton", background=[("active", colors["primary_container"]), ("disabled", "#808080")])
+        style.configure("Success.TButton", background=colors["success"], foreground="#ffffff", font=("Segoe UI", 10, "bold"), padding=(12, 8))
+        style.map("Success.TButton", background=[("active", "#1f7a34"), ("disabled", "#9fb7a6")])
+        style.configure("Ghost.TButton", background=colors["surface_lowest"], foreground=colors["primary"], font=("Segoe UI", 10, "bold"), padding=(10, 6), borderwidth=1, relief="solid")
+        style.map("Ghost.TButton", background=[("active", colors["surface_low"])])
+        style.configure("Action.TButton", background=colors["surface_lowest"], foreground=colors["on_surface"], font=("Segoe UI", 10, "bold"), padding=(10, 7))
+        style.map("Action.TButton", background=[("active", colors["surface_low"])])
+        style.configure("Danger.TButton", background=colors["surface_lowest"], foreground=colors["error"], font=("Segoe UI", 10, "bold"), padding=(10, 7), borderwidth=1, relief="solid")
+        style.map("Danger.TButton", background=[("active", "#ffecec")])
+
+        style.configure("TNotebook", background=colors["surface_lowest"], borderwidth=0)
+        style.configure("TNotebook.Tab", background=colors["surface_low"], foreground=colors["on_surface_variant"], padding=(18, 10), font=("Segoe UI", 10, "bold"))
+        style.map("TNotebook.Tab", background=[("selected", colors["surface_lowest"])], foreground=[("selected", colors["primary"])])
+
+    def _build_sidebar(self, parent: ttk.Frame) -> None:
+        """Monta o painel lateral de parâmetros e ações auxiliares."""
+        ttk.Label(parent, text="PARÂMETROS DE EXTRAÇÃO", style="SidebarTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 16))
+
+        ttk.Label(parent, text="Mês de Referência", style="Panel.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 6))
+        month_box = ttk.Combobox(parent, textvariable=self.month_var, values=MONTH_OPTIONS, state="readonly", width=22)
+        month_box.grid(row=2, column=0, sticky="ew")
+
+        ttk.Label(parent, text="Ano", style="Panel.TLabel").grid(row=3, column=0, sticky="w", pady=(16, 6))
+        year_entry = ttk.Entry(parent, textvariable=self.year_var)
+        year_entry.grid(row=4, column=0, sticky="ew")
+
+        ttk.Label(parent, text="Documentos Fiscais", style="SidebarTitle.TLabel").grid(row=5, column=0, sticky="w", pady=(20, 8))
+        docs = ttk.Frame(parent, style="Sidebar.TFrame")
+        docs.grid(row=6, column=0, sticky="ew")
+        docs.columnconfigure(0, weight=1)
+
+        ttk.Checkbutton(docs, text="NF-e (Nota Fiscal Eletrônica)", style="Panel.TCheckbutton", variable=self.nfe_doc_var, command=lambda: self._set_document_selection("NF-e", self.nfe_doc_var.get())).grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Checkbutton(docs, text="NFC-e (Consumidor)", style="Panel.TCheckbutton", variable=self.nfce_doc_var, command=lambda: self._set_document_selection("NFC-e", self.nfce_doc_var.get())).grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Checkbutton(docs, text="CT-e (Transporte)", style="Panel.TCheckbutton", variable=self.cte_doc_var, command=lambda: self._set_document_selection("CT-e", self.cte_doc_var.get())).grid(row=2, column=0, sticky="w", pady=4)
+
+        ttk.Label(parent, text="Diretório de Saída", style="SidebarTitle.TLabel").grid(row=7, column=0, sticky="w", pady=(20, 6))
+        output_row = ttk.Frame(parent, style="Sidebar.TFrame")
+        output_row.grid(row=8, column=0, sticky="ew")
+        output_row.columnconfigure(0, weight=1)
+        output_entry = ttk.Entry(output_row, textvariable=self.output_dir_var)
+        output_entry.grid(row=0, column=0, sticky="ew")
+        ttk.Button(output_row, text="Browse", style="Action.TButton", command=self._browse_output_dir).grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(parent, text="Padrão", style="Ghost.TButton", command=self._reset_output_dir).grid(row=9, column=0, sticky="ew", pady=(8, 0))
+
+    def _build_center(self, parent: ttk.Frame) -> None:
+        """Monta o conteúdo central com entrada, lista de CNPJs e botões de ação."""
+        header = ttk.Frame(parent, style="Center.TFrame")
+        header.grid(row=0, column=0, sticky="ew")
+        header.columnconfigure(0, weight=1)
+        header.columnconfigure(1, weight=0)
+
+        ttk.Label(header, text="Controle de CNPJs", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(header, textvariable=self.loaded_count_var, style="CountChip.TLabel").grid(row=0, column=1, sticky="e")
+
+        card = ttk.Frame(parent, style="Card.TFrame", padding=0)
+        card.grid(row=1, column=0, sticky="nsew", pady=(18, 16))
+        card.columnconfigure(0, weight=1)
+        card.rowconfigure(1, weight=1)
+
+        self.input_notebook = ttk.Notebook(card)
+        self.input_notebook.grid(row=0, column=0, sticky="ew")
+        import_tab = ttk.Frame(self.input_notebook, padding=18, style="Card.TFrame")
+        manual_tab = ttk.Frame(self.input_notebook, padding=18, style="Card.TFrame")
+        self.input_notebook.add(import_tab, text="Importar Planilha")
+        self.input_notebook.add(manual_tab, text="Entrada Manual")
+
+        import_tab.columnconfigure(0, weight=1)
+        ttk.Label(import_tab, text="Selecione uma planilha XLSX para carregar os CNPJs.", style="Body.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        import_row = ttk.Frame(import_tab, style="Card.TFrame")
+        import_row.grid(row=1, column=0, sticky="ew")
+        import_row.columnconfigure(0, weight=1)
+        self.import_path_entry = ttk.Entry(import_row, textvariable=self.spreadsheet_path_var)
+        self.import_path_entry.grid(row=0, column=0, sticky="ew")
+        ttk.Button(import_row, text="Abrir", style="Action.TButton", command=self._browse_spreadsheet).grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(import_row, text="Carregar", style="Primary.TButton", command=self._reload_spreadsheet).grid(row=0, column=2, padx=(8, 0))
+
+        manual_tab.columnconfigure(0, weight=1)
+        ttk.Label(manual_tab, text="Cole um CNPJ por linha, ou vários separados por vírgula, ponto e vírgula ou espaço.", style="Body.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        manual_text_frame = ttk.Frame(manual_tab, style="Card.TFrame")
+        manual_text_frame.grid(row=1, column=0, sticky="nsew")
+        manual_text_frame.columnconfigure(0, weight=1)
+        manual_text_frame.rowconfigure(0, weight=1)
+        self.manual_cnpjs_text = tk.Text(manual_text_frame, height=8, wrap="word", bg="#ffffff", fg="#191c1d", insertbackground="#191c1d", relief="solid", bd=1)
+        manual_scroll = ttk.Scrollbar(manual_text_frame, orient="vertical", command=self.manual_cnpjs_text.yview)
+        self.manual_cnpjs_text.configure(yscrollcommand=manual_scroll.set)
+        self.manual_cnpjs_text.grid(row=0, column=0, sticky="nsew")
+        manual_scroll.grid(row=0, column=1, sticky="ns")
+        manual_actions = ttk.Frame(manual_tab, style="Card.TFrame")
+        manual_actions.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        manual_actions.columnconfigure(0, weight=1)
+        manual_actions.columnconfigure(1, weight=1)
+        ttk.Button(manual_actions, text="Carregar CNPJs manuais", style="Primary.TButton", command=self._load_manual_rows).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        ttk.Button(manual_actions, text="Limpar campo", style="Danger.TButton", command=self._clear_manual_input).grid(row=0, column=1, sticky="ew", padx=(6, 0))
+
+        rows_card = ttk.Frame(parent, style="Card.TFrame", padding=14)
+        rows_card.grid(row=2, column=0, sticky="nsew")
+        rows_card.columnconfigure(0, weight=1)
+        rows_card.rowconfigure(0, weight=1)
+        self.rows_container = rows_card
+        self.scrollable_rows = ScrollableFrame(rows_card)
+        self.scrollable_rows.grid(row=0, column=0, sticky="nsew")
+
+        footer_actions = ttk.Frame(parent, style="Center.TFrame")
+        footer_actions.grid(row=3, column=0, sticky="ew", pady=(16, 0))
+        footer_actions.columnconfigure(0, weight=1)
+        footer_actions.columnconfigure(1, weight=1)
+        ttk.Button(footer_actions, text="Limpar Lista", style="Danger.TButton", command=self._clear_loaded_rows).grid(row=0, column=0, sticky="e", padx=(0, 8))
+        ttk.Button(footer_actions, text="Validar CNPJs", style="Primary.TButton", command=self._validate_loaded_rows).grid(row=0, column=1, sticky="w", padx=(8, 0))
+
+    def _build_console(self, parent: ttk.Frame) -> None:
+        """Monta o painel escuro de fluxo e log da operação."""
+        action_box = ttk.Frame(parent, style="Topbar.TFrame", padding=(20, 18))
+        action_box.grid(row=0, column=0, sticky="ew")
+        action_box.columnconfigure(0, weight=1)
+
+        ttk.Label(action_box, text="FLUXO DE TRABALHO", style="SidebarTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 14))
+
+        self.start_browser_button = ttk.Button(action_box, text="Iniciar Navegador", style="Primary.TButton", command=self._start_browser_if_needed)
+        self.start_browser_button.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        self.execute_button = ttk.Button(action_box, text="Executar Extração", style="Success.TButton", command=self._run_selected, state="disabled")
+        self.execute_button.grid(row=2, column=0, sticky="ew")
+
+        console_box = ttk.Frame(parent, style="Console.TFrame")
+        console_box.grid(row=1, column=0, sticky="nsew")
+        console_box.columnconfigure(0, weight=1)
+        console_box.rowconfigure(1, weight=1)
+
+        console_header = ttk.Frame(console_box, style="ConsoleHeader.TFrame", padding=(16, 8))
+        console_header.grid(row=0, column=0, sticky="ew")
+        console_header.columnconfigure(0, weight=1)
+        ttk.Label(console_header, text="LOG DE EXECUÇÃO", style="ConsoleTitle.TLabel").grid(row=0, column=0, sticky="w")
+
+        self.log_text = tk.Text(console_box, wrap="word", height=20, state="disabled", bg="#1e1e1e", fg="#d4d4d4", insertbackground="#ffffff", relief="flat", bd=0, padx=14, pady=12, font=("Consolas", 10))
+        log_scroll = ttk.Scrollbar(console_box, orient="vertical", command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=log_scroll.set)
+        self.log_text.grid(row=1, column=0, sticky="nsew")
+        log_scroll.grid(row=1, column=1, sticky="ns")
+
+        console_footer = ttk.Frame(console_box, style="ConsoleFooter.TFrame", padding=(16, 10))
+        console_footer.grid(row=2, column=0, sticky="ew")
+        console_footer.columnconfigure(0, weight=1)
+        ttk.Label(console_footer, text="Progresso da Operação", style="ConsoleTitle.TLabel").grid(row=0, column=0, sticky="w")
+        self.progress_bar = ttk.Progressbar(console_footer, orient="horizontal", mode="determinate", maximum=100, variable=self.progress_var)
+        self.progress_bar.grid(row=1, column=0, sticky="ew", pady=(8, 0))
     def _build_ui(self) -> None:
-        main = ttk.Frame(self.root, padding=12)
+        self._apply_theme()
+
+        self.root.title("SIGA Automação")
+        self.root.geometry("1440x900")
+        self.root.minsize(1280, 840)
+        self.root.configure(bg="#f8f9fa")
+
+        main = ttk.Frame(self.root, padding=0, style="App.TFrame")
         main.grid(row=0, column=0, sticky="nsew")
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main.columnconfigure(0, weight=1)
-        main.rowconfigure(3, weight=1)
+        main.rowconfigure(1, weight=1)
 
-        header = ttk.LabelFrame(main, text="Configurações da execução", padding=10)
+        header = ttk.Frame(main, style="Topbar.TFrame", padding=(20, 14))
         header.grid(row=0, column=0, sticky="ew")
-        header.columnconfigure(1, weight=1)
-        header.columnconfigure(3, weight=1)
+        header.columnconfigure(0, weight=1)
+        header.columnconfigure(1, weight=0)
 
-        ttk.Label(header, text="Planilha XLSX").grid(row=0, column=0, sticky="w")
-        entry = ttk.Entry(header, textvariable=self.spreadsheet_path_var)
-        entry.grid(row=0, column=1, sticky="ew", padx=(8, 8))
-        ttk.Button(header, text="Abrir", command=self._browse_spreadsheet).grid(row=0, column=2, sticky="ew")
-        ttk.Button(header, text="Carregar", command=self._reload_spreadsheet).grid(row=0, column=3, sticky="ew", padx=(8, 0))
+        title_box = ttk.Frame(header, style="Topbar.TFrame")
+        title_box.grid(row=0, column=0, sticky="w")
+        ttk.Label(title_box, text="SIGA Automação", style="BrandTitle.TLabel").grid(row=0, column=0, sticky="w")
 
-        ttk.Label(header, text="Pasta de saída").grid(row=1, column=0, sticky="w", pady=(10, 0))
-        output_entry = ttk.Entry(header, textvariable=self.output_dir_var)
-        output_entry.grid(row=1, column=1, sticky="ew", padx=(8, 8), pady=(10, 0))
-        ttk.Button(header, text="Escolher", command=self._browse_output_dir).grid(row=1, column=2, sticky="ew", pady=(10, 0))
-        ttk.Button(header, text="Padrão", command=self._reset_output_dir).grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=(10, 0))
+        header_actions = ttk.Frame(header, style="Topbar.TFrame")
+        header_actions.grid(row=0, column=1, sticky="e")
+        ttk.Button(header_actions, text="Ajuda", style="Ghost.TButton", command=self._show_help_dialog).grid(row=0, column=0)
 
-        ttk.Label(header, text="Mês").grid(row=2, column=0, sticky="w", pady=(10, 0))
-        month_box = ttk.Combobox(header, textvariable=self.month_var, values=MONTH_OPTIONS, state="readonly", width=18)
-        month_box.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(10, 0))
+        body = ttk.Frame(main, style="App.TFrame")
+        body.grid(row=1, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=0, minsize=300)
+        body.columnconfigure(1, weight=1)
+        body.columnconfigure(2, weight=0, minsize=360)
+        body.rowconfigure(0, weight=1)
 
-        ttk.Label(header, text="Ano").grid(row=2, column=2, sticky="e", pady=(10, 0))
-        year_entry = ttk.Entry(header, textvariable=self.year_var, width=10)
-        year_entry.grid(row=2, column=3, sticky="w", padx=(8, 0), pady=(10, 0))
+        sidebar = ttk.Frame(body, style="Sidebar.TFrame", padding=(20, 20))
+        sidebar.grid(row=0, column=0, sticky="nsew")
+        sidebar.columnconfigure(0, weight=1)
 
-        manual = ttk.LabelFrame(main, text="Entrada manual de CNPJs", padding=8)
-        manual.grid(row=1, column=0, sticky="ew", pady=(12, 8))
-        manual.columnconfigure(0, weight=1)
+        center = ttk.Frame(body, style="Center.TFrame", padding=(24, 20))
+        center.grid(row=0, column=1, sticky="nsew")
+        center.columnconfigure(0, weight=1)
+        center.rowconfigure(2, weight=1)
 
-        ttk.Label(
-            manual,
-            text="Cole um CNPJ por linha, ou vários separados por vírgula, ponto e vírgula ou espaço.",
-        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
-
-        manual_text_frame = ttk.Frame(manual)
-        manual_text_frame.grid(row=1, column=0, sticky="ew")
-        manual_text_frame.columnconfigure(0, weight=1)
-        manual_text_frame.rowconfigure(0, weight=1)
-
-        self.manual_cnpjs_text = tk.Text(manual_text_frame, height=4, wrap="word")
-        manual_scroll = ttk.Scrollbar(manual_text_frame, orient="vertical", command=self.manual_cnpjs_text.yview)
-        self.manual_cnpjs_text.configure(yscrollcommand=manual_scroll.set)
-        self.manual_cnpjs_text.grid(row=0, column=0, sticky="ew")
-        manual_scroll.grid(row=0, column=1, sticky="ns")
-
-        manual_buttons = ttk.Frame(manual)
-        manual_buttons.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        manual_buttons.columnconfigure(0, weight=1)
-        manual_buttons.columnconfigure(1, weight=1)
-
-        ttk.Button(manual_buttons, text="Carregar CNPJs manuais", command=self._load_manual_rows).grid(
-            row=0, column=0, sticky="ew", padx=(0, 6)
-        )
-        ttk.Button(manual_buttons, text="Limpar campo", command=self._clear_manual_input).grid(
-            row=0, column=1, sticky="ew", padx=(6, 0)
-        )
-
-        action_bar = ttk.Frame(main)
-        action_bar.grid(row=2, column=0, sticky="ew", pady=(12, 8))
-        action_bar.columnconfigure(0, weight=1)
-        action_bar.columnconfigure(1, weight=1)
-
-        document_actions = ttk.LabelFrame(action_bar, text="Ações por documento", padding=8)
-        document_actions.grid(row=0, column=0, sticky="ew")
-        for column in range(3):
-            document_actions.columnconfigure(column, weight=1)
-
-        self.nfe_select_button = ttk.Button(document_actions, text="Marcar NF-e", command=lambda: self._set_document_selection("NF-e", True))
-        self.nfe_select_button.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        self.nfce_select_button = ttk.Button(document_actions, text="Marcar NFC-e", command=lambda: self._set_document_selection("NFC-e", True))
-        self.nfce_select_button.grid(row=0, column=1, sticky="ew", padx=6)
-        self.cte_select_button = ttk.Button(document_actions, text="Marcar CT-e", command=lambda: self._set_document_selection("CT-e", True))
-        self.cte_select_button.grid(row=0, column=2, sticky="ew", padx=(6, 0))
-
-        self.nfe_clear_button = ttk.Button(document_actions, text="Desmarcar NF-e", command=lambda: self._set_document_selection("NF-e", False))
-        self.nfe_clear_button.grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=(6, 0))
-        self.nfce_clear_button = ttk.Button(document_actions, text="Desmarcar NFC-e", command=lambda: self._set_document_selection("NFC-e", False))
-        self.nfce_clear_button.grid(row=1, column=1, sticky="ew", padx=6, pady=(6, 0))
-        self.cte_clear_button = ttk.Button(document_actions, text="Desmarcar CT-e", command=lambda: self._set_document_selection("CT-e", False))
-        self.cte_clear_button.grid(row=1, column=2, sticky="ew", padx=(6, 0), pady=(6, 0))
-
-        execution_actions = ttk.LabelFrame(action_bar, text="Execução", padding=8)
-        execution_actions.grid(row=0, column=1, sticky="ew", padx=(12, 0))
-        execution_actions.columnconfigure(0, weight=1)
-        execution_actions.columnconfigure(1, weight=1)
-
-        self.start_browser_button = ttk.Button(execution_actions, text="Iniciar navegador", command=self._start_browser_if_needed)
-        self.start_browser_button.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        self.execute_button = ttk.Button(execution_actions, text="Executar", command=self._run_selected, state="disabled")
-        self.execute_button.grid(row=0, column=1, sticky="ew", padx=(6, 0))
-
-        content = ttk.Panedwindow(main, orient=tk.HORIZONTAL)
-        content.grid(row=3, column=0, sticky="nsew")
-
-        left = ttk.Labelframe(content, text="CNPJs do anexo", padding=8)
-        right = ttk.Labelframe(content, text="Log da execução", padding=8)
-        content.add(left, weight=3)
-        content.add(right, weight=2)
-
-        self.scrollable_rows = ScrollableFrame(left)
-        self.scrollable_rows.grid(row=0, column=0, sticky="nsew")
-        left.columnconfigure(0, weight=1)
-        left.rowconfigure(0, weight=1)
-
-        self.log_text = tk.Text(right, wrap="word", height=20, state="disabled")
-        log_scroll = ttk.Scrollbar(right, orient="vertical", command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=log_scroll.set)
-        self.log_text.grid(row=0, column=0, sticky="nsew")
-        log_scroll.grid(row=0, column=1, sticky="ns")
+        right = ttk.Frame(body, style="ConsolePanel.TFrame", padding=0)
+        right.grid(row=0, column=2, sticky="nsew")
         right.columnconfigure(0, weight=1)
-        right.rowconfigure(0, weight=1)
+        right.rowconfigure(1, weight=1)
 
-        status = ttk.Label(main, textvariable=self.status_var, anchor="w")
-        status.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        self._build_sidebar(sidebar)
+        self._build_center(center)
+        self._build_console(right)
+
+        footer = ttk.Frame(main, style="App.TFrame", padding=(20, 0, 20, 14))
+        footer.grid(row=2, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+        ttk.Label(footer, textvariable=self.status_var, style="Status.TLabel").grid(row=0, column=0, sticky="ew")
 
     def _browse_spreadsheet(self) -> None:
         path = filedialog.askopenfilename(
@@ -280,6 +422,8 @@ class SigaAutomationGUI:
             messagebox.showerror("SIGA Automação", f"Falha ao carregar CNPJs manuais:\n{exc}")
             return
 
+        if self.input_notebook is not None:
+            self.input_notebook.select(1)
         self._render_rows(spreadsheet_rows, source_label="Entrada manual")
         self.status_var.set(f"CNPJs manuais carregados com {len(spreadsheet_rows)} item(ns).")
 
@@ -287,6 +431,39 @@ class SigaAutomationGUI:
         """Limpa o campo de entrada manual sem alterar a lista já carregada."""
         if self.manual_cnpjs_text is not None:
             self.manual_cnpjs_text.delete("1.0", "end")
+
+    def _clear_loaded_rows(self) -> None:
+        """Remove os CNPJs exibidos na grade sem mexer nas configurações do restante da tela."""
+        for child in self.scrollable_rows.inner.winfo_children():
+            child.destroy()
+        self.selection_rows.clear()
+        self.loaded_count_var.set("Total carregados: 0")
+        self.progress_var.set(0)
+        self.status_var.set("Lista de CNPJs limpa.")
+
+    def _validate_loaded_rows(self) -> None:
+        """Confirma visualmente se há CNPJs disponíveis para seguir com a automação."""
+        if not self.selection_rows:
+            messagebox.showwarning("SIGA Automação", "Carregue pelo menos um CNPJ antes de validar.")
+            return
+        self.status_var.set(f"{len(self.selection_rows)} CNPJ(s) prontos para execução.")
+
+    def _show_help_dialog(self) -> None:
+        """Exibe um passo a passo simples para orientar o uso da ferramenta."""
+        help_text = (
+            "Passo a passo para usar o SIGA Automação:\n\n"
+            "1. Abra a aba 'Importar Planilha' e carregue um arquivo XLSX, ou use 'Entrada Manual' para colar CNPJs.\n"
+            "2. Clique em 'Carregar CNPJs manuais' se estiver usando a entrada digitada.\n"
+            "3. Escolha o mês, ano, documentos e a pasta de saída no painel lateral.\n"
+            "4. Clique em 'Iniciar Navegador' e faça o login manual no SIGA.\n"
+            "5. Quando o navegador estiver autenticado, clique em 'Executar Extração'.\n"
+            "6. Acompanhe o andamento pelo painel de log à direita.\n\n"
+            "Dicas:\n"
+            "- Você pode marcar ou desmarcar NF-e, NFC-e e CT-e antes de executar.\n"
+            "- Se um CNPJ não for localizado, a ferramenta gera um arquivo .txt de aviso e segue para o próximo.\n"
+            "- Os downloads ficam organizados por CNPJ, mês e documento."
+        )
+        messagebox.showinfo("Ajuda - SIGA Automação", help_text)
 
     def _browse_output_dir(self) -> None:
         """Abre o seletor de pasta para o usuario apontar o destino dos arquivos."""
@@ -350,6 +527,8 @@ class SigaAutomationGUI:
             messagebox.showerror("SIGA Automação", f"Falha ao carregar planilha:\n{exc}")
             return
 
+        if self.input_notebook is not None:
+            self.input_notebook.select(0)
         self._render_rows(spreadsheet_rows, source_label=f"Planilha carregada com {len(spreadsheet_rows)} CNPJ(s)")
         self.status_var.set(f"Planilha carregada com {len(spreadsheet_rows)} CNPJ(s).")
 
@@ -358,6 +537,7 @@ class SigaAutomationGUI:
         for child in self.scrollable_rows.inner.winfo_children():
             child.destroy()
         self.selection_rows.clear()
+        self.loaded_count_var.set(f"Total carregados: {len(spreadsheet_rows)}")
 
         table = ttk.Frame(self.scrollable_rows.inner)
         table.grid(row=0, column=0, sticky="nsew")
@@ -491,6 +671,7 @@ class SigaAutomationGUI:
             self.start_browser_button.state(["disabled"])
         if self.execute_button is not None:
             self.execute_button.state(["disabled"])
+        self.progress_var.set(0)
         self.status_var.set("Execução iniciada. Aguarde a conclusão no navegador e no log.")
         self._append_log_line("Execução iniciada pela interface gráfica.")
 
@@ -504,6 +685,7 @@ class SigaAutomationGUI:
             finally:
                 self.root.after(0, lambda: self._set_controls_state("normal"))
                 self.root.after(0, self._restore_browser_controls_state)
+                self.root.after(0, lambda: self.progress_var.set(100))
                 self.root.after(0, lambda: self.status_var.set("Execução finalizada."))
 
         self._worker_thread = threading.Thread(target=worker, daemon=True)

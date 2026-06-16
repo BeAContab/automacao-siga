@@ -32,7 +32,7 @@ Crie ou edite a planilha de entrada chamada `cnpj.xlsx`.
 *Nota: Os CNPJs devem ser preservados com 14 dígitos, incluindo zeros à esquerda.*
 
 ### 2. Interface Gráfica (Recomendado)
-A forma mais amigável de utilizar o sistema. Permite carregar planilhas, inserir CNPJs manualmente, selecionar diretórios de saída e visualizar logs em tempo real.
+A forma mais amigável de utilizar o sistema. A GUI foi organizada no estilo de dashboard corporativo do `design-model`, permitindo carregar planilhas, inserir CNPJs manualmente, selecionar diretórios de saída e visualizar logs em tempo real. O botão **Ajuda** abre um pop-up com o passo a passo de uso.
 
 ```powershell
 .\.venv\Scripts\python.exe .\main.py --gui
@@ -41,11 +41,11 @@ A forma mais amigável de utilizar o sistema. Permite carregar planilhas, inseri
 ```
 
 **Passo a passo na GUI:**
-1. Carregue sua planilha `cnpj.xlsx` ou cole os CNPJs manualmente na área própria da tela.
+1. Carregue sua planilha `cnpj.xlsx` ou use a aba **Entrada Manual** para colar os CNPJs.
 2. Clique em **Carregar CNPJs manuais** se preferir usar a entrada digitada.
-3. (Opcional) Escolha a **Pasta de saída**. Por padrão, os arquivos vão para a pasta `saida/`.
-4. Clique em **Iniciar navegador** e realize o login manual no portal do SIGA.
-5. Após o login concluído, clique em **Executar** para iniciar as extrações.
+3. Ajuste mês, ano, documentos e pasta de saída no painel lateral.
+4. Clique em **Iniciar Navegador** e realize o login manual no portal do SIGA.
+5. Após o login concluído, clique em **Executar Extração** para iniciar as extrações.
 
 ### 3. Modo Terminal / CLI
 Para operações rápidas ou integrações. O terminal guiará você por parâmetros como Mês, Ano e Documentos desejados.

@@ -1,5 +1,29 @@
 # Changelog
 
+## [2026-06-16]
+
+### Alterado
+- Arquivos:
+  - src/gui.py
+  - README.md
+- Motivo: remover elementos visuais auxiliares que não faziam parte do fluxo principal e transformar o botão de ajuda em um guia prático para o usuário.
+- Impacto: a interface ficou mais limpa e o usuário passa a receber instruções objetivas de uso diretamente na aplicação.
+
+### Alterado
+- Arquivos:
+  - src/gui.py
+  - README.md
+  - PRD.md
+- Motivo: o visual da interface foi alinhado ao `design-model`, com layout em três colunas, painel lateral de parâmetros, abas de entrada e console escuro à direita.
+- Impacto: a GUI ficou mais próxima de um dashboard corporativo, com navegação mais clara e melhor separação entre configuração, entrada de CNPJs e acompanhamento da execução.
+
+### Documentação
+- Arquivos:
+  - PRD.md
+  - CHANGELOG.md
+- Motivo: formalizar o produto em um documento de requisitos com escopo, objetivos, riscos e criterios de aceite.
+- Impacto: facilita a manutencao, a evolucao do software e a comunicacao do valor do produto.
+
 ## [2026-06-12]
 
 ### Alterado
