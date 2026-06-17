@@ -1,5 +1,53 @@
 # Changelog
 
+## [2026-06-17]
+
+### Corrigido
+- Arquivos:
+  - src/extraction/siga_extractor.py
+- Motivo: o acesso a `Downloads Assincronos` ainda dependia do ultimo CNPJ da fila ter sido localizado, o que quebrava o lote quando a ultima pesquisa retornava vazio.
+- Impacto: a automacao agora identifica o estado atual da pagina, reutiliza o ultimo CNPJ aberto com sucesso como fallback de navegacao e continua o fluxo de downloads mesmo se a ultima empresa nao for encontrada.
+
+### Corrigido
+- Arquivos:
+  - src/extraction/siga_extractor.py
+- Motivo: uma chamada do fluxo de detalhamento por relatórios ainda usava a assinatura antiga de `_build_pending_request()` e não repassava `taxpayer_folder_name`.
+- Impacto: a automação deixa de falhar com `TypeError` logo após solicitar o detalhamento e volta a montar corretamente os downloads pendentes com a pasta `COD - EMPRESA - CNPJ`.
+
+### Alterado
+- Arquivos:
+  - src/gui.py
+- Motivo: simplificar a lateral da interface removendo o botão `Padrão` e padronizar o texto da área de saída para `Pasta de Saída`.
+- Impacto: a sidebar ficou mais limpa e a nomenclatura visual da aplicação ficou mais direta para o usuário.
+
+### Alterado
+- Arquivos:
+  - src/gui.py
+  - siga-automacao-gui.spec
+  - installer/siga-automacao.iss
+- Motivo: compactar a grade para exibir NF-e, NFC-e e CT-e ao mesmo tempo, centralizar o título no topo e integrar os novos assets visuais ao executável e ao instalador.
+- Impacto: a interface ficou mais equilibrada visualmente e o pacote gerado passa a carregar ícone e logo próprios.
+
+### Alterado
+- Arquivos:
+  - src/gui.py
+- Motivo: reduzir a logo do cabeçalho para proporção de identidade visual e reposicioná-la à esquerda, mantendo o título centralizado e a ação de ajuda à direita.
+- Impacto: o topo da aplicação ganhou hierarquia visual mais profissional, sem competir com a área principal da interface.
+
+### Alterado
+- Arquivos:
+  - src/gui.py
+  - src/extraction/spreadsheet.py
+  - src/extraction/siga_extractor.py
+- Motivo: ajustar a interface para sugerir o mês anterior por padrão, manter o ano atual como referência, exibir `COD` e `EMPRESA` na listagem e organizar as pastas de saída com `COD - EMPRESA - CNPJ`.
+- Impacto: a experiência inicial ficou mais automática e a estrutura de saída passou a refletir melhor os dados reais da planilha.
+
+### Documentação
+- Arquivos:
+  - README.md
+- Motivo: atualizar a descrição do fluxo de uso e do padrão de organização dos arquivos gerados.
+- Impacto: a documentação ficou alinhada ao comportamento atual da aplicação.
+
 ## [2026-06-16]
 
 ### Alterado

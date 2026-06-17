@@ -2,7 +2,7 @@
 
 **Otimize seu tempo e elimine o trabalho manual na extração de arquivos fiscais.**
 
-O **SIGA Automação** é uma solução corporativa de alta performance desenvolvida para interagir com o portal SIGA (Sefaz-CE). Com ele, você automatiza a extração em lote de documentos fiscais (NF-e, NFC-e e CT-e) a partir de uma lista de CNPJs, trazendo eficiência, segurança e confiabilidade para a sua rotina contábil e fiscal.
+O **SIGA Automação** é uma solução corporativa de alta performance desenvolvida para interagir com o portal SIGA (Sefaz-CE). Com ele, você automatiza a extração em lote de documentos fiscais (NF-e, NFC-e e CT-e) a partir de uma lista de empresas, trazendo eficiência, segurança e confiabilidade para a sua rotina contábil e fiscal.
 
 ---
 
@@ -10,7 +10,7 @@ O **SIGA Automação** é uma solução corporativa de alta performance desenvol
 
 - **Ganho de Produtividade:** Elimina horas de navegação repetitiva e cliques manuais.
 - **Precisão e Confiabilidade:** Reduz drasticamente o erro humano na seleção e download de arquivos XML/PDF.
-- **Integração Perfeita:** Funciona a partir de planilhas `.xlsx` padronizadas, extraindo arquivos automaticamente para pastas organizadas por CNPJ, mês e tipo de documento.
+- **Integração Perfeita:** Funciona a partir de planilhas `.xlsx` padronizadas, extraindo arquivos automaticamente para pastas organizadas por `COD - EMPRESA - CNPJ`, mês e tipo de documento.
 - **Flexibilidade de Interface:** Oferece tanto uma Interface Gráfica (GUI) intuitiva para usuários de negócio, quanto uma Interface de Linha de Comando (CLI) para integrações e uso avançado.
 - **Segurança de Dados:** Mantém o controle total no ambiente local do usuário, utilizando perfis dedicados de navegador e respeitando as políticas de segurança corporativas.
 
@@ -30,6 +30,7 @@ O **SIGA Automação** é uma solução corporativa de alta performance desenvol
 ### 1. Preparação dos Dados
 Crie ou edite a planilha de entrada chamada `cnpj.xlsx`.
 *Nota: Os CNPJs devem ser preservados com 14 dígitos, incluindo zeros à esquerda.*
+*Layout recomendado: colunas `COD`, `EMPRESA` e `CNPJ`.*
 
 ### 2. Interface Gráfica (Recomendado)
 A forma mais amigável de utilizar o sistema. A GUI foi organizada no estilo de dashboard corporativo do `design-model`, permitindo carregar planilhas, inserir CNPJs manualmente, selecionar diretórios de saída e visualizar logs em tempo real. O botão **Ajuda** abre um pop-up com o passo a passo de uso.
@@ -64,7 +65,7 @@ Para operações rápidas ou integrações. O terminal guiará você por parâme
 
 ### Organização dos Arquivos Gerados
 Os downloads são estruturados automaticamente no seguinte formato:
-`<pasta-escolhida>/<cnpj>/<mes>/<documento>/`
+`<pasta-escolhida>/<COD - EMPRESA - CNPJ>/<mes>/<documento>/`
 *Dica de validação: Compare as saídas geradas com `testes.csv`, que serve de referência manual para extração de NFC-e/Emissor.*
 
 ### Certificados Digitais

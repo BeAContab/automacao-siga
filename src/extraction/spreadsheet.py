@@ -15,19 +15,24 @@ class SpreadsheetRow:
     """Representa uma linha válida da planilha já normalizada para processamento."""
     row_number: int
     cnpj: str
+    cod: str = ""
+    empresa: str = ""
 
 
 def load_cnpjs_from_xlsx(path: Path) -> list[SpreadsheetRow]:
-    """Localiza a coluna `cnpj`, normaliza os valores e devolve apenas linhas válidas."""
+    """Localiza as colunas da planilha, normaliza os valores e devolve apenas linhas válidas."""
     workbook = load_workbook(path, read_only=True, data_only=True)
     sheet = workbook.active
 
     header_map: dict[str, int] = {}
     header_row_number = 0
+    required_document_headers = {"cnpj", "cgf"}
+    cod_headers = {"cod", "codigo", "código"}
+    company_headers = {"empresa", "nome empresa", "razao social", "razão social", "razao social completa"}
     # A busca do cabeçalho aceita acentos e variações simples de caixa.
     for row_number, row in enumerate(sheet.iter_rows(values_only=True), start=1):
         normalized_cells = [_normalize_header(cell) for cell in row]
-        if "cnpj" in normalized_cells or "cgf" in normalized_cells:
+        if any(cell in normalized_cells for cell in required_document_headers | cod_headers | company_headers):
             header_row_number = row_number
             for index, value in enumerate(normalized_cells):
                 if value:
@@ -39,6 +44,8 @@ def load_cnpjs_from_xlsx(path: Path) -> list[SpreadsheetRow]:
         raise ValueError("A planilha precisa conter uma coluna chamada 'cnpj'.")
 
     document_index = header_map.get("cnpj", header_map.get("cgf"))
+    cod_index = _find_header_index(header_map, cod_headers)
+    company_index = _find_header_index(header_map, company_headers)
     rows: list[SpreadsheetRow] = []
     # Cada CNPJ é lido já sem caracteres de formatação para bater com a forma canônica usada no SIGA.
     for row_number, row in enumerate(
@@ -49,7 +56,16 @@ def load_cnpjs_from_xlsx(path: Path) -> list[SpreadsheetRow]:
         digits = _normalize_document(value)
         if not digits:
             continue
-        rows.append(SpreadsheetRow(row_number=row_number, cnpj=digits))
+        cod_value = _normalize_free_text(row[cod_index]) if cod_index is not None and cod_index < len(row) else ""
+        company_value = _normalize_free_text(row[company_index]) if company_index is not None and company_index < len(row) else ""
+        rows.append(
+            SpreadsheetRow(
+                row_number=row_number,
+                cnpj=digits,
+                cod=cod_value,
+                empresa=company_value,
+            )
+        )
 
     workbook.close()
 
@@ -94,6 +110,22 @@ def _normalize_document(value: object) -> str:
     if not text:
         return ""
     return text.zfill(14) if len(text) <= 14 else text
+
+
+def _normalize_free_text(value: object) -> str:
+    """Preserva o texto útil da célula e remove apenas espaços excedentes."""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _find_header_index(header_map: dict[str, int], aliases: set[str]) -> int | None:
+    """Localiza o primeiro índice disponível para um grupo de aliases equivalentes."""
+    for alias in aliases:
+        index = header_map.get(alias)
+        if index is not None:
+            return index
+    return None
 
 
 def _extract_documents_from_text(value: object) -> list[str]:

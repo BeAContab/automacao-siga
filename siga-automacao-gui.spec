@@ -5,7 +5,11 @@ a = Analysis(
     ['main_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        ('images/logo/logo.png', 'images/logo'),
+        ('images/icons/siga-automacao.ico', 'images/icons'),
+        ('images/icons/siga-automacao-32x32.png', 'images/icons'),
+    ],
     hiddenimports=[
         'selenium.webdriver.common.action_chains',
         'selenium.webdriver.common.actions.action_builder',
@@ -39,6 +43,7 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
+    icon='images/icons/siga-automacao.ico',
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

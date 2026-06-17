@@ -10,6 +10,7 @@ AppVerName={#MyAppName} {#MyAppVersion}
 DefaultDirName={localappdata}\Programs\SIGA Automacao
 DefaultGroupName=SIGA Automacao
 AllowNoIcons=yes
+SetupIconFile=..\images\icons\siga-automacao.ico
 OutputDir=..\dist\installer
 OutputBaseFilename=SIGA-Automacao-Setup
 Compression=lzma
@@ -28,9 +29,9 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{userdesktop}\SIGA Automacao"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
-Name: "{userprograms}\SIGA Automacao\SIGA Automacao"; Filename: "{app}\{#MyAppExeName}"
-Name: "{userprograms}\SIGA Automacao\Desinstalar SIGA Automacao"; Filename: "{uninstallexe}"
+Name: "{userdesktop}\SIGA Automacao"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "..\images\icons\siga-automacao.ico"
+Name: "{userprograms}\SIGA Automacao\SIGA Automacao"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "..\images\icons\siga-automacao.ico"
+Name: "{userprograms}\SIGA Automacao\Desinstalar SIGA Automacao"; Filename: "{uninstallexe}"; IconFilename: "..\images\icons\siga-automacao.ico"
 
 [Tasks]
 Name: "desktopicon"; Description: "Criar atalho na area de trabalho"; GroupDescription: "Atalhos adicionais:"

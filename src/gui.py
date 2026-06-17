@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import logging
 import queue
+import sys
 import time
 import threading
 import tkinter as tk
@@ -104,16 +105,15 @@ class SigaAutomationGUI:
         self.spreadsheet_path_var = tk.StringVar(value=initial_spreadsheet or "cnpj.xlsx")
         self._default_output_dir = Path(self.settings.output_dir)
         self.output_dir_var = tk.StringVar(value=str(self.settings.output_dir))
-        current_month = MONTH_OPTIONS[max(0, min(11, time.localtime().tm_mon - 1))]
-        self.month_var = tk.StringVar(value=initial_month or current_month)
+        self.month_var = tk.StringVar(value=initial_month or self._default_previous_month())
         self.year_var = tk.StringVar(value=initial_year or str(time.localtime().tm_year))
         self.status_var = tk.StringVar(value="Carregue uma planilha XLSX ou informe CNPJs manualmente para iniciar.")
-        self.loaded_count_var = tk.StringVar(value="Total carregados: 0")
+        self.loaded_count_var = tk.StringVar(value="Total carregadas: 0")
 
         self.selection_rows: list[RowSelectionWidgets] = []
         self._worker_thread: threading.Thread | None = None
         self._stop_requested = False
-        self._row_columns = (260, 96, 96, 96)
+        self._row_columns = (72, 220, 84, 84, 84)
         self._browser_started = False
         self.start_browser_button: ttk.Button | None = None
         self.execute_button: ttk.Button | None = None
@@ -125,7 +125,13 @@ class SigaAutomationGUI:
         self.nfe_doc_var = tk.BooleanVar(value=True)
         self.nfce_doc_var = tk.BooleanVar(value=True)
         self.cte_doc_var = tk.BooleanVar(value=True)
+        self._window_icon_image: tk.PhotoImage | None = None
+        self._logo_image: tk.PhotoImage | None = None
+        self._app_icon_path = self._resolve_asset_path("images", "icons", "siga-automacao.ico")
+        self._window_icon_photo_path = self._resolve_asset_path("images", "icons", "siga-automacao-32x32.png")
+        self._logo_path = self._resolve_asset_path("images", "logo", "logo.png")
 
+        self._configure_window_branding()
         self._build_ui()
         self._load_spreadsheet_rows(Path(self.spreadsheet_path_var.get()))
         self.root.after(100, self._drain_log_queue)
@@ -134,6 +140,42 @@ class SigaAutomationGUI:
     def run(self) -> None:
         """Executa o loop principal da interface."""
         self.root.mainloop()
+
+    def _default_previous_month(self) -> str:
+        """Calcula o mês anterior ao mês atual para sugerir a referência padrão."""
+        current_month = time.localtime().tm_mon
+        previous_month_index = (current_month - 2) % len(MONTH_OPTIONS)
+        return MONTH_OPTIONS[previous_month_index]
+
+    def _resolve_asset_path(self, *parts: str) -> Path:
+        """Resolve caminhos de assets tanto no código-fonte quanto no executável empacotado."""
+        base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+        return base_dir.joinpath(*parts)
+
+    def _configure_window_branding(self) -> None:
+        """Aplica o ícone principal da aplicação e prepara a logo usada no cabeçalho."""
+        try:
+            if self._app_icon_path.exists():
+                self.root.iconbitmap(default=str(self._app_icon_path))
+        except Exception:  # noqa: BLE001
+            LOGGER.debug("Nao foi possivel aplicar o iconbitmap da janela principal.", exc_info=True)
+
+        try:
+            if self._window_icon_photo_path.exists():
+                self._window_icon_image = tk.PhotoImage(file=str(self._window_icon_photo_path))
+                self.root.iconphoto(True, self._window_icon_image)
+        except Exception:  # noqa: BLE001
+            LOGGER.debug("Nao foi possivel carregar o iconphoto da aplicacao.", exc_info=True)
+
+        try:
+            if self._logo_path.exists():
+                raw_logo = tk.PhotoImage(file=str(self._logo_path))
+                # A logo original e quadrada; reduzimos para uma altura de cabecalho
+                # mais discreta sem distorcer a proporcao.
+                reduction_factor = max(1, round(raw_logo.height() / 62))
+                self._logo_image = raw_logo.subsample(reduction_factor, reduction_factor)
+        except Exception:  # noqa: BLE001
+            LOGGER.debug("Nao foi possivel carregar a logo da aplicacao.", exc_info=True)
 
     def _apply_theme(self) -> None:
         """Configura a aparência base da interface com uma paleta corporativa clara."""
@@ -225,14 +267,13 @@ class SigaAutomationGUI:
         ttk.Checkbutton(docs, text="NFC-e (Consumidor)", style="Panel.TCheckbutton", variable=self.nfce_doc_var, command=lambda: self._set_document_selection("NFC-e", self.nfce_doc_var.get())).grid(row=1, column=0, sticky="w", pady=4)
         ttk.Checkbutton(docs, text="CT-e (Transporte)", style="Panel.TCheckbutton", variable=self.cte_doc_var, command=lambda: self._set_document_selection("CT-e", self.cte_doc_var.get())).grid(row=2, column=0, sticky="w", pady=4)
 
-        ttk.Label(parent, text="Diretório de Saída", style="SidebarTitle.TLabel").grid(row=7, column=0, sticky="w", pady=(20, 6))
+        ttk.Label(parent, text="Pasta de Saída", style="SidebarTitle.TLabel").grid(row=7, column=0, sticky="w", pady=(20, 6))
         output_row = ttk.Frame(parent, style="Sidebar.TFrame")
         output_row.grid(row=8, column=0, sticky="ew")
         output_row.columnconfigure(0, weight=1)
         output_entry = ttk.Entry(output_row, textvariable=self.output_dir_var)
         output_entry.grid(row=0, column=0, sticky="ew")
         ttk.Button(output_row, text="Browse", style="Action.TButton", command=self._browse_output_dir).grid(row=0, column=1, padx=(8, 0))
-        ttk.Button(parent, text="Padrão", style="Ghost.TButton", command=self._reset_output_dir).grid(row=9, column=0, sticky="ew", pady=(8, 0))
 
     def _build_center(self, parent: ttk.Frame) -> None:
         """Monta o conteúdo central com entrada, lista de CNPJs e botões de ação."""
@@ -241,7 +282,7 @@ class SigaAutomationGUI:
         header.columnconfigure(0, weight=1)
         header.columnconfigure(1, weight=0)
 
-        ttk.Label(header, text="Controle de CNPJs", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(header, text="Controle de empresas", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(header, textvariable=self.loaded_count_var, style="CountChip.TLabel").grid(row=0, column=1, sticky="e")
 
         card = ttk.Frame(parent, style="Card.TFrame", padding=0)
@@ -257,7 +298,7 @@ class SigaAutomationGUI:
         self.input_notebook.add(manual_tab, text="Entrada Manual")
 
         import_tab.columnconfigure(0, weight=1)
-        ttk.Label(import_tab, text="Selecione uma planilha XLSX para carregar os CNPJs.", style="Body.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        ttk.Label(import_tab, text="Selecione uma planilha XLSX para carregar as empresas.", style="Body.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
         import_row = ttk.Frame(import_tab, style="Card.TFrame")
         import_row.grid(row=1, column=0, sticky="ew")
         import_row.columnconfigure(0, weight=1)
@@ -297,7 +338,7 @@ class SigaAutomationGUI:
         footer_actions.columnconfigure(0, weight=1)
         footer_actions.columnconfigure(1, weight=1)
         ttk.Button(footer_actions, text="Limpar Lista", style="Danger.TButton", command=self._clear_loaded_rows).grid(row=0, column=0, sticky="e", padx=(0, 8))
-        ttk.Button(footer_actions, text="Validar CNPJs", style="Primary.TButton", command=self._validate_loaded_rows).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Button(footer_actions, text="Validar empresas", style="Primary.TButton", command=self._validate_loaded_rows).grid(row=0, column=1, sticky="w", padx=(8, 0))
 
     def _build_console(self, parent: ttk.Frame) -> None:
         """Monta o painel escuro de fluxo e log da operação."""
@@ -349,17 +390,25 @@ class SigaAutomationGUI:
         main.columnconfigure(0, weight=1)
         main.rowconfigure(1, weight=1)
 
-        header = ttk.Frame(main, style="Topbar.TFrame", padding=(20, 14))
+        header = ttk.Frame(main, style="Topbar.TFrame", padding=(24, 12))
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(0, weight=1)
         header.columnconfigure(1, weight=0)
+        header.columnconfigure(2, weight=1)
+        header.grid_columnconfigure(0, uniform="header")
+        header.grid_columnconfigure(2, uniform="header")
 
+        brand_box = ttk.Frame(header, style="Topbar.TFrame")
+        brand_box.grid(row=0, column=0, sticky="w")
         title_box = ttk.Frame(header, style="Topbar.TFrame")
-        title_box.grid(row=0, column=0, sticky="w")
-        ttk.Label(title_box, text="SIGA Automação", style="BrandTitle.TLabel").grid(row=0, column=0, sticky="w")
+        title_box.grid(row=0, column=1, sticky="n")
+
+        if self._logo_image is not None:
+            ttk.Label(brand_box, image=self._logo_image).grid(row=0, column=0, sticky="w")
+        ttk.Label(title_box, text="SIGA Automação", style="BrandTitle.TLabel", anchor="center").grid(row=0, column=1, sticky="n")
 
         header_actions = ttk.Frame(header, style="Topbar.TFrame")
-        header_actions.grid(row=0, column=1, sticky="e")
+        header_actions.grid(row=0, column=2, sticky="e")
         ttk.Button(header_actions, text="Ajuda", style="Ghost.TButton", command=self._show_help_dialog).grid(row=0, column=0)
 
         body = ttk.Frame(main, style="App.TFrame")
@@ -437,16 +486,16 @@ class SigaAutomationGUI:
         for child in self.scrollable_rows.inner.winfo_children():
             child.destroy()
         self.selection_rows.clear()
-        self.loaded_count_var.set("Total carregados: 0")
+        self.loaded_count_var.set("Total carregadas: 0")
         self.progress_var.set(0)
-        self.status_var.set("Lista de CNPJs limpa.")
+        self.status_var.set("Lista de empresas limpa.")
 
     def _validate_loaded_rows(self) -> None:
         """Confirma visualmente se há CNPJs disponíveis para seguir com a automação."""
         if not self.selection_rows:
-            messagebox.showwarning("SIGA Automação", "Carregue pelo menos um CNPJ antes de validar.")
+            messagebox.showwarning("SIGA Automação", "Carregue pelo menos uma empresa antes de validar.")
             return
-        self.status_var.set(f"{len(self.selection_rows)} CNPJ(s) prontos para execução.")
+        self.status_var.set(f"{len(self.selection_rows)} empresa(s) prontas para execução.")
 
     def _show_help_dialog(self) -> None:
         """Exibe um passo a passo simples para orientar o uso da ferramenta."""
@@ -460,8 +509,8 @@ class SigaAutomationGUI:
             "6. Acompanhe o andamento pelo painel de log à direita.\n\n"
             "Dicas:\n"
             "- Você pode marcar ou desmarcar NF-e, NFC-e e CT-e antes de executar.\n"
-            "- Se um CNPJ não for localizado, a ferramenta gera um arquivo .txt de aviso e segue para o próximo.\n"
-            "- Os downloads ficam organizados por CNPJ, mês e documento."
+            "- Se uma empresa não for localizada, a ferramenta gera um arquivo .txt de aviso e segue para a próxima.\n"
+            "- Os downloads ficam organizados por COD, EMPRESA, CNPJ, mês e documento."
         )
         messagebox.showinfo("Ajuda - SIGA Automação", help_text)
 
@@ -529,34 +578,35 @@ class SigaAutomationGUI:
 
         if self.input_notebook is not None:
             self.input_notebook.select(0)
-        self._render_rows(spreadsheet_rows, source_label=f"Planilha carregada com {len(spreadsheet_rows)} CNPJ(s)")
-        self.status_var.set(f"Planilha carregada com {len(spreadsheet_rows)} CNPJ(s).")
+        self._render_rows(spreadsheet_rows, source_label=f"Planilha carregada com {len(spreadsheet_rows)} empresa(s)")
+        self.status_var.set(f"Planilha carregada com {len(spreadsheet_rows)} empresa(s).")
 
     def _render_rows(self, spreadsheet_rows: list[SpreadsheetRow], source_label: str) -> None:
         """Atualiza a lista de CNPJs exibida mantendo o alinhamento da grade."""
         for child in self.scrollable_rows.inner.winfo_children():
             child.destroy()
         self.selection_rows.clear()
-        self.loaded_count_var.set(f"Total carregados: {len(spreadsheet_rows)}")
+        self.loaded_count_var.set(f"Total carregadas: {len(spreadsheet_rows)}")
 
         table = ttk.Frame(self.scrollable_rows.inner)
         table.grid(row=0, column=0, sticky="nsew")
         table.columnconfigure(0, weight=1)
 
-        ttk.Label(table, text="Marque os CNPJs e as abas que deseja processar.").grid(
-            row=0, column=0, columnspan=4, sticky="w", pady=(0, 8)
+        ttk.Label(table, text="Marque as empresas e as abas que deseja processar.").grid(
+            row=0, column=0, columnspan=5, sticky="w", pady=(0, 8)
         )
         ttk.Label(table, text=source_label, foreground="#555555").grid(
-            row=1, column=0, columnspan=4, sticky="w", pady=(0, 6)
+            row=1, column=0, columnspan=5, sticky="w", pady=(0, 6)
         )
         ttk.Separator(table, orient="horizontal").grid(
-            row=2, column=0, columnspan=4, sticky="ew", pady=(0, 8)
+            row=2, column=0, columnspan=5, sticky="ew", pady=(0, 8)
         )
 
         header = self._create_selection_row(
             parent=table,
             row_index=3,
-            cnpj_text="CNPJ",
+            cod_text="COD",
+            empresa_text="EMPRESA",
             nfe_widget=self._create_header_cell,
             nfce_widget=self._create_header_cell,
             cte_widget=self._create_header_cell,
@@ -572,7 +622,8 @@ class SigaAutomationGUI:
             row_frame = self._create_selection_row(
                 parent=table,
                 row_index=index,
-                cnpj_text=self._format_cnpj(spreadsheet_row.cnpj),
+                cod_text=spreadsheet_row.cod or "SEM-COD",
+                empresa_text=spreadsheet_row.empresa or "SEM-EMPRESA",
                 nfe_widget=lambda parent: ttk.Checkbutton(parent, variable=nfe_var),
                 nfce_widget=lambda parent: ttk.Checkbutton(parent, variable=nfce_var),
                 cte_widget=lambda parent: ttk.Checkbutton(parent, variable=cte_var),
@@ -591,8 +642,8 @@ class SigaAutomationGUI:
             )
 
         if not spreadsheet_rows:
-            ttk.Label(table, text="Nenhum CNPJ disponivel.", foreground="#aa0000").grid(
-                row=4, column=0, columnspan=4, sticky="w", pady=(8, 0)
+            ttk.Label(table, text="Nenhuma empresa disponivel.", foreground="#aa0000").grid(
+                row=4, column=0, columnspan=5, sticky="w", pady=(8, 0)
             )
 
     def _select_all_documents(self) -> None:
@@ -717,7 +768,7 @@ class SigaAutomationGUI:
             self._append_log_line("")
             self._append_log_line("Processo concluído.")
             self._append_log_line(f"Contribuintes processados: {len(results)} de {len(selected_rows)}")
-            self._append_log_line(f"CNPJs nao encontrados: {not_found_count}")
+            self._append_log_line(f"Empresas nao encontradas: {not_found_count}")
             self._append_log_line(f"Detalhamentos baixados: {download_count}")
             if results:
                 self._append_log_line(f"Pasta da última saída: {results[-1].taxpayer_folder}")
@@ -784,7 +835,8 @@ class SigaAutomationGUI:
         self,
         parent: ttk.Frame,
         row_index: int,
-        cnpj_text: str,
+        cod_text: str,
+        empresa_text: str,
         nfe_widget,
         nfce_widget,
         cte_widget,
@@ -792,10 +844,11 @@ class SigaAutomationGUI:
     ) -> ttk.Frame:
         """Cria uma linha fixa da grade com células alinhadas e tamanhos previsíveis."""
         row_frame = ttk.Frame(parent)
-        row_frame.columnconfigure(0, minsize=self._row_columns[0], weight=1)
-        row_frame.columnconfigure(1, minsize=self._row_columns[1], weight=0)
+        row_frame.columnconfigure(0, minsize=self._row_columns[0], weight=0)
+        row_frame.columnconfigure(1, minsize=self._row_columns[1], weight=1)
         row_frame.columnconfigure(2, minsize=self._row_columns[2], weight=0)
         row_frame.columnconfigure(3, minsize=self._row_columns[3], weight=0)
+        row_frame.columnconfigure(4, minsize=self._row_columns[4], weight=0)
 
         cells = []
         for column, width in enumerate(self._row_columns):
@@ -806,17 +859,22 @@ class SigaAutomationGUI:
 
         ttk.Label(
             cells[0],
-            text=cnpj_text,
+            text=cod_text,
+            anchor="center",
+        ).pack(fill="x", padx=4, pady=2)
+        ttk.Label(
+            cells[1],
+            text=empresa_text,
             anchor="w" if not is_header else "center",
         ).pack(fill="x", padx=4, pady=2)
 
         if is_header:
-            for index, label in enumerate(("NF-e", "NFC-e", "CT-e"), start=1):
+            for index, label in enumerate(("NF-e", "NFC-e", "CT-e"), start=2):
                 ttk.Label(cells[index], text=label, anchor="center").pack(expand=True, fill="both")
         else:
-            nfe_widget(cells[1]).pack(expand=True)
-            nfce_widget(cells[2]).pack(expand=True)
-            cte_widget(cells[3]).pack(expand=True)
+            nfe_widget(cells[2]).pack(expand=True)
+            nfce_widget(cells[3]).pack(expand=True)
+            cte_widget(cells[4]).pack(expand=True)
 
         return row_frame
 

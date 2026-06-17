@@ -69,6 +69,7 @@ class PendingDetailRequest:
     taxpayer_cnpj: str
     taxpayer_document: str
     month_reference: str
+    taxpayer_folder_name: str
 
 
 @dataclass(slots=True)
@@ -197,15 +198,19 @@ class SigaContributorExtractor:
 
         results: list[BatchExtractionResult] = []
         pending_requests_by_row_number: dict[int, list[PendingDetailRequest]] = {}
+        taxpayer_folder_names_by_row_number: dict[int, str] = {}
         all_pending_requests: list[PendingDetailRequest] = []
         not_found_row_numbers: set[int] = set()
         prebuilt_results_by_row_number: dict[int, BatchExtractionResult] = {}
+        last_successful_taxpayer_cnpj: str | None = None
         page = context.pages[0] if context.pages else context.new_page()
         page = self._ensure_authenticated(page, context)
 
         for spreadsheet_row in spreadsheet_rows:
             # Cada linha da planilha vira uma busca independente dentro do SIGA.
             LOGGER.info("Processando o CNPJ %s da linha %s da planilha", spreadsheet_row.cnpj, spreadsheet_row.row_number)
+            taxpayer_folder_name = self._build_taxpayer_folder_name(spreadsheet_row)
+            taxpayer_folder_names_by_row_number[spreadsheet_row.row_number] = taxpayer_folder_name
             try:
                 self._open_taxpayer_from_home(page, spreadsheet_row.cnpj)
             except TaxpayerNotFoundError as exc:
@@ -214,6 +219,7 @@ class SigaContributorExtractor:
                     cgf=spreadsheet_row.cnpj,
                     month_reference=normalized_month,
                     message=str(exc),
+                    taxpayer_folder_name=taxpayer_folder_name,
                 )
                 prebuilt_results_by_row_number[spreadsheet_row.row_number] = BatchExtractionResult(
                     cnpj=spreadsheet_row.cnpj,
@@ -227,6 +233,8 @@ class SigaContributorExtractor:
                 pending_requests_by_row_number[spreadsheet_row.row_number] = []
                 not_found_row_numbers.add(spreadsheet_row.row_number)
                 continue
+            # A Central de Downloads so fica acessivel dentro de um contribuinte valido.
+            last_successful_taxpayer_cnpj = spreadsheet_row.cnpj
             tabs_for_row = selected_tabs
             if selected_tabs_by_row_number is not None:
                 tabs_for_row = selected_tabs_by_row_number.get(spreadsheet_row.row_number)
@@ -239,6 +247,7 @@ class SigaContributorExtractor:
                 spreadsheet_row.cnpj,
                 normalized_month,
                 normalized_year,
+                taxpayer_folder_name,
                 tabs_for_row,
             )
             pending_requests_by_row_number[spreadsheet_row.row_number] = pending_requests
@@ -251,7 +260,12 @@ class SigaContributorExtractor:
                 len(spreadsheet_rows),
                 len(all_pending_requests),
             )
-            detail_paths = self._download_pending_detail_requests(page, all_pending_requests)
+            detail_paths = self._download_pending_detail_requests(
+                page,
+                all_pending_requests,
+                context=context,
+                fallback_taxpayer_cnpj=last_successful_taxpayer_cnpj,
+            )
 
         for spreadsheet_row in spreadsheet_rows:
             if spreadsheet_row.row_number in not_found_row_numbers:
@@ -274,7 +288,10 @@ class SigaContributorExtractor:
                 BatchExtractionResult(
                     cnpj=spreadsheet_row.cnpj,
                     month_reference=normalized_month,
-                    taxpayer_folder=self._build_taxpayer_output_dir(spreadsheet_row.cnpj, normalized_month),
+                    taxpayer_folder=self._build_taxpayer_output_dir(
+                        taxpayer_folder_names_by_row_number[spreadsheet_row.row_number],
+                        normalized_month,
+                    ),
                     fiscal_results=fiscal_results,
                     final_url=page.url,
                     status="completed_with_downloads" if fiscal_results else "completed_without_downloads",
@@ -370,6 +387,7 @@ class SigaContributorExtractor:
         cgf: str,
         month_reference: str,
         reference_year: str,
+        taxpayer_folder_name: str,
         selected_tabs: list[str] | None = None,
     ) -> list[PendingDetailRequest]:
         """Percorre as abas fiscais selecionadas e agrega as solicitações de download."""
@@ -379,7 +397,16 @@ class SigaContributorExtractor:
             if tab_config.tab_name not in allowed_tabs:
                 LOGGER.info("Ignorando a aba fiscal %s porque ela não foi selecionada", tab_config.tab_name)
                 continue
-            results.extend(self._collect_fiscal_tab_requests(page, cgf, month_reference, reference_year, tab_config))
+            results.extend(
+                self._collect_fiscal_tab_requests(
+                    page,
+                    cgf,
+                    month_reference,
+                    reference_year,
+                    taxpayer_folder_name,
+                    tab_config,
+                )
+            )
         return results
 
     def _build_pending_request(
@@ -394,6 +421,7 @@ class SigaContributorExtractor:
         tela_aba: str,
         requested_after: datetime,
         taxpayer_document: str,
+        taxpayer_folder_name: str,
     ) -> PendingDetailRequest:
         """Cria uma solicitacao com chave unica para nao misturar downloads de CNPJs diferentes."""
         request_key = "|".join(
@@ -414,6 +442,7 @@ class SigaContributorExtractor:
             taxpayer_cnpj=cgf,
             taxpayer_document=taxpayer_document,
             month_reference=month_reference,
+            taxpayer_folder_name=taxpayer_folder_name,
         )
 
     def _normalize_selected_tabs(self, selected_tabs: list[str] | None) -> set[str]:
@@ -443,6 +472,7 @@ class SigaContributorExtractor:
         cgf: str,
         month_reference: str,
         reference_year: str,
+        taxpayer_folder_name: str,
         tab_config: FiscalTabConfig,
     ) -> list[PendingDetailRequest]:
         """Extrai uma aba fiscal inteira e guarda apenas as solicitações de detalhamento."""
@@ -476,6 +506,7 @@ class SigaContributorExtractor:
                 page,
                 cgf,
                 month_reference,
+                taxpayer_folder_name,
                 profile.summary_basename,
                 tab_config.tab_slug,
             )
@@ -512,6 +543,7 @@ class SigaContributorExtractor:
                         month_reference,
                         reference_year,
                         summary_paths[profile.label],
+                        taxpayer_folder_name,
                     )
                 )
                 continue
@@ -536,6 +568,7 @@ class SigaContributorExtractor:
                     tela_aba=tela_aba,
                     requested_after=requested_after,
                     taxpayer_document=self._current_taxpayer_document(page),
+                    taxpayer_folder_name=taxpayer_folder_name,
                 )
             )
         return pending_requests
@@ -1492,6 +1525,7 @@ class SigaContributorExtractor:
         month_reference: str,
         reference_year: str,
         summary_path: Path,
+        taxpayer_folder_name: str,
     ) -> list[PendingDetailRequest]:
         positive_reports = self._select_positive_reports(page)
         if not positive_reports:
@@ -1527,6 +1561,7 @@ class SigaContributorExtractor:
                     tela_aba=tela_aba,
                     requested_after=requested_after,
                     taxpayer_document=self._current_taxpayer_document(page),
+                    taxpayer_folder_name=taxpayer_folder_name,
                 )
             )
         return requests
@@ -1725,10 +1760,11 @@ class SigaContributorExtractor:
         page: Page,
         cgf: str,
         month_reference: str,
+        taxpayer_folder_name: str,
         basename: str,
         document_tab: str,
     ) -> Path:
-        return self._capture_direct_download(page, cgf, month_reference, basename, document_tab)
+        return self._capture_direct_download(page, cgf, month_reference, taxpayer_folder_name, basename, document_tab)
 
     def _click_download_table_button(self, page: Page) -> None:
         LOGGER.info("Clicando em Baixar Tabela")
@@ -1853,6 +1889,7 @@ class SigaContributorExtractor:
         page: Page,
         cgf: str,
         month_reference: str,
+        taxpayer_folder_name: str,
         basename: str,
         document_tab: str,
     ) -> Path:
@@ -1865,7 +1902,7 @@ class SigaContributorExtractor:
                 with page.expect_download(timeout=self.settings.download_wait_timeout_ms) as download_info:
                     self._click_summary_download_button(page)
                 download = download_info.value
-                return self._save_download(download, cgf, month_reference, basename, document_tab)
+                return self._save_download(download, taxpayer_folder_name, month_reference, basename, document_tab)
             except TimeoutError as exc:
                 last_error = exc
                 if attempt < attempts:
@@ -1882,13 +1919,14 @@ class SigaContributorExtractor:
         LOGGER.info("O download direto nao iniciou apos %s tentativa(s) para %s", attempts, basename)
         if last_error is not None:
             LOGGER.debug("Ultimo erro do download direto para %s: %s", basename, last_error)
-        return self._download_from_download_center(page, cgf, month_reference, basename, document_tab)
+        return self._download_from_download_center(page, cgf, month_reference, taxpayer_folder_name, basename, document_tab)
 
     def _download_from_download_center(
         self,
         page: Page,
         cgf: str,
         month_reference: str,
+        taxpayer_folder_name: str,
         basename: str,
         document_tab: str,
     ) -> Path:
@@ -1902,6 +1940,7 @@ class SigaContributorExtractor:
             tela_aba=basename,
             requested_after=datetime.min,
             taxpayer_document=self._current_taxpayer_document(page),
+            taxpayer_folder_name=taxpayer_folder_name,
         )
         detail_paths = self._download_pending_detail_requests(page, [request])
         return detail_paths[request.request_key]
@@ -1910,9 +1949,12 @@ class SigaContributorExtractor:
         self,
         page: Page,
         pending_requests: list[PendingDetailRequest],
+        context: BrowserContext | None = None,
+        fallback_taxpayer_cnpj: str | None = None,
     ) -> dict[str, Path]:
         origin_url = page.url
         LOGGER.info("Abrindo o menu de Downloads para buscar %s arquivo(s) de detalhamento pendente(s)", len(pending_requests))
+        page = self._prepare_downloads_context(page, context, fallback_taxpayer_cnpj)
         self._ensure_side_menu_open(page)
         if self._click_xpath(
             page,
@@ -1940,6 +1982,78 @@ class SigaContributorExtractor:
         page.goto(origin_url, wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
         page.wait_for_timeout(1_000)
         return detail_paths
+
+    def _prepare_downloads_context(
+        self,
+        page: Page,
+        context: BrowserContext | None,
+        fallback_taxpayer_cnpj: str | None,
+    ) -> Page:
+        """Garante um contexto autenticado com menu lateral valido antes de abrir Downloads."""
+        page_state = self._describe_authenticated_page_state(page)
+        LOGGER.info("Validando o contexto atual antes de abrir Downloads: %s", page_state)
+
+        self._ensure_side_menu_open(page)
+        if self._has_downloads_menu_entry(page):
+            return page
+
+        if context is not None:
+            page = self._ensure_authenticated(page, context)
+            self._ensure_side_menu_open(page)
+            if self._has_downloads_menu_entry(page):
+                return page
+
+        if context is not None and fallback_taxpayer_cnpj:
+            # Se a ultima pesquisa terminou fora de um contribuinte, reabrimos um CNPJ
+            # valido apenas para recuperar o menu lateral autenticado de Downloads.
+            LOGGER.info(
+                "O menu de Downloads nao ficou disponivel no estado '%s'; reabrindo o ultimo CNPJ localizado com sucesso (%s).",
+                page_state,
+                fallback_taxpayer_cnpj,
+            )
+            self._open_taxpayer_from_home(page, fallback_taxpayer_cnpj)
+            self._ensure_side_menu_open(page)
+            if self._has_downloads_menu_entry(page):
+                return page
+
+        self._save_debug_snapshot(page, "downloads-context-unavailable")
+        raise TimeoutError(
+            "Nao foi possivel preparar um contexto valido com o menu Downloads Assincronos disponivel."
+        )
+
+    def _has_downloads_menu_entry(self, page: Page) -> bool:
+        """Confirma se o item Downloads ja esta visivel no menu lateral atual."""
+        candidates = (
+            page.locator("xpath=//a[contains(@href,'/downloads-assincronos')]"),
+            page.get_by_role("link", name=re.compile(r"downloads", re.IGNORECASE)),
+            page.get_by_role("button", name=re.compile(r"downloads", re.IGNORECASE)),
+        )
+        for locator in candidates:
+            if self._first_visible_enabled(locator) is not None:
+                return True
+        return False
+
+    def _describe_authenticated_page_state(self, page: Page) -> str:
+        """Resume o estado visivel da pagina para orientar o fallback de navegacao."""
+        if "/contribuinte/" in page.url:
+            return "dentro-de-contribuinte"
+        if self._has_taxpayer_search(page):
+            try:
+                body_text = strip_accents(page.locator("body").inner_text(timeout=2_000)).lower()
+            except Error:
+                body_text = ""
+            if any(
+                marker in body_text
+                for marker in (
+                    "nenhum registro",
+                    "nenhum resultado",
+                    "nao ha registros",
+                    "nao foram encontrados",
+                )
+            ):
+                return "pesquisa-sem-resultado"
+            return "lista-de-contribuintes"
+        return "rota-autenticada-sem-contexto-de-contribuinte"
 
     def _build_download_lookup_targets(
         self,
@@ -2163,6 +2277,7 @@ class SigaContributorExtractor:
                     basename=basename,
                     document_tab=target.request.document_tab,
                     tela_aba=target.request.tela_aba,
+                    taxpayer_folder_name=target.request.taxpayer_folder_name,
                 )
                 continue
             page_targets.setdefault(match.page_number, []).append(target)
@@ -2216,7 +2331,7 @@ class SigaContributorExtractor:
                 download = download_info.value
                 output_path = self._save_download(
                     download,
-                    target.request.taxpayer_cnpj,
+                    target.request.taxpayer_folder_name,
                     target.request.month_reference,
                     basename,
                     target.request.document_tab,
@@ -2446,6 +2561,7 @@ class SigaContributorExtractor:
                 basename=basename,
                 document_tab=document_tab,
                 tela_aba=tela_aba,
+                taxpayer_folder_name=taxpayer_folder_name,
             )
         download_row, unidentified_client = row_match
         if unidentified_client:
@@ -2461,6 +2577,7 @@ class SigaContributorExtractor:
             tela_aba=tela_aba,
             cgf=cgf,
             month_reference=month_reference,
+            taxpayer_folder_name=taxpayer_folder_name,
             basename=basename,
             document_tab=document_tab,
             taxpayer_document=taxpayer_document,
@@ -2635,8 +2752,9 @@ class SigaContributorExtractor:
         basename: str,
         document_tab: str,
         tela_aba: str,
+        taxpayer_folder_name: str,
     ) -> Path:
-        output_dir = self._build_taxpayer_output_dir(cgf, month_reference, document_tab)
+        output_dir = self._build_taxpayer_output_dir(taxpayer_folder_name, month_reference, document_tab)
         output_path = output_dir / f"{basename}.txt"
         message = (
             "Download nao foi realizado porque a informacao fiscal nao foi localizada na Central de Downloads.\n"
@@ -2652,8 +2770,9 @@ class SigaContributorExtractor:
         cgf: str,
         month_reference: str,
         message: str,
+        taxpayer_folder_name: str,
     ) -> Path:
-        output_dir = self._build_taxpayer_output_dir(cgf, month_reference)
+        output_dir = self._build_taxpayer_output_dir(taxpayer_folder_name, month_reference)
         output_path = output_dir / "CNPJ nao encontrado.txt"
         formatted_cnpj = self._format_cnpj(cgf)
         content = (
@@ -2987,6 +3106,7 @@ class SigaContributorExtractor:
         tela_aba: str,
         cgf: str,
         month_reference: str,
+        taxpayer_folder_name: str,
         basename: str,
         document_tab: str,
         taxpayer_document: str,
@@ -3002,7 +3122,7 @@ class SigaContributorExtractor:
         with page.expect_download(timeout=self.settings.download_wait_timeout_ms) as download_info:
             self._click_download_action(row, page=page, tela_aba=tela_aba)
         download = download_info.value
-        return self._save_download(download, cgf, month_reference, basename, document_tab)
+        return self._save_download(download, taxpayer_folder_name, month_reference, basename, document_tab)
 
     def _sanitize_filename(self, value: str) -> str:
         compact = self._normalize_spaces(value)
@@ -3177,8 +3297,8 @@ class SigaContributorExtractor:
         LOGGER.info("Saida XLSX salva em %s", output_path)
         return output_path
 
-    def _build_taxpayer_output_dir(self, cgf: str, month_reference: str, document_tab: str | None = None) -> Path:
-        output_dir = self.settings.output_dir / cgf / slugify(month_reference)
+    def _build_taxpayer_output_dir(self, taxpayer_folder_name: str, month_reference: str, document_tab: str | None = None) -> Path:
+        output_dir = self.settings.output_dir / self._sanitize_filename(taxpayer_folder_name) / slugify(month_reference)
         if document_tab:
             output_dir = output_dir / document_tab
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -3187,12 +3307,12 @@ class SigaContributorExtractor:
     def _save_download(
         self,
         download: Download,
-        cgf: str,
+        taxpayer_folder_name: str,
         month_reference: str,
         basename: str,
         document_tab: str,
     ) -> Path:
-        output_dir = self._build_taxpayer_output_dir(cgf, month_reference, document_tab)
+        output_dir = self._build_taxpayer_output_dir(taxpayer_folder_name, month_reference, document_tab)
         final_suffix = self._download_output_suffix(download.suggested_filename)
         final_name = f"{self._sanitize_filename(basename)}{final_suffix}"
         output_path = output_dir / final_name
@@ -3230,6 +3350,13 @@ class SigaContributorExtractor:
         if len(digits) != 9:
             return digits
         return f"{digits[:2]}.{digits[2:5]}.{digits[5:8]}-{digits[8:]}"
+
+    def _build_taxpayer_folder_name(self, spreadsheet_row: SpreadsheetRow) -> str:
+        """Monta o nome da pasta usando COD, EMPRESA e CNPJ no padrão operacional."""
+        cod = self._sanitize_filename((spreadsheet_row.cod or "SEM-COD").strip() or "SEM-COD")
+        empresa = self._sanitize_filename((spreadsheet_row.empresa or "SEM-EMPRESA").strip() or "SEM-EMPRESA")
+        cnpj = self._normalize_numeric_document(spreadsheet_row.cnpj) or "SEM-CNPJ"
+        return f"{cod} - {empresa} - {cnpj}"
 
     def _click_text_action(
         self,
