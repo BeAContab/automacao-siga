@@ -1,114 +1,112 @@
-# 🚀 SIGA Automação
+# SIGA Automação
 
-**Otimize seu tempo e elimine o trabalho manual na extração de arquivos fiscais.**
+Automação corporativa para extração em lote de documentos fiscais no SIGA da Sefaz-CE.
 
-O **SIGA Automação** é uma solução corporativa de alta performance desenvolvida para interagir com o portal SIGA (Sefaz-CE). Com ele, você automatiza a extração em lote de documentos fiscais (NF-e, NFC-e e CT-e) a partir de uma lista de empresas, trazendo eficiência, segurança e confiabilidade para a sua rotina contábil e fiscal.
+O **SIGA Automação** foi criado para reduzir tempo operacional, padronizar rotinas repetitivas e aumentar a confiabilidade da extração de documentos fiscais. Com ele, sua equipe consegue solicitar, localizar e baixar informações fiscais com muito menos cliques, menos retrabalho e mais rastreabilidade.
 
----
+## Diferenciais
 
-## 🌟 Principais Benefícios
+- Elimina navegação manual repetitiva no portal SIGA.
+- Processa em lote NF-e, NFC-e e CT-e.
+- Funciona com planilha `.xlsx` ou entrada manual na GUI.
+- Organiza automaticamente os arquivos por `COD - EMPRESA - CNPJ`.
+- Mantém logs, avisos e saídas estruturadas para facilitar auditoria.
 
-- **Ganho de Produtividade:** Elimina horas de navegação repetitiva e cliques manuais.
-- **Precisão e Confiabilidade:** Reduz drasticamente o erro humano na seleção e download de arquivos XML/PDF.
-- **Integração Perfeita:** Funciona a partir de planilhas `.xlsx` padronizadas, extraindo arquivos automaticamente para pastas organizadas por `COD - EMPRESA - CNPJ`, mês e tipo de documento.
-- **Flexibilidade de Interface:** Oferece tanto uma Interface Gráfica (GUI) intuitiva para usuários de negócio, quanto uma Interface de Linha de Comando (CLI) para integrações e uso avançado.
-- **Segurança de Dados:** Mantém o controle total no ambiente local do usuário, utilizando perfis dedicados de navegador e respeitando as políticas de segurança corporativas.
+## Público indicado
 
----
+- Escritórios de contabilidade.
+- Departamentos fiscais e financeiros.
+- Equipes de backoffice com alto volume de empresas.
+- Operações que precisam de rotina padronizada e repetível.
 
-## 💻 Funcionalidades em Destaque
+## O que a solução entrega
 
-- **Automação Inteligente:** Reaproveitamento de sessões já autenticadas do navegador para evitar múltiplos logins.
-- **Gestão de Certificados:** Configuração automatizada para lidar com certificados digitais A1/A3 sem fricção no Windows.
-- **Execução Seletiva:** Escolha quais tipos de documentos (NF-e, NFC-e, CT-e) e quais meses/anos deseja processar em uma única rodada.
-- **Logs e Rastreabilidade:** Registro detalhado de cada ação do robô (`run.log`) e capturas de erros (`errors.log`).
+- Interface gráfica com foco em operação assistida.
+- Execução por terminal para rotinas automatizadas e integrações.
+- Navegação controlada com sessão autenticada reaproveitável.
+- Solicitação em lote dos detalhamentos antes da Central de Downloads.
+- Salvamento dos arquivos com extensão real preservada.
+- Geração de `.txt` quando um CNPJ ou download não é localizado.
 
----
+## Como usar
 
-## 🛠️ Como Utilizar
+### 1. Preparar a planilha
 
-### 1. Preparação dos Dados
-Crie ou edite a planilha de entrada chamada `cnpj.xlsx`.
-*Nota: Os CNPJs devem ser preservados com 14 dígitos, incluindo zeros à esquerda.*
-*Layout recomendado: colunas `COD`, `EMPRESA` e `CNPJ`.*
+Crie ou utilize uma planilha `.xlsx` com as colunas:
 
-### 2. Interface Gráfica (Recomendado)
-A forma mais amigável de utilizar o sistema. A GUI foi organizada no estilo de dashboard corporativo do `design-model`, permitindo carregar planilhas, inserir CNPJs manualmente, selecionar diretórios de saída e visualizar logs em tempo real. O botão **Ajuda** abre um pop-up com o passo a passo de uso.
+- `COD`
+- `EMPRESA`
+- `CNPJ`
+
+Os CNPJs devem ser mantidos com 14 dígitos, incluindo zeros à esquerda.
+
+### 2. Abrir a GUI
+
+Você pode executar a interface gráfica com:
 
 ```powershell
-.\.venv\Scripts\python.exe .\main.py --gui
-# Ou caso esteja usando o executável:
+.\.venv\Scripts\python.exe .\main_gui.py
+```
+
+Ou, se já tiver instalado:
+
+```powershell
 .\dist\siga-automacao-gui.exe
 ```
 
-**Passo a passo na GUI:**
-1. Carregue sua planilha `cnpj.xlsx` ou use a aba **Entrada Manual** para colar os CNPJs.
-2. Clique em **Carregar CNPJs manuais** se preferir usar a entrada digitada.
-3. Ajuste mês, ano, documentos e pasta de saída no painel lateral.
-4. Clique em **Iniciar Navegador** e realize o login manual no portal do SIGA.
-5. Após o login concluído, clique em **Executar Extração** para iniciar as extrações.
+Na GUI, o fluxo recomendado é:
 
-### 3. Modo Terminal / CLI
-Para operações rápidas ou integrações. O terminal guiará você por parâmetros como Mês, Ano e Documentos desejados.
+1. Carregar a planilha ou usar a entrada manual.
+2. Selecionar mês, ano, documentos e pasta de saída.
+3. Iniciar o navegador.
+4. Fazer o login manual no SIGA.
+5. Executar a extração.
+
+### 3. Usar via terminal
 
 ```powershell
-# Execução iterativa (o robô fará as perguntas no terminal)
-.\.venv\Scripts\python.exe .\main.py
-
-# Execução parametrizada direta
-.\.venv\Scripts\python.exe .\main.py --month Maio --year 2026 --spreadsheet .\cnpj.xlsx --docs NF-e CT-e
+.\.venv\Scripts\python.exe .\src\main.py
 ```
 
----
+O terminal mantém o mesmo motor de extração da GUI, mas é ideal para rotinas automatizadas, integrações e uso mais técnico.
 
-## ⚙️ Configurações Avançadas de Sistema
+## Resultado esperado
 
-### Organização dos Arquivos Gerados
-Os downloads são estruturados automaticamente no seguinte formato:
-`<pasta-escolhida>/<COD - EMPRESA - CNPJ>/<mes>/<documento>/`
-*Dica de validação: Compare as saídas geradas com `testes.csv`, que serve de referência manual para extração de NFC-e/Emissor.*
+Com o SIGA Automação, a operação deixa de depender de navegação manual repetitiva e passa a seguir um fluxo padronizado, rastreável e pronto para uso em contexto corporativo.
 
-### Certificados Digitais
-A automação cria um perfil isolado do navegador, contornando bloqueios de segurança recentes, e configura políticas locais para selecionar o certificado do usuário silenciosamente.
-- **Ignorar política de certificado:** `--skip-certificate-policy`
-- **Remover política local gerada:** `--clear-certificate-policy`
-- **Usar perfil padrão do sistema:** `--system-browser-profile`
-- **Forçar encerramento de processos antes de rodar:** `--force-restart-browser`
+## Estrutura de saída
 
-### Reaproveitamento de Sessão Web
-Por padrão, o sistema tenta usar uma aba já autenticada no SIGA (`https://siga.sefaz.ce.gov.br/ui/`) para acelerar o processo sem precisar repetir a etapa de certificado/recaptcha.
-- Para desativar esse comportamento no terminal: `--disable-attach`
-- Via `.env`: defina `PREFER_EXISTING_SIGA_SESSION=false`
+Os arquivos são organizados automaticamente em uma estrutura previsível:
 
-### Modo Assistido (Live Assist)
-Disponível para diagnóstico acompanhando a sessão do Selenium visualmente:
-```powershell
-.\.venv\Scripts\python.exe .\main.py --live-assist
+```text
+<pasta de saída>/<COD - EMPRESA - CNPJ>/<mês>/<tipo de documento>/
 ```
 
----
+Essa organização facilita conferência, arquivamento e compartilhamento interno.
 
-## 📦 Compilação e Distribuição
+## Compilação e distribuição
 
-A solução pode ser empacotada em arquivos `.exe` independentes, dispensando a instalação do Python nas máquinas dos usuários finais.
+### Executável da GUI
 
-**Gerar executável completo (CLI + GUI):**
-```powershell
-.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean siga-automacao.spec
-```
-
-**Gerar executável exclusivo com Interface Gráfica:**
 ```powershell
 .\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean siga-automacao-gui.spec
 ```
 
-**Gerar o Instalador (Inno Setup):**
-Abra o arquivo `installer\siga-automacao.iss` no Inno Setup Compiler e clique em **Compile** (ou `Ctrl+F9`). O instalador final (`SIGA-Automacao-Setup.exe`) será gerado na pasta `dist\installer\`, pronto para distribuição sem exigir privilégios de administrador.
+### Instalador Windows
 
----
+Abra `installer\siga-automacao.iss` no Inno Setup e clique em `Compile`.
 
-## 🔒 Licenciamento e Propriedade
+O instalador final será gerado em `dist\installer\`.
 
-**Copyright © 2026 Barreira & Associados. Todos os direitos reservados.**
+## Recursos de operação
 
-Este software é de propriedade privada e confidencial. O uso deste projeto é restrito exclusivamente às pessoas, empresas ou equipes autorizadas pelo proprietário. Consulte o arquivo `LICENSE` na raiz do projeto para mais detalhes. Arquivos sensíveis e a pasta de base de conhecimento (`brain/`) ficam protegidos fora do controle de versão.
+- Reutilização de sessão autenticada, quando disponível.
+- Compatibilidade com certificado digital e políticas locais do navegador.
+- Menu de ajuda na GUI com passo a passo de uso.
+- Ícones e logo próprios no executável e no instalador.
+
+## Licenciamento
+
+Copyright © 2026 Barreira & Associados. Todos os direitos reservados.
+
+Este software é de propriedade privada e confidencial. O uso deste projeto é restrito exclusivamente às pessoas, empresas ou equipes autorizadas pelo proprietário. Consulte o arquivo `LICENSE` na raiz do projeto para mais detalhes.

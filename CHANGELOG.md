@@ -2,6 +2,18 @@
 
 ## [2026-06-17]
 
+### Alterado
+- Arquivos:
+  - README.md
+- Motivo: deixar a apresentação do produto mais comercial, clara e orientada a adoção por equipes contábeis e fiscais.
+- Impacto: a documentação passou a comunicar melhor a proposta de valor, os diferenciais e os pontos de execução/distribuição.
+
+### Corrigido
+- Arquivos:
+  - installer/siga-automacao.iss
+- Motivo: os atalhos instalados podiam ficar sem o icone correto em algumas instalacoes do Windows.
+- Impacto: o instalador passa a copiar o arquivo `.ico` junto com a aplicacao e os atalhos do desktop/menu Iniciar usam esse recurso instalado como fonte do icone, reduzindo a dependencia do cache do sistema.
+
 ### Corrigido
 - Arquivos:
   - src/extraction/siga_extractor.py
