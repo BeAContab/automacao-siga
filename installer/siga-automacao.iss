@@ -1,5 +1,5 @@
 #define MyAppName "SIGA Automacao"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.1.2"
 #define MyAppExeName "siga-automacao-gui.exe"
 
 [Setup]
@@ -25,13 +25,14 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 
 [Files]
 Source: "..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\images\icons\siga-automacao.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{userdesktop}\SIGA Automacao"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "..\images\icons\siga-automacao.ico"
-Name: "{userprograms}\SIGA Automacao\SIGA Automacao"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "..\images\icons\siga-automacao.ico"
-Name: "{userprograms}\SIGA Automacao\Desinstalar SIGA Automacao"; Filename: "{uninstallexe}"; IconFilename: "..\images\icons\siga-automacao.ico"
+Name: "{userdesktop}\SIGA Automacao"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{app}\siga-automacao.ico"; IconIndex: 0
+Name: "{userprograms}\SIGA Automacao\SIGA Automacao"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\siga-automacao.ico"; IconIndex: 0
+Name: "{userprograms}\SIGA Automacao\Desinstalar SIGA Automacao"; Filename: "{uninstallexe}"; IconFilename: "{uninstallexe}"
 
 [Tasks]
 Name: "desktopicon"; Description: "Criar atalho na area de trabalho"; GroupDescription: "Atalhos adicionais:"

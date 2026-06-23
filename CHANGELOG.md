@@ -1,6 +1,38 @@
 # Changelog
 
-## [2026-06-17]
+## [2026-06-23] — Versão 1.1.2
+
+### Alterado
+- Arquivos:
+  - `README.md`
+- Motivo: adequação do arquivo às diretrizes corporativas de governança e proteção intelectual.
+- Impacto: reescrita completa da documentação com foco puramente comercial e institucional da Barreira & Associados, com a total eliminação de termos e instruções técnicas que pudessem comprometer a segurança.
+
+- Arquivos:
+  - `src/__init__.py`
+  - `installer/siga-automacao.iss`
+- Motivo: incremento do número da versão de distribuição e do instalador.
+- Impacto: atualização da versão de lançamento do patch para `1.1.2`.
+
+## [2026-06-23] — Versão 1.1.1
+
+### Alterado
+- Arquivos:
+  - `src/gui.py`
+  - `src/__init__.py`
+  - `installer/siga-automacao.iss`
+- Motivo: alinhamento integral da interface gráfica ao `DESIGN.md` (SIGA Design System).
+- Impacto:
+  - **Paleta de cores:** Success Green ajustado para `#006e25` (cor secundária oficial); Warning/Action Orange `#e97000` adicionado para alertas e avisos; cor de desabilitado do botão de execução alterada para cinza suave `#c5ddc9`.
+  - **Tipografia:** fontes Inter (UI geral) e JetBrains Mono (terminal de logs) configuradas conforme os tokens `body-md`, `title-sm`, `label-caps` e `console-code` do design system.
+  - **Espaçamento e layout:** largura da sidebar reduzida de 300px para 240px (`sidebar-width` do design system); paddings padronizados com múltiplos de 4px.
+  - **Bordas suaves:** cards e área de entrada de texto receberam bordas de 1px na cor `#c5c6ce` (`outline-variant`) via `tk.Frame` wrapper, eliminando as bordas grossas do tema `clam`.
+  - **Separadores visuais:** linhas divisórias de 1px em `#c5c6ce` inseridas entre a topbar e o corpo da aplicação, e entre o corpo e o rodapé.
+  - **Zebra striping:** listagem de CNPJs passou a alternar fundos brancos e `#f3f4f5` (surface_low) para melhorar a legibilidade de lotes longos.
+  - **Console colorido (Rich Log):** o painel de log agora aplica cores automaticamente por nível: branco (info), verde `#6db33f` (sucesso/conclusão), laranja `#e97000` (aviso/não encontrado), vermelho `#f14c4c` (erro/falha).
+  - **Notebook sem bordas:** abas "Importar Planilha" e "Entrada Manual" com visual mais limpo sem borda preta padrão do ttk.
+  - **Botões refinados:** botões Primary, Success, Ghost, Action e Danger sem bordas pretas ásperas; hover states suavizados.
+
 
 ### Alterado
 - Arquivos:

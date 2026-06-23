@@ -178,96 +178,275 @@ class SigaAutomationGUI:
             LOGGER.debug("Nao foi possivel carregar a logo da aplicacao.", exc_info=True)
 
     def _apply_theme(self) -> None:
-        """Configura a aparência base da interface com uma paleta corporativa clara."""
+        """Configura a aparência base da interface alinhada ao DESIGN.md (SIGA Design System)."""
         style = ttk.Style(self.root)
         try:
             style.theme_use("clam")
         except tk.TclError:
             pass
 
+        # --- Paleta de cores sincronizada com o DESIGN.md ---
+        # Fonte primária: Inter (fallback: Segoe UI → Arial → sans-serif)
+        # Fonte de console: JetBrains Mono (fallback: Consolas → Courier New)
         colors = {
+            # Superfícies
             "surface": "#f8f9fa",
             "surface_container": "#edeeef",
+            "surface_dim": "#d9dadb",
             "surface_low": "#f3f4f5",
             "surface_lowest": "#ffffff",
+            # Contornos — low-contrast outlines conforme o design system
             "outline": "#c5c6ce",
             "outline_strong": "#75777e",
+            # Cores de marca (Navy Blue)
             "primary": "#031632",
             "primary_container": "#1a2b48",
+            # Textos
             "on_surface": "#191c1d",
             "on_surface_variant": "#44474d",
-            "success": "#28a745",
+            # Success Green — cor secundária oficial do design system (#006e25)
+            "success": "#006e25",
+            "success_active": "#004e1a",
+            "success_disabled": "#c5ddc9",
+            # Warning/Action Orange — cor terciária para alertas e avisos (#e97000)
+            "warning": "#e97000",
+            # Erro
             "error": "#ba1a1a",
+            # Console (Log Terminal)
             "console": "#1e1e1e",
             "console_header": "#2d2d2d",
             "console_line": "#3d3d3d",
         }
         self._theme_colors = colors
 
+        # --- Fontes alinhadas ao DESIGN.md ---
+        # display-lg  → Inter 24px Bold  (título da marca)
+        # headline-md → Inter 18px SemiBold  (título de seções/cards)
+        # title-sm    → Inter 13px SemiBold  (labels de seção, sidebar)
+        # body-md     → Inter 11px Regular   (textos do corpo)
+        # body-sm     → Inter 10px Regular   (status, legendas)
+        # label-caps  → Inter 9px Bold + maiúsculas  (rótulos de coluna)
+        # console-code→ JetBrains Mono 10px  (log terminal)
+        _ui_font    = "Inter"
+        _mono_font  = "JetBrains Mono"
+
+        # --- Frames ---
         self.root.configure(bg=colors["surface"])
         style.configure("App.TFrame", background=colors["surface"])
+        # Topbar sem bordas — usa fundo branco puro com separação via padding
         style.configure("Topbar.TFrame", background=colors["surface_lowest"])
-        style.configure("Sidebar.TFrame", background=colors["surface_container"], relief="solid", borderwidth=1)
+        # Sidebar — fundo surface-container, borda direita suave simulada por cor de fundo
+        style.configure("Sidebar.TFrame", background=colors["surface_container"], relief="flat", borderwidth=0)
         style.configure("Center.TFrame", background=colors["surface"])
-        style.configure("ConsolePanel.TFrame", background=colors["surface_lowest"], relief="solid", borderwidth=1)
-        style.configure("Card.TFrame", background=colors["surface_lowest"], relief="solid", borderwidth=1)
+        # Painel do console — fundo branco, sem borda grossa
+        style.configure("ConsolePanel.TFrame", background=colors["surface_lowest"], relief="flat", borderwidth=0)
+        # Card — fundo branco, sem borda tkinter (borda será simulada por tk.Frame wrapper)
+        style.configure("Card.TFrame", background=colors["surface_lowest"], relief="flat", borderwidth=0)
         style.configure("Console.TFrame", background=colors["console"])
         style.configure("ConsoleHeader.TFrame", background=colors["console_header"])
         style.configure("ConsoleFooter.TFrame", background=colors["console_header"])
+        # Frame interno de linhas da tabela (zebra striping)
+        style.configure("RowEven.TFrame", background=colors["surface_lowest"])
+        style.configure("RowOdd.TFrame", background=colors["surface_low"])
+        style.configure("RowHeader.TFrame", background=colors["surface_container"])
 
-        style.configure("BrandTitle.TLabel", background=colors["surface_lowest"], foreground=colors["primary"], font=("Segoe UI", 22, "bold"))
-        style.configure("VersionBadge.TLabel", background="#ececec", foreground=colors["on_surface"], font=("Segoe UI", 9, "bold"), padding=(8, 3))
-        style.configure("Section.TLabel", background=colors["surface"], foreground=colors["on_surface_variant"], font=("Segoe UI", 10, "bold"))
-        style.configure("SidebarTitle.TLabel", background=colors["surface_container"], foreground=colors["on_surface_variant"], font=("Segoe UI", 10, "bold"))
-        style.configure("CardTitle.TLabel", background=colors["surface_lowest"], foreground=colors["primary"], font=("Segoe UI", 17, "bold"))
-        style.configure("CountChip.TLabel", background=colors["primary_container"], foreground="#ffffff", font=("Segoe UI", 10, "bold"), padding=(12, 6))
-        style.configure("Status.TLabel", background=colors["surface"], foreground=colors["on_surface_variant"], font=("Segoe UI", 9))
-        style.configure("Body.TLabel", background=colors["surface"], foreground=colors["on_surface"], font=("Segoe UI", 10))
-        style.configure("BodyMuted.TLabel", background=colors["surface"], foreground=colors["on_surface_variant"], font=("Segoe UI", 9))
-        style.configure("Panel.TLabel", background=colors["surface_lowest"], foreground=colors["on_surface"], font=("Segoe UI", 10))
-        style.configure("CardSubtle.TLabel", background=colors["surface_lowest"], foreground=colors["on_surface_variant"], font=("Segoe UI", 9, "italic"))
-        style.configure("ConsoleTitle.TLabel", background=colors["console_header"], foreground="#a0a0a0", font=("Segoe UI", 9, "bold"))
-        style.configure("ConsoleStatus.TLabel", background=colors["console_header"], foreground="#ffffff", font=("Segoe UI", 9, "bold"))
-        style.configure("Panel.TCheckbutton", background=colors["surface_container"], foreground=colors["on_surface"], font=("Segoe UI", 10))
-        style.map("Panel.TCheckbutton", background=[("active", colors["surface_container"])], foreground=[("disabled", colors["outline_strong"])])
+        # --- Labels ---
+        # Título principal da topbar (display-lg)
+        style.configure("BrandTitle.TLabel",
+            background=colors["surface_lowest"],
+            foreground=colors["primary"],
+            font=(_ui_font, 20, "bold"))
+        # Badge de versão
+        style.configure("VersionBadge.TLabel",
+            background=colors["surface_container"],
+            foreground=colors["on_surface_variant"],
+            font=(_ui_font, 8, "bold"),
+            padding=(8, 3))
+        # Títulos de seção lateral (title-sm, MAIÚSCULAS)
+        style.configure("SidebarTitle.TLabel",
+            background=colors["surface_container"],
+            foreground=colors["outline_strong"],
+            font=(_ui_font, 8, "bold"))
+        # Título de card / área central (headline-md)
+        style.configure("CardTitle.TLabel",
+            background=colors["surface"],
+            foreground=colors["primary"],
+            font=(_ui_font, 15, "bold"))
+        # Chip de contagem (ex.: "Total carregadas: 0")
+        style.configure("CountChip.TLabel",
+            background=colors["primary_container"],
+            foreground="#ffffff",
+            font=(_ui_font, 9, "bold"),
+            padding=(10, 4))
+        # Texto de status na barra inferior (body-sm)
+        style.configure("Status.TLabel",
+            background=colors["surface"],
+            foreground=colors["on_surface_variant"],
+            font=(_ui_font, 9))
+        # Textos do corpo geral (body-md)
+        style.configure("Body.TLabel",
+            background=colors["surface"],
+            foreground=colors["on_surface"],
+            font=(_ui_font, 10))
+        style.configure("BodyMuted.TLabel",
+            background=colors["surface"],
+            foreground=colors["on_surface_variant"],
+            font=(_ui_font, 9))
+        # Labels em painéis brancos (cards)
+        style.configure("Panel.TLabel",
+            background=colors["surface_lowest"],
+            foreground=colors["on_surface"],
+            font=(_ui_font, 10))
+        style.configure("Section.TLabel",
+            background=colors["surface"],
+            foreground=colors["on_surface_variant"],
+            font=(_ui_font, 9, "bold"))
+        style.configure("CardSubtle.TLabel",
+            background=colors["surface_lowest"],
+            foreground=colors["on_surface_variant"],
+            font=(_ui_font, 9, "italic"))
+        # Labels do cabeçalho do console
+        style.configure("ConsoleTitle.TLabel",
+            background=colors["console_header"],
+            foreground="#a0a0a0",
+            font=(_ui_font, 8, "bold"))
+        style.configure("ConsoleStatus.TLabel",
+            background=colors["console_header"],
+            foreground="#ffffff",
+            font=(_ui_font, 9, "bold"))
+        # Labels de linhas da tabela (para zebra striping)
+        style.configure("RowEven.TLabel",
+            background=colors["surface_lowest"],
+            foreground=colors["on_surface"],
+            font=(_ui_font, 9))
+        style.configure("RowOdd.TLabel",
+            background=colors["surface_low"],
+            foreground=colors["on_surface"],
+            font=(_ui_font, 9))
+        style.configure("RowHeader.TLabel",
+            background=colors["surface_container"],
+            foreground=colors["on_surface_variant"],
+            font=(_ui_font, 9, "bold"))
 
-        style.configure("Primary.TButton", background=colors["primary"], foreground="#ffffff", font=("Segoe UI", 10, "bold"), padding=(12, 8))
-        style.map("Primary.TButton", background=[("active", colors["primary_container"]), ("disabled", "#808080")])
-        style.configure("Success.TButton", background=colors["success"], foreground="#ffffff", font=("Segoe UI", 10, "bold"), padding=(12, 8))
-        style.map("Success.TButton", background=[("active", "#1f7a34"), ("disabled", "#9fb7a6")])
-        style.configure("Ghost.TButton", background=colors["surface_lowest"], foreground=colors["primary"], font=("Segoe UI", 10, "bold"), padding=(10, 6), borderwidth=1, relief="solid")
-        style.map("Ghost.TButton", background=[("active", colors["surface_low"])])
-        style.configure("Action.TButton", background=colors["surface_lowest"], foreground=colors["on_surface"], font=("Segoe UI", 10, "bold"), padding=(10, 7))
-        style.map("Action.TButton", background=[("active", colors["surface_low"])])
-        style.configure("Danger.TButton", background=colors["surface_lowest"], foreground=colors["error"], font=("Segoe UI", 10, "bold"), padding=(10, 7), borderwidth=1, relief="solid")
-        style.map("Danger.TButton", background=[("active", "#ffecec")])
+        # --- Checkbuttons ---
+        # Sidebar — fundo surface_container para integrar ao painel lateral
+        style.configure("Panel.TCheckbutton",
+            background=colors["surface_container"],
+            foreground=colors["on_surface"],
+            font=(_ui_font, 10))
+        style.map("Panel.TCheckbutton",
+            background=[("active", colors["surface_container"])],
+            foreground=[("disabled", colors["outline_strong"])])
+        # Checkbuttons de linhas pares da tabela
+        style.configure("RowEven.TCheckbutton",
+            background=colors["surface_lowest"],
+            foreground=colors["on_surface"],
+            font=(_ui_font, 9))
+        style.map("RowEven.TCheckbutton",
+            background=[("active", colors["surface_lowest"])])
+        # Checkbuttons de linhas ímpares da tabela
+        style.configure("RowOdd.TCheckbutton",
+            background=colors["surface_low"],
+            foreground=colors["on_surface"],
+            font=(_ui_font, 9))
+        style.map("RowOdd.TCheckbutton",
+            background=[("active", colors["surface_low"])])
 
-        style.configure("TNotebook", background=colors["surface_lowest"], borderwidth=0)
-        style.configure("TNotebook.Tab", background=colors["surface_low"], foreground=colors["on_surface_variant"], padding=(18, 10), font=("Segoe UI", 10, "bold"))
-        style.map("TNotebook.Tab", background=[("selected", colors["surface_lowest"])], foreground=[("selected", colors["primary"])])
+        # --- Botões ---
+        # Primary — Navy Blue, sem borda visível
+        style.configure("Primary.TButton",
+            background=colors["primary"],
+            foreground="#ffffff",
+            font=(_ui_font, 10, "bold"),
+            padding=(14, 8),
+            relief="flat",
+            borderwidth=0)
+        style.map("Primary.TButton",
+            background=[("active", colors["primary_container"]), ("disabled", colors["surface_dim"])],
+            foreground=[("disabled", colors["outline_strong"])])
+        # Success — Success Green oficial (#006e25)
+        style.configure("Success.TButton",
+            background=colors["success"],
+            foreground="#ffffff",
+            font=(_ui_font, 10, "bold"),
+            padding=(14, 8),
+            relief="flat",
+            borderwidth=0)
+        style.map("Success.TButton",
+            background=[("active", colors["success_active"]), ("disabled", colors["success_disabled"])],
+            foreground=[("disabled", colors["outline_strong"])])
+        # Ghost — borda suave em outline_strong, fundo transparente
+        style.configure("Ghost.TButton",
+            background=colors["surface_lowest"],
+            foreground=colors["primary"],
+            font=(_ui_font, 10, "bold"),
+            padding=(12, 7),
+            relief="solid",
+            borderwidth=1)
+        style.map("Ghost.TButton",
+            background=[("active", colors["surface_low"])],
+            bordercolor=[("active", colors["primary"])])
+        # Action — botões secundários neutros (ex.: Browse)
+        style.configure("Action.TButton",
+            background=colors["surface_container"],
+            foreground=colors["on_surface"],
+            font=(_ui_font, 10),
+            padding=(10, 7),
+            relief="flat",
+            borderwidth=0)
+        style.map("Action.TButton",
+            background=[("active", colors["surface_dim"])])
+        # Danger — texto em vermelho de erro, borda outline suave
+        style.configure("Danger.TButton",
+            background=colors["surface_lowest"],
+            foreground=colors["error"],
+            font=(_ui_font, 10, "bold"),
+            padding=(12, 7),
+            relief="solid",
+            borderwidth=1)
+        style.map("Danger.TButton",
+            background=[("active", "#fff0f0")])
+
+        # --- Notebook de abas (Importar / Manual) ---
+        # Remover toda borda tkinter padrão para visual mais limpo
+        style.configure("TNotebook",
+            background=colors["surface_lowest"],
+            borderwidth=0,
+            tabmargins=0)
+        style.configure("TNotebook.Tab",
+            background=colors["surface_container"],
+            foreground=colors["on_surface_variant"],
+            padding=(18, 9),
+            font=(_ui_font, 10, "bold"),
+            borderwidth=0)
+        style.map("TNotebook.Tab",
+            background=[("selected", colors["surface_lowest"])],
+            foreground=[("selected", colors["primary"])],
+            expand=[("selected", [1, 1, 1, 0])])
 
     def _build_sidebar(self, parent: ttk.Frame) -> None:
         """Monta o painel lateral de parâmetros e ações auxiliares."""
-        ttk.Label(parent, text="PARÂMETROS DE EXTRAÇÃO", style="SidebarTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 16))
+        # Rótulo de seção em maiúsculas conforme o design system (label-caps)
+        ttk.Label(parent, text="PARÂMETROS DE EXTRAÇÃO", style="SidebarTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 20))
 
-        ttk.Label(parent, text="Mês de Referência", style="Panel.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(parent, text="Mês de Referência", style="SidebarTitle.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 6))
         month_box = ttk.Combobox(parent, textvariable=self.month_var, values=MONTH_OPTIONS, state="readonly", width=22)
         month_box.grid(row=2, column=0, sticky="ew")
 
-        ttk.Label(parent, text="Ano", style="Panel.TLabel").grid(row=3, column=0, sticky="w", pady=(16, 6))
+        ttk.Label(parent, text="Ano", style="SidebarTitle.TLabel").grid(row=3, column=0, sticky="w", pady=(16, 6))
         year_entry = ttk.Entry(parent, textvariable=self.year_var)
         year_entry.grid(row=4, column=0, sticky="ew")
 
-        ttk.Label(parent, text="Documentos Fiscais", style="SidebarTitle.TLabel").grid(row=5, column=0, sticky="w", pady=(20, 8))
+        ttk.Label(parent, text="DOCUMENTOS FISCAIS", style="SidebarTitle.TLabel").grid(row=5, column=0, sticky="w", pady=(24, 8))
         docs = ttk.Frame(parent, style="Sidebar.TFrame")
         docs.grid(row=6, column=0, sticky="ew")
         docs.columnconfigure(0, weight=1)
 
-        ttk.Checkbutton(docs, text="NF-e (Nota Fiscal Eletrônica)", style="Panel.TCheckbutton", variable=self.nfe_doc_var, command=lambda: self._set_document_selection("NF-e", self.nfe_doc_var.get())).grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Checkbutton(docs, text="NF-e (Nota Fiscal)", style="Panel.TCheckbutton", variable=self.nfe_doc_var, command=lambda: self._set_document_selection("NF-e", self.nfe_doc_var.get())).grid(row=0, column=0, sticky="w", pady=4)
         ttk.Checkbutton(docs, text="NFC-e (Consumidor)", style="Panel.TCheckbutton", variable=self.nfce_doc_var, command=lambda: self._set_document_selection("NFC-e", self.nfce_doc_var.get())).grid(row=1, column=0, sticky="w", pady=4)
         ttk.Checkbutton(docs, text="CT-e (Transporte)", style="Panel.TCheckbutton", variable=self.cte_doc_var, command=lambda: self._set_document_selection("CT-e", self.cte_doc_var.get())).grid(row=2, column=0, sticky="w", pady=4)
 
-        ttk.Label(parent, text="Pasta de Saída", style="SidebarTitle.TLabel").grid(row=7, column=0, sticky="w", pady=(20, 6))
+        ttk.Label(parent, text="PASTA DE SAÍDA", style="SidebarTitle.TLabel").grid(row=7, column=0, sticky="w", pady=(24, 6))
         output_row = ttk.Frame(parent, style="Sidebar.TFrame")
         output_row.grid(row=8, column=0, sticky="ew")
         output_row.columnconfigure(0, weight=1)
@@ -278,27 +457,30 @@ class SigaAutomationGUI:
     def _build_center(self, parent: ttk.Frame) -> None:
         """Monta o conteúdo central com entrada, lista de CNPJs e botões de ação."""
         header = ttk.Frame(parent, style="Center.TFrame")
-        header.grid(row=0, column=0, sticky="ew")
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 16))
         header.columnconfigure(0, weight=1)
         header.columnconfigure(1, weight=0)
 
-        ttk.Label(header, text="Controle de empresas", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(header, text="Controle de Empresas", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(header, textvariable=self.loaded_count_var, style="CountChip.TLabel").grid(row=0, column=1, sticky="e")
 
-        card = ttk.Frame(parent, style="Card.TFrame", padding=0)
-        card.grid(row=1, column=0, sticky="nsew", pady=(18, 16))
+        # Card de entrada: borda suave de 1px via tk.Frame wrapper (#c5c6ce = outline do design system)
+        card_border = tk.Frame(parent, bg="#c5c6ce")
+        card_border.grid(row=1, column=0, sticky="nsew", pady=(0, 12))
+        card_border.columnconfigure(0, weight=1)
+        card = ttk.Frame(card_border, style="Card.TFrame", padding=0)
+        card.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
         card.columnconfigure(0, weight=1)
-        card.rowconfigure(1, weight=1)
 
         self.input_notebook = ttk.Notebook(card)
         self.input_notebook.grid(row=0, column=0, sticky="ew")
         import_tab = ttk.Frame(self.input_notebook, padding=18, style="Card.TFrame")
         manual_tab = ttk.Frame(self.input_notebook, padding=18, style="Card.TFrame")
-        self.input_notebook.add(import_tab, text="Importar Planilha")
-        self.input_notebook.add(manual_tab, text="Entrada Manual")
+        self.input_notebook.add(import_tab, text="  Importar Planilha  ")
+        self.input_notebook.add(manual_tab, text="  Entrada Manual  ")
 
         import_tab.columnconfigure(0, weight=1)
-        ttk.Label(import_tab, text="Selecione uma planilha XLSX para carregar as empresas.", style="Body.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        ttk.Label(import_tab, text="Selecione uma planilha XLSX para carregar as empresas.", style="Body.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 10))
         import_row = ttk.Frame(import_tab, style="Card.TFrame")
         import_row.grid(row=1, column=0, sticky="ew")
         import_row.columnconfigure(0, weight=1)
@@ -309,11 +491,21 @@ class SigaAutomationGUI:
 
         manual_tab.columnconfigure(0, weight=1)
         ttk.Label(manual_tab, text="Cole um CNPJ por linha, ou vários separados por vírgula, ponto e vírgula ou espaço.", style="Body.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
-        manual_text_frame = ttk.Frame(manual_tab, style="Card.TFrame")
-        manual_text_frame.grid(row=1, column=0, sticky="nsew")
+        # Campo de texto com borda suave de 1px simulada por tk.Frame wrapper
+        manual_border = tk.Frame(manual_tab, bg="#c5c6ce")
+        manual_border.grid(row=1, column=0, sticky="nsew")
+        manual_border.columnconfigure(0, weight=1)
+        manual_border.rowconfigure(0, weight=1)
+        manual_text_frame = tk.Frame(manual_border, bg="#ffffff")
+        manual_text_frame.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
         manual_text_frame.columnconfigure(0, weight=1)
         manual_text_frame.rowconfigure(0, weight=1)
-        self.manual_cnpjs_text = tk.Text(manual_text_frame, height=8, wrap="word", bg="#ffffff", fg="#191c1d", insertbackground="#191c1d", relief="solid", bd=1)
+        self.manual_cnpjs_text = tk.Text(
+            manual_text_frame, height=8, wrap="word",
+            bg="#ffffff", fg="#191c1d", insertbackground="#191c1d",
+            relief="flat", bd=0, padx=8, pady=6,
+            font=("Inter", 10),
+        )
         manual_scroll = ttk.Scrollbar(manual_text_frame, orient="vertical", command=self.manual_cnpjs_text.yview)
         self.manual_cnpjs_text.configure(yscrollcommand=manual_scroll.set)
         self.manual_cnpjs_text.grid(row=0, column=0, sticky="nsew")
@@ -325,8 +517,13 @@ class SigaAutomationGUI:
         ttk.Button(manual_actions, text="Carregar CNPJs manuais", style="Primary.TButton", command=self._load_manual_rows).grid(row=0, column=0, sticky="ew", padx=(0, 6))
         ttk.Button(manual_actions, text="Limpar campo", style="Danger.TButton", command=self._clear_manual_input).grid(row=0, column=1, sticky="ew", padx=(6, 0))
 
-        rows_card = ttk.Frame(parent, style="Card.TFrame", padding=14)
-        rows_card.grid(row=2, column=0, sticky="nsew")
+        # Card da grade de empresas: borda suave de 1px
+        rows_border = tk.Frame(parent, bg="#c5c6ce")
+        rows_border.grid(row=2, column=0, sticky="nsew")
+        rows_border.columnconfigure(0, weight=1)
+        rows_border.rowconfigure(0, weight=1)
+        rows_card = ttk.Frame(rows_border, style="Card.TFrame", padding=14)
+        rows_card.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
         rows_card.columnconfigure(0, weight=1)
         rows_card.rowconfigure(0, weight=1)
         self.rows_container = rows_card
@@ -338,32 +535,55 @@ class SigaAutomationGUI:
         footer_actions.columnconfigure(0, weight=1)
         footer_actions.columnconfigure(1, weight=1)
         ttk.Button(footer_actions, text="Limpar Lista", style="Danger.TButton", command=self._clear_loaded_rows).grid(row=0, column=0, sticky="e", padx=(0, 8))
-        ttk.Button(footer_actions, text="Validar empresas", style="Primary.TButton", command=self._validate_loaded_rows).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Button(footer_actions, text="Validar Empresas", style="Primary.TButton", command=self._validate_loaded_rows).grid(row=0, column=1, sticky="w", padx=(8, 0))
 
     def _build_console(self, parent: ttk.Frame) -> None:
         """Monta o painel escuro de fluxo e log da operação."""
-        action_box = ttk.Frame(parent, style="Topbar.TFrame", padding=(20, 18))
+        # Área de ações do fluxo de trabalho — fundo branco com padding generoso
+        action_box = ttk.Frame(parent, style="Topbar.TFrame", padding=(20, 20))
         action_box.grid(row=0, column=0, sticky="ew")
         action_box.columnconfigure(0, weight=1)
 
-        ttk.Label(action_box, text="FLUXO DE TRABALHO", style="SidebarTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 14))
+        ttk.Label(action_box, text="FLUXO DE TRABALHO", style="SidebarTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 16))
 
         self.start_browser_button = ttk.Button(action_box, text="Iniciar Navegador", style="Primary.TButton", command=self._start_browser_if_needed)
-        self.start_browser_button.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        self.start_browser_button.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         self.execute_button = ttk.Button(action_box, text="Executar Extração", style="Success.TButton", command=self._run_selected, state="disabled")
         self.execute_button.grid(row=2, column=0, sticky="ew")
 
+        # Console de logs — fundo escuro (Console Black #1e1e1e)
         console_box = ttk.Frame(parent, style="Console.TFrame")
         console_box.grid(row=1, column=0, sticky="nsew")
         console_box.columnconfigure(0, weight=1)
         console_box.rowconfigure(1, weight=1)
 
-        console_header = ttk.Frame(console_box, style="ConsoleHeader.TFrame", padding=(16, 8))
+        console_header = ttk.Frame(console_box, style="ConsoleHeader.TFrame", padding=(16, 10))
         console_header.grid(row=0, column=0, sticky="ew")
         console_header.columnconfigure(0, weight=1)
         ttk.Label(console_header, text="LOG DE EXECUÇÃO", style="ConsoleTitle.TLabel").grid(row=0, column=0, sticky="w")
 
-        self.log_text = tk.Text(console_box, wrap="word", height=20, state="disabled", bg="#1e1e1e", fg="#d4d4d4", insertbackground="#ffffff", relief="flat", bd=0, padx=14, pady=12, font=("Consolas", 10))
+        # Fonte JetBrains Mono (fallback: Consolas) conforme o DESIGN.md (console-code)
+        self.log_text = tk.Text(
+            console_box,
+            wrap="word",
+            height=20,
+            state="disabled",
+            bg="#1e1e1e",
+            fg="#d4d4d4",
+            insertbackground="#ffffff",
+            selectbackground="#3d3d3d",
+            relief="flat",
+            bd=0,
+            padx=14,
+            pady=12,
+            font=("JetBrains Mono", 10),
+        )
+        # Configurar tags de cor para diferentes níveis de log (rich console)
+        self.log_text.tag_configure("log_info",    foreground="#d4d4d4")
+        self.log_text.tag_configure("log_success", foreground="#6db33f")
+        self.log_text.tag_configure("log_warning", foreground="#e97000")
+        self.log_text.tag_configure("log_error",   foreground="#f14c4c")
+
         log_scroll = ttk.Scrollbar(console_box, orient="vertical", command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=log_scroll.set)
         self.log_text.grid(row=1, column=0, sticky="nsew")
@@ -372,7 +592,7 @@ class SigaAutomationGUI:
         console_footer = ttk.Frame(console_box, style="ConsoleFooter.TFrame", padding=(16, 10))
         console_footer.grid(row=2, column=0, sticky="ew")
         console_footer.columnconfigure(0, weight=1)
-        ttk.Label(console_footer, text="Progresso da Operação", style="ConsoleTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(console_footer, text="PROGRESSO DA OPERAÇÃO", style="ConsoleTitle.TLabel").grid(row=0, column=0, sticky="w")
         self.progress_bar = ttk.Progressbar(console_footer, orient="horizontal", mode="determinate", maximum=100, variable=self.progress_var)
         self.progress_bar.grid(row=1, column=0, sticky="ew", pady=(8, 0))
     def _build_ui(self) -> None:
@@ -388,7 +608,8 @@ class SigaAutomationGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main.columnconfigure(0, weight=1)
-        main.rowconfigure(1, weight=1)
+        # Linha 0: topbar, linha 1: separador, linha 2: body, linha 3: separador, linha 4: footer
+        main.rowconfigure(2, weight=1)
 
         header = ttk.Frame(main, style="Topbar.TFrame", padding=(24, 12))
         header.grid(row=0, column=0, sticky="ew")
@@ -411,11 +632,17 @@ class SigaAutomationGUI:
         header_actions.grid(row=0, column=2, sticky="e")
         ttk.Button(header_actions, text="Ajuda", style="Ghost.TButton", command=self._show_help_dialog).grid(row=0, column=0)
 
+        # Separador visual entre a topbar e o corpo da aplicação
+        separator = tk.Frame(main, height=1, bg="#c5c6ce")
+        separator.grid(row=1, column=0, sticky="ew")
+
         body = ttk.Frame(main, style="App.TFrame")
-        body.grid(row=1, column=0, sticky="nsew")
-        body.columnconfigure(0, weight=0, minsize=300)
+        body.grid(row=2, column=0, sticky="nsew")
+        # Sidebar 240px conforme sidebar-width do DESIGN.md
+        body.columnconfigure(0, weight=0, minsize=240)
         body.columnconfigure(1, weight=1)
-        body.columnconfigure(2, weight=0, minsize=360)
+        # Painel do console com largura mínima de 320px
+        body.columnconfigure(2, weight=0, minsize=320)
         body.rowconfigure(0, weight=1)
 
         sidebar = ttk.Frame(body, style="Sidebar.TFrame", padding=(20, 20))
@@ -436,8 +663,12 @@ class SigaAutomationGUI:
         self._build_center(center)
         self._build_console(right)
 
-        footer = ttk.Frame(main, style="App.TFrame", padding=(20, 0, 20, 14))
-        footer.grid(row=2, column=0, sticky="ew")
+        # Separador inferior + barra de status
+        separator_bottom = tk.Frame(main, height=1, bg="#c5c6ce")
+        separator_bottom.grid(row=3, column=0, sticky="ew")
+
+        footer = ttk.Frame(main, style="App.TFrame", padding=(20, 6, 20, 10))
+        footer.grid(row=4, column=0, sticky="ew")
         footer.columnconfigure(0, weight=1)
         ttk.Label(footer, textvariable=self.status_var, style="Status.TLabel").grid(row=0, column=0, sticky="ew")
 
@@ -592,16 +823,18 @@ class SigaAutomationGUI:
         table.grid(row=0, column=0, sticky="nsew")
         table.columnconfigure(0, weight=1)
 
-        ttk.Label(table, text="Marque as empresas e as abas que deseja processar.").grid(
-            row=0, column=0, columnspan=5, sticky="w", pady=(0, 8)
+        # Instrução e fonte de dados
+        ttk.Label(table, text="Marque as empresas e as abas que deseja processar.", style="BodyMuted.TLabel").grid(
+            row=0, column=0, columnspan=5, sticky="w", pady=(0, 6)
         )
-        ttk.Label(table, text=source_label, foreground="#555555").grid(
+        ttk.Label(table, text=source_label, style="BodyMuted.TLabel").grid(
             row=1, column=0, columnspan=5, sticky="w", pady=(0, 6)
         )
-        ttk.Separator(table, orient="horizontal").grid(
-            row=2, column=0, columnspan=5, sticky="ew", pady=(0, 8)
-        )
+        # Separador suave antes do cabeçalho
+        sep = tk.Frame(table, height=1, bg="#c5c6ce")
+        sep.grid(row=2, column=0, columnspan=5, sticky="ew", pady=(0, 0))
 
+        # Cabeçalho com fundo surface_container (RowHeader)
         header = self._create_selection_row(
             parent=table,
             row_index=3,
@@ -611,25 +844,32 @@ class SigaAutomationGUI:
             nfce_widget=self._create_header_cell,
             cte_widget=self._create_header_cell,
             is_header=True,
+            row_style="RowHeader",
         )
-        header.grid(row=3, column=0, sticky="ew", pady=(0, 4))
+        header.grid(row=3, column=0, sticky="ew")
+        # Separador abaixo do cabeçalho
+        sep2 = tk.Frame(table, height=1, bg="#c5c6ce")
+        sep2.grid(row=4, column=0, columnspan=5, sticky="ew")
 
-        for index, spreadsheet_row in enumerate(spreadsheet_rows, start=4):
+        for index, spreadsheet_row in enumerate(spreadsheet_rows, start=5):
             nfe_var = tk.BooleanVar(value=True)
             nfce_var = tk.BooleanVar(value=True)
             cte_var = tk.BooleanVar(value=True)
+            # Zebra striping: linhas pares com fundo branco, ímpares com surface_low
+            row_style = "RowEven" if (index % 2 == 0) else "RowOdd"
 
             row_frame = self._create_selection_row(
                 parent=table,
                 row_index=index,
                 cod_text=spreadsheet_row.cod or "SEM-COD",
                 empresa_text=spreadsheet_row.empresa or "SEM-EMPRESA",
-                nfe_widget=lambda parent: ttk.Checkbutton(parent, variable=nfe_var),
-                nfce_widget=lambda parent: ttk.Checkbutton(parent, variable=nfce_var),
-                cte_widget=lambda parent: ttk.Checkbutton(parent, variable=cte_var),
+                nfe_widget=lambda parent, rv=nfe_var, rs=row_style: ttk.Checkbutton(parent, variable=rv, style=f"{rs}.TCheckbutton"),
+                nfce_widget=lambda parent, rv=nfce_var, rs=row_style: ttk.Checkbutton(parent, variable=rv, style=f"{rs}.TCheckbutton"),
+                cte_widget=lambda parent, rv=cte_var, rs=row_style: ttk.Checkbutton(parent, variable=rv, style=f"{rs}.TCheckbutton"),
                 is_header=False,
+                row_style=row_style,
             )
-            row_frame.grid(row=index, column=0, sticky="ew", pady=1)
+            row_frame.grid(row=index, column=0, sticky="ew")
 
             self.selection_rows.append(
                 RowSelectionWidgets(
@@ -642,8 +882,8 @@ class SigaAutomationGUI:
             )
 
         if not spreadsheet_rows:
-            ttk.Label(table, text="Nenhuma empresa disponivel.", foreground="#aa0000").grid(
-                row=4, column=0, columnspan=5, sticky="w", pady=(8, 0)
+            ttk.Label(table, text="Nenhuma empresa disponível.", style="BodyMuted.TLabel").grid(
+                row=5, column=0, columnspan=5, sticky="w", pady=(12, 0)
             )
 
     def _select_all_documents(self) -> None:
@@ -808,8 +1048,19 @@ class SigaAutomationGUI:
         self.root.after(100, self._drain_log_queue)
 
     def _append_text(self, line: str) -> None:
+        """Insere uma linha no log e aplica cor automática com base no nível detectado."""
         self.log_text.configure(state="normal")
-        self.log_text.insert("end", f"{line}\n")
+        # Detectar o nível do log com base em palavras-chave na linha
+        line_lower = line.lower()
+        if any(kw in line_lower for kw in ("erro", "error", "falha", "fail", "exception", "traceback")):
+            tag = "log_error"
+        elif any(kw in line_lower for kw in ("aviso", "warning", "warn", "atenção", "nao encontrado", "não encontrado")):
+            tag = "log_warning"
+        elif any(kw in line_lower for kw in ("concluído", "concluido", "sucesso", "success", "login confirmado", "finalizado")):
+            tag = "log_success"
+        else:
+            tag = "log_info"
+        self.log_text.insert("end", f"{line}\n", tag)
         self.log_text.configure(state="disabled")
 
     def _set_controls_state(self, state: str) -> None:
@@ -841,9 +1092,14 @@ class SigaAutomationGUI:
         nfce_widget,
         cte_widget,
         is_header: bool,
+        row_style: str = "RowEven",
     ) -> ttk.Frame:
-        """Cria uma linha fixa da grade com células alinhadas e tamanhos previsíveis."""
-        row_frame = ttk.Frame(parent)
+        """Cria uma linha fixa da grade com células alinhadas, zebra striping e tamanhos previsíveis."""
+        # Escolher o estilo de frame e label conforme o tipo de linha
+        frame_style = f"{row_style}.TFrame"
+        label_style = f"{row_style}.TLabel"
+
+        row_frame = ttk.Frame(parent, style=frame_style)
         row_frame.columnconfigure(0, minsize=self._row_columns[0], weight=0)
         row_frame.columnconfigure(1, minsize=self._row_columns[1], weight=1)
         row_frame.columnconfigure(2, minsize=self._row_columns[2], weight=0)
@@ -852,8 +1108,8 @@ class SigaAutomationGUI:
 
         cells = []
         for column, width in enumerate(self._row_columns):
-            cell = ttk.Frame(row_frame, width=width)
-            cell.grid(row=0, column=column, sticky="nsew", padx=(0 if column == 0 else 8, 0))
+            cell = ttk.Frame(row_frame, width=width, style=frame_style)
+            cell.grid(row=0, column=column, sticky="nsew", padx=(0 if column == 0 else 6, 0))
             cell.grid_propagate(False)
             cells.append(cell)
 
@@ -861,16 +1117,18 @@ class SigaAutomationGUI:
             cells[0],
             text=cod_text,
             anchor="center",
-        ).pack(fill="x", padx=4, pady=2)
+            style=label_style,
+        ).pack(fill="x", padx=4, pady=4)
         ttk.Label(
             cells[1],
             text=empresa_text,
             anchor="w" if not is_header else "center",
-        ).pack(fill="x", padx=4, pady=2)
+            style=label_style,
+        ).pack(fill="x", padx=4, pady=4)
 
         if is_header:
             for index, label in enumerate(("NF-e", "NFC-e", "CT-e"), start=2):
-                ttk.Label(cells[index], text=label, anchor="center").pack(expand=True, fill="both")
+                ttk.Label(cells[index], text=label, anchor="center", style=label_style).pack(expand=True, fill="both")
         else:
             nfe_widget(cells[2]).pack(expand=True)
             nfce_widget(cells[3]).pack(expand=True)

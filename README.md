@@ -1,109 +1,40 @@
 # SIGA Automação
 
-Automação corporativa para extração em lote de documentos fiscais no SIGA da Sefaz-CE.
+O **SIGA Automação** é uma solução corporativa de alta performance projetada para otimizar e automatizar o processo de extração em lote de documentos fiscais diretamente do portal SIGA da Secretaria da Fazenda do Estado do Ceará (SEFAZ-CE).
 
-O **SIGA Automação** foi criado para reduzir tempo operacional, padronizar rotinas repetitivas e aumentar a confiabilidade da extração de documentos fiscais. Com ele, sua equipe consegue solicitar, localizar e baixar informações fiscais com muito menos cliques, menos retrabalho e mais rastreabilidade.
+Desenvolvido para atender a demandas de alta volumetria, o sistema elimina as tarefas repetitivas de navegação manual, reduzindo drasticamente o tempo operacional de fechamento fiscal, mitigando erros humanos e garantindo a conformidade e rastreabilidade dos documentos obtidos.
 
-## Diferenciais
+---
 
-- Elimina navegação manual repetitiva no portal SIGA.
-- Processa em lote NF-e, NFC-e e CT-e.
-- Funciona com planilha `.xlsx` ou entrada manual na GUI.
-- Organiza automaticamente os arquivos por `COD - EMPRESA - CNPJ`.
-- Mantém logs, avisos e saídas estruturadas para facilitar auditoria.
+## Proposta de Valor
 
-## Público indicado
+No cenário tributário atual, a agilidade na coleta de dados fiscais é essencial. O **SIGA Automação** substitui horas de trabalho manual por um processo automatizado, inteligente e seguro. Com poucos cliques, a ferramenta gerencia o fluxo de requisição, monitoramento e download de documentos fiscais eletrônicos, permitindo que a equipe contábil concentre-se em atividades analíticas e de tomada de decisão.
 
-- Escritórios de contabilidade.
-- Departamentos fiscais e financeiros.
-- Equipes de backoffice com alto volume de empresas.
-- Operações que precisam de rotina padronizada e repetível.
+## Principais Funcionalidades
 
-## O que a solução entrega
+* **Extração Inteligente em Lote:** Processamento sequencial e automatizado de múltiplos contribuintes a partir de uma única lista de trabalho.
+* **Cobertura de Documentos:** Suporte completo para download de Notas Fiscais Eletrônicas (NF-e), Notas Fiscais de Consumidor Eletrônicas (NFC-e) e Conhecimentos de Transporte Eletrônicos (CT-e).
+* **Organização Estruturada:** Classificação e armazenamento automático dos arquivos baixados em pastas organizadas por código interno, nome da empresa e CNPJ (`COD - EMPRESA - CNPJ`), facilitando a posterior importação em sistemas ERP ou de auditoria.
+* **Interface Fluida e Assistida:** Painel gráfico refinado, estruturado sob diretrizes modernas de design, para facilitar a operação diária sem necessidade de conhecimentos técnicos de desenvolvimento.
+* **Rastreabilidade e Auditoria:** Console de log dinâmico com identificação visual por níveis (sucesso, alertas, falhas de conexão ou empresas não localizadas), garantindo total visibilidade sobre cada execução do lote.
+* **Flexibilidade de Entrada:** Permite importar dados de forma rápida utilizando planilhas eletrônicas padronizadas ou inserindo as informações diretamente na interface.
 
-- Interface gráfica com foco em operação assistida.
-- Execução por terminal para rotinas automatizadas e integrações.
-- Navegação controlada com sessão autenticada reaproveitável.
-- Solicitação em lote dos detalhamentos antes da Central de Downloads.
-- Salvamento dos arquivos com extensão real preservada.
-- Geração de `.txt` quando um CNPJ ou download não é localizado.
+## Público-Alvo
 
-## Como usar
+* **Escritórios de Contabilidade e Assessoria:** Que lidam com centenas de clientes e necessitam de processos padronizados de fechamento fiscal mensal.
+* **Departamentos Fiscais Corporativos:** Que demandam exatidão e velocidade na auditoria interna de entradas e saídas.
+* **Equipes de Controladoria e Backoffice:** Que buscam reduzir a sobrecarga administrativa e eliminar erros de digitação e consulta manual.
 
-### 1. Preparar a planilha
+## Visão Geral do Fluxo de Operação
 
-Crie ou utilize uma planilha `.xlsx` com as colunas:
+O fluxo de trabalho foi projetado para ser intuitivo e direto:
 
-- `COD`
-- `EMPRESA`
-- `CNPJ`
+1. **Definição do Escopo:** O operador importa uma planilha com a relação de CNPJs ou digita os dados de interesse diretamente no painel.
+2. **Seleção de Período:** Define-se o mês, o ano e quais tipos de documentos fiscais eletrônicos serão consultados.
+3. **Autenticação:** O navegador seguro e integrado é inicializado para que o operador realize o login de forma protegida (usando suas credenciais de acesso ou certificado digital).
+4. **Execução:** A automação assume a navegação a partir desse ponto, navegando pelos menus internos do portal SIGA, realizando as solicitações de detalhamento e baixando os arquivos diretamente para o diretório de destino selecionado.
 
-Os CNPJs devem ser mantidos com 14 dígitos, incluindo zeros à esquerda.
-
-### 2. Abrir a GUI
-
-Você pode executar a interface gráfica com:
-
-```powershell
-.\.venv\Scripts\python.exe .\main_gui.py
-```
-
-Ou, se já tiver instalado:
-
-```powershell
-.\dist\siga-automacao-gui.exe
-```
-
-Na GUI, o fluxo recomendado é:
-
-1. Carregar a planilha ou usar a entrada manual.
-2. Selecionar mês, ano, documentos e pasta de saída.
-3. Iniciar o navegador.
-4. Fazer o login manual no SIGA.
-5. Executar a extração.
-
-### 3. Usar via terminal
-
-```powershell
-.\.venv\Scripts\python.exe .\src\main.py
-```
-
-O terminal mantém o mesmo motor de extração da GUI, mas é ideal para rotinas automatizadas, integrações e uso mais técnico.
-
-## Resultado esperado
-
-Com o SIGA Automação, a operação deixa de depender de navegação manual repetitiva e passa a seguir um fluxo padronizado, rastreável e pronto para uso em contexto corporativo.
-
-## Estrutura de saída
-
-Os arquivos são organizados automaticamente em uma estrutura previsível:
-
-```text
-<pasta de saída>/<COD - EMPRESA - CNPJ>/<mês>/<tipo de documento>/
-```
-
-Essa organização facilita conferência, arquivamento e compartilhamento interno.
-
-## Compilação e distribuição
-
-### Executável da GUI
-
-```powershell
-.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean siga-automacao-gui.spec
-```
-
-### Instalador Windows
-
-Abra `installer\siga-automacao.iss` no Inno Setup e clique em `Compile`.
-
-O instalador final será gerado em `dist\installer\`.
-
-## Recursos de operação
-
-- Reutilização de sessão autenticada, quando disponível.
-- Compatibilidade com certificado digital e políticas locais do navegador.
-- Menu de ajuda na GUI com passo a passo de uso.
-- Ícones e logo próprios no executável e no instalador.
+---
 
 ## Licenciamento
 
