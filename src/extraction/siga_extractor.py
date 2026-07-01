@@ -1090,7 +1090,7 @@ class SigaContributorExtractor:
             "solicitacao de download foi realizada",
             "solicitacao de download ja foi realizada",
         )
-        requested_after = _time.time()
+        requested_after = datetime.now() - timedelta(seconds=30)
         deadline = _time.time() + 30
         while _time.time() < deadline:
             try:
@@ -1177,7 +1177,7 @@ class SigaContributorExtractor:
             "solicitacao de download foi realizada",
             "solicitacao de download ja foi realizada",
         )
-        requested_after = _time.time()
+        requested_after = datetime.now() - timedelta(seconds=30)
         deadline = _time.time() + 30
         while _time.time() < deadline:
             try:
