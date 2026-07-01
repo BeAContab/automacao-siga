@@ -371,11 +371,11 @@ def run_gui_mode(
     month: str | None = None,
     year: int | None = None,
 ) -> int:
-    """Abre a interface gráfica baseada em Webview e preserva valores iniciais vindos do CLI."""
-    from src.gui.gui_webview import launch_gui_webview
+    """Abre a interface gráfica baseada em Tkinter e preserva valores iniciais vindos do CLI."""
+    from src.gui import launch_gui
 
     initial_year = str(year) if year is not None else None
-    return launch_gui_webview(
+    return launch_gui(
         settings,
         initial_spreadsheet=spreadsheet,
         initial_month=month,

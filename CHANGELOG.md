@@ -1,5 +1,16 @@
 # Changelog
 
+## [2026-07-01] — Versão 1.4.0
+
+### Alterado
+- **Motor de GUI (Reversão de PyWebView para Tkinter):** Remoção completa da biblioteca PyWebView, do HTML local e da ponte em Base64. A interface gráfica voltou a rodar inteiramente no motor nativo do **Tkinter/ttk**.
+- **Aparência e Design System (DESIGN.md):** Aplicação de uma estilização completa na interface do Tkinter, definindo a paleta de cores (fundo geral `#f7f9ff`, sidebar `#0d1d2a`, botões em `#006e25` e outline `#bfcaba`) e escala tipográfica baseadas no protótipo de design.
+- **Suporte a 5 Abas de Documentos:** A grade de empresas do Tkinter foi expandida para 7 colunas no total, integrando checkboxes individuais para seleção de **Malha Fiscal** e **Débitos Fiscais** na interface, mantendo paridade com as extrações suportadas pelo backend.
+- **Diálogos de Sistema:** Retorno ao uso dos métodos `filedialog.askopenfilename` e `askdirectory` do Tkinter, eliminando travamentos de UI e a dependência de chamadas externas de PowerShell.
+
+### Removido
+- Pasta `src/gui/` com arquivos legados `gui.html` e `gui_webview.py`.
+
 ## [2026-07-01] — Versão 1.3.2
 
 ### Adicionado
