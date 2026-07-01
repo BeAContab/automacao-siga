@@ -7,6 +7,7 @@
 - **Aparência e Design System (DESIGN.md):** Aplicação de uma estilização completa na interface do Tkinter, definindo a paleta de cores (fundo geral `#f7f9ff`, sidebar `#0d1d2a`, botões em `#006e25` e outline `#bfcaba`) e escala tipográfica baseadas no protótipo de design.
 - **Suporte a 5 Abas de Documentos:** A grade de empresas do Tkinter foi expandida para 7 colunas no total, integrando checkboxes individuais para seleção de **Malha Fiscal** e **Débitos Fiscais** na interface, mantendo paridade com as extrações suportadas pelo backend.
 - **Diálogos de Sistema:** Retorno ao uso dos métodos `filedialog.askopenfilename` e `askdirectory` do Tkinter, eliminando travamentos de UI e a dependência de chamadas externas de PowerShell.
+- **Otimização de Largura da Tabela e Console (Tkinter):** Redução dos espaçamentos da grade de checkboxes no `src/gui.py` de `712px` para `500px` (redimensionando colunas `COD`, `EMPRESA`, e as abas fiscais) e limitação do console de logs para largura inicial `width=40`. Isso resolve o problema de corte visual no grid, permitindo que todas as 5 colunas de checkboxes de extração fiquem integralmente visíveis e alinhadas na tela.
 
 ### Corrigido
 - **Parâmetro de Referência de Mês:** Correção das chamadas a `_build_pending_request` nos métodos `_request_malha_fiscal` e `_request_debitos_fiscais` do `src/extraction/siga_extractor.py`, repassando corretamente o argumento nomeado `month_reference`. Isso sana o `TypeError` e garante o download correto dos arquivos correspondentes na Central de Downloads.

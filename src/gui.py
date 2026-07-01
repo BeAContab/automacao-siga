@@ -115,7 +115,7 @@ class SigaAutomationGUI:
         self.selection_rows: list[RowSelectionWidgets] = []
         self._worker_thread: threading.Thread | None = None
         self._stop_requested = False
-        self._row_columns = (72, 220, 84, 84, 84, 84, 84)
+        self._row_columns = (40, 180, 50, 55, 50, 60, 65)
         self._browser_started = False
         self.start_browser_button: ttk.Button | None = None
         self.execute_button: ttk.Button | None = None
@@ -572,6 +572,7 @@ class SigaAutomationGUI:
         self.log_text = tk.Text(
             console_box,
             wrap="word",
+            width=40,
             height=20,
             state="disabled",
             bg="#1e1e1e",
