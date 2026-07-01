@@ -13,7 +13,7 @@ No cenário tributário atual, a agilidade na coleta de dados fiscais é essenci
 ## Principais Funcionalidades
 
 * **Extração Inteligente em Lote:** Processamento sequencial e automatizado de múltiplos contribuintes a partir de uma única lista de trabalho.
-* **Cobertura de Documentos:** Suporte completo para download de Notas Fiscais Eletrônicas (NF-e), Notas Fiscais de Consumidor Eletrônicas (NFC-e) e Conhecimentos de Transporte Eletrônicos (CT-e).
+* **Cobertura de Documentos:** Suporte completo para consulta e download de Notas Fiscais Eletrônicas (NF-e), Notas Fiscais de Consumidor Eletrônicas (NFC-e), Conhecimentos de Transporte Eletrônicos (CT-e), assim como relatórios especiais de **Malha Fiscal** (indícios de irregularidades) e **Débitos Fiscais**.
 * **Organização Estruturada:** Classificação e armazenamento automático dos arquivos baixados em pastas organizadas por código interno, nome da empresa e CNPJ (`COD - EMPRESA - CNPJ`), facilitando a posterior importação em sistemas ERP ou de auditoria.
 * **Interface Fluida e Assistida:** Painel gráfico refinado, estruturado sob diretrizes modernas de design, para facilitar a operação diária sem necessidade de conhecimentos técnicos de desenvolvimento.
 * **Rastreabilidade e Auditoria:** Console de log dinâmico com identificação visual por níveis (sucesso, alertas, falhas de conexão ou empresas não localizadas), garantindo total visibilidade sobre cada execução do lote.
