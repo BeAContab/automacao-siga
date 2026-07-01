@@ -1110,6 +1110,7 @@ class SigaContributorExtractor:
 
         return self._build_pending_request(
             cgf=cgf,
+            month_reference=month_reference,
             document_tab="Malha Fiscal",
             profile_name="Indícios",
             summary_path=None,
@@ -1195,6 +1196,7 @@ class SigaContributorExtractor:
 
         return self._build_pending_request(
             cgf=cgf,
+            month_reference=month_reference,
             document_tab="Débitos Fiscais",
             profile_name="Débitos",
             summary_path=None,

@@ -8,6 +8,9 @@
 - **Suporte a 5 Abas de Documentos:** A grade de empresas do Tkinter foi expandida para 7 colunas no total, integrando checkboxes individuais para seleção de **Malha Fiscal** e **Débitos Fiscais** na interface, mantendo paridade com as extrações suportadas pelo backend.
 - **Diálogos de Sistema:** Retorno ao uso dos métodos `filedialog.askopenfilename` e `askdirectory` do Tkinter, eliminando travamentos de UI e a dependência de chamadas externas de PowerShell.
 
+### Corrigido
+- **Parâmetro de Referência de Mês:** Correção das chamadas a `_build_pending_request` nos métodos `_request_malha_fiscal` e `_request_debitos_fiscais` do `src/extraction/siga_extractor.py`, repassando corretamente o argumento nomeado `month_reference`. Isso sana o `TypeError` e garante o download correto dos arquivos correspondentes na Central de Downloads.
+
 ### Removido
 - Pasta `src/gui/` com arquivos legados `gui.html` e `gui_webview.py`.
 
