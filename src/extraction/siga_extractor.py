@@ -3210,17 +3210,18 @@ class SigaContributorExtractor:
         sem os requisitos do fluxo padrão (informacoes fiscais / detalhamento).
         """
         normalized_target = self._normalize_download_target(tela_aba)
+        target_clean = strip_accents(normalized_target)
         tab = ""
         # Verificar abas especiais antes das abas padrão
-        if "malha fiscal" in normalized_target or "malha-fiscal" in normalized_target:
+        if "malha fiscal" in target_clean or "malha-fiscal" in target_clean:
             tab = "malha fiscal"
-        elif "debitos fiscais" in normalized_target or "debitos-fiscais" in normalized_target:
+        elif "debitos fiscais" in target_clean or "debitos-fiscais" in target_clean:
             tab = "debitos fiscais"
-        elif "nfc-e" in normalized_target:
+        elif "nfc-e" in target_clean:
             tab = "nfc-e"
-        elif "ct-e" in normalized_target:
+        elif "ct-e" in target_clean:
             tab = "ct-e"
-        elif "nf-e" in normalized_target:
+        elif "nf-e" in target_clean:
             tab = "nf-e"
 
         view = ""

@@ -11,6 +11,7 @@
 ### Corrigido
 - **Parâmetro de Referência de Mês:** Correção das chamadas a `_build_pending_request` nos métodos `_request_malha_fiscal` e `_request_debitos_fiscais` do `src/extraction/siga_extractor.py`, repassando corretamente o argumento nomeado `month_reference`. Isso sana o `TypeError` e garante o download correto dos arquivos correspondentes na Central de Downloads.
 - **Conflito de Tipo de Data (TypeError):** Correção do tipo de dados da data de solicitação (`requested_after`) nas abas de Malha Fiscal e Débitos Fiscais no `src/extraction/siga_extractor.py`, alterando de float timestamp (`_time.time()`) para objeto `datetime.datetime`. Isso resolve o `TypeError` durante o escaneamento da Central de Downloads e restabelece o fluxo de download.
+- **Confusão de Download (Malha vs Débitos Fiscais):** Aplicação da função `strip_accents` sobre o título de download normalizado no método `_extract_download_match_fragments_from_title` do `src/extraction/siga_extractor.py`. Isso resolve o problema de correspondência causado pela acentuação de "Débitos Fiscais" e impede que o robô confunda e duplique o download do relatório de Malha Fiscal.
 
 ### Removido
 - Pasta `src/gui/` com arquivos legados `gui.html` e `gui_webview.py`.
