@@ -9,7 +9,6 @@ a = Analysis(
         ('images/logo/logo.png', 'images/logo'),
         ('images/icons/siga-automacao.ico', 'images/icons'),
         ('images/icons/siga-automacao-32x32.png', 'images/icons'),
-        ('src/gui/gui.html', 'src/gui'),
     ],
     hiddenimports=[
         'selenium.webdriver.common.action_chains',
