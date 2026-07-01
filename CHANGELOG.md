@@ -1,5 +1,72 @@
 # Changelog
 
+## [2026-07-01] — Versão 1.3.2
+
+### Adicionado
+- **Interface Drag and Drop (HTML5):** A dependência de diálogos nativos do Windows (PowerShell/WinForms) para seleção de planilhas foi integralmente substituída por uma área de Arrastar e Soltar na GUI.
+- **Leitura via Base64:** O JavaScript nativo agora intercepta o arquivo solto ou selecionado, converte a planilha para Base64 usando `FileReader` e a envia de forma segura à API Python, eliminando qualquer risco de travamento de UI ou bloqueios de permissão do sistema operacional.
+
+## [2026-07-01] — Versão 1.3.1
+
+### Corrigido
+- Arquivos:
+  - `src/gui/gui_webview.py`
+- Motivo: os diálogos nativos do Windows (`OpenFileDialog` e `FolderBrowserDialog`) falhavam silenciosamente porque o PowerShell estava sendo instanciado em modo Multi-Threaded Apartment (MTA). Componentes WinForms requerem execução em Single-Threaded Apartment (STA).
+- Impacto: adicionada a flag `-STA` e as chamadas do subprocesso foram alteradas para o formato de lista segura. As janelas de seleção de arquivo e diretório voltam a abrir corretamente.
+
+### Alterado
+- Arquivos:
+  - `src/gui/gui.html`
+- Motivo: reposicionamento do botão "Importar Planilha" que ficava preso junto ao cabeçalho da grade, ocupando espaço indevido e gerando alertas excessivos na tela.
+- Impacto: o botão foi desmembrado para um card elegante e centralizado acima da tabela, deixando a grade mais limpa e focada exclusivamente na exibição dos CNPJs.
+
+## [2026-07-01] — Versão 1.3.0
+
+### Adicionado
+- **Interface Baseada em Webview (HTML5/Tailwind/JS):** A interface anterior desenvolvida em Tkinter foi inteiramente removida e substituída por uma tela desktop web view moderna, implementada através do **PyWebView**.
+  - O design visual foi migrado a partir do protótipo `design/code.html` (Stitch).
+  - A barra lateral de configurações conta com seletores integrados de Mês (iniciando com o mês atual por padrão), Ano (ano atual por padrão) e caixas de marcação globais (todas iniciando desmarcadas).
+  - A sidebar pode ser redimensionada dinamicamente pelo usuário (entre 200px e 450px) arrastando o divisor lateral, ajustando automaticamente o alinhamento esquerdo da grade e do console inferior.
+  - A grade principal foi otimizada para carregar dinamicamente os CNPJs, códigos internos e empresas da planilha.
+  - O console inferior agora exibe em tempo real o fluxo de logs do Python (`INFO`, `WARNING`, `SUCCESS`, `ERROR`) com formatação e cores adequadas, facilitando o diagnóstico visual pelo usuário.
+
+### Alterado
+- Arquivos:
+  - `src/main.py`
+  - `src/__init__.py`
+  - `siga-automacao-gui.spec`
+  - `installer/siga-automacao.iss`
+- **Ponte de Dados (Bridge):** Comunicação bidirecional implementada no arquivo `src/gui/gui_webview.py` através do objeto exposto `js_api` do `pywebview`, permitindo a coleta das configurações, seleção e a injeção dinâmica de registros.
+- **Diálogos Nativos do SO:** Substituição das janelas de diálogo de arquivos e pastas do Tkinter pelas funções nativas do PyWebView (`window.create_file_dialog`).
+- **Execução Assíncrona:** A extração agora ocorre em uma Thread secundária no backend, mantendo a responsividade do HTML e a animação do console sem travamento.
+
+### Removido
+- Arquivo `src/gui.py` (antiga interface gráfica em Tkinter).
+
+## [2026-07-01] — Versão 1.2.0
+
+### Adicionado
+- **Malha Fiscal:** nova aba de extração que navega até o menu "Malha Fiscal" no portal SIGA/SEFAZ-CE, solicita o download dos indícios de irregularidades em XLSX e aguarda a confirmação de solicitação antes de resgatar o arquivo na Central de Downloads.
+- **Débitos Fiscais:** nova aba de extração que navega até o menu "Débitos Fiscais", solicita o download em XLSX e segue o mesmo fluxo de espera e resgate da Central de Downloads.
+- Ambas as abas foram integradas à GUI (checkboxes na barra lateral + colunas "Malha" e "Débitos" na grade de CNPJs) e ao CLI (opções `4` e `5` no prompt interativo e suporte via `--docs`).
+
+### Alterado
+- Arquivos:
+  - `src/__init__.py`
+  - `installer/siga-automacao.iss`
+  - `src/gui.py`
+  - `src/main.py`
+  - `src/extraction/siga_extractor.py`
+- Motivo: adição das novas abas de extração fiscal especial (Malha Fiscal e Débitos Fiscais) à GUI, ao CLI e ao motor de extração.
+- Impacto:
+  - `DOCUMENT_TABS` e `DOCUMENT_TAB_OPTIONS` expandidos de 3 para 5 opções.
+  - `RowSelectionWidgets` recebeu dois novos campos `malha_var` e `debitos_var`.
+  - Grade de CNPJs expandida de 5 para 7 colunas.
+  - `_normalize_selected_tabs` agora reconhece as abas especiais sem exigir `FiscalTabConfig`.
+  - `_extract_fiscal_tables` despacha as abas especiais para `_request_malha_fiscal` e `_request_debitos_fiscais` antes do loop padrão.
+  - `_extract_download_match_fragments_from_title` e `_row_contains_signature_fragments` atualizados para reconhecer os títulos de Malha Fiscal e Débitos Fiscais na Central de Downloads.
+  - Versão de lançamento incrementada para `1.2.0`.
+
 ## [2026-06-23] — Versão 1.1.2
 
 ### Alterado

@@ -28,7 +28,8 @@ from src.utils.certificate_policy import (
 )
 from src.utils.logging_setup import configure_logging
 
-DOCUMENT_TAB_OPTIONS = ("NF-e", "NFC-e", "CT-e")
+# Abas de documentos fiscais disponíveis para seleção via CLI
+DOCUMENT_TAB_OPTIONS = ("NF-e", "NFC-e", "CT-e", "Malha Fiscal", "Débitos Fiscais")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -143,7 +144,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--docs",
         nargs="+",
         help=(
-            "Document tabs to process. Accepted values: NF-e, NFC-e, CT-e. "
+            "Document tabs to process. Accepted values: NF-e, NFC-e, CT-e, "
+            "Malha Fiscal, Debitos Fiscais. "
             "You can provide one or more values, for example: --docs NF-e CT-e"
         ),
     )
@@ -253,7 +255,8 @@ def _normalize_selected_tabs(values: list[str] | tuple[str, ...] | None) -> list
         match = normalized_map.get(normalized)
         if not match:
             raise ValueError(
-                "Valor inválido em --docs. Use apenas: NF-e, NFC-e, CT-e (ou 'all')."
+                "Valor inválido em --docs. Use apenas: NF-e, NFC-e, CT-e, "
+                '"Malha Fiscal", "Debitos Fiscais" (ou \'all\')."'
             )
         if match not in selected:
             selected.append(match)
@@ -266,7 +269,9 @@ def _prompt_document_tabs() -> list[str]:
     print("1. NF-e")
     print("2. NFC-e")
     print("3. CT-e")
-    print("4. Todos")
+    print("4. Malha Fiscal")
+    print("5. Débitos Fiscais")
+    print("6. Todos")
     print("Exemplo: 1,3 ou NF-e,CT-e")
 
     while True:
@@ -278,7 +283,7 @@ def _prompt_document_tabs() -> list[str]:
         expanded: list[str] = []
         for token in tokens:
             if token.isdigit():
-                mapping = {"1": "NF-e", "2": "NFC-e", "3": "CT-e", "4": "all"}
+                mapping = {"1": "NF-e", "2": "NFC-e", "3": "CT-e", "4": "Malha Fiscal", "5": "Débitos Fiscais", "6": "all"}
                 mapped = mapping.get(token)
                 if not mapped:
                     expanded = []
@@ -292,7 +297,7 @@ def _prompt_document_tabs() -> list[str]:
         try:
             return _normalize_selected_tabs(expanded)
         except ValueError:
-            print("Opção inválida. Use NF-e, NFC-e, CT-e ou Todos.")
+            print("Opção inválida. Use NF-e, NFC-e, CT-e, Malha Fiscal, Débitos Fiscais ou Todos.")
 
 
 def _print_batch_summary(results: list[BatchExtractionResult], total_rows: int) -> None:
@@ -366,11 +371,11 @@ def run_gui_mode(
     month: str | None = None,
     year: int | None = None,
 ) -> int:
-    """Abre a interface gráfica e preserva valores iniciais vindos do CLI."""
-    from src.gui import launch_gui
+    """Abre a interface gráfica baseada em Webview e preserva valores iniciais vindos do CLI."""
+    from src.gui.gui_webview import launch_gui_webview
 
     initial_year = str(year) if year is not None else None
-    return launch_gui(
+    return launch_gui_webview(
         settings,
         initial_spreadsheet=spreadsheet,
         initial_month=month,

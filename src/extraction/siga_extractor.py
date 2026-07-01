@@ -241,7 +241,9 @@ class SigaContributorExtractor:
             elif selected_tabs_by_cnpj is not None:
                 tabs_for_row = selected_tabs_by_cnpj.get(spreadsheet_row.cnpj)
             if tabs_for_row is not None:
-                tabs_for_row = [tab for tab in tabs_for_row if tab in {"NF-e", "NFC-e", "CT-e"}]
+                # Validação delegada a _normalize_selected_tabs — sem filtro rígido aqui
+                tabs_for_row = [tab for tab in tabs_for_row
+                                if tab in {"NF-e", "NFC-e", "CT-e", "Malha Fiscal", "Débitos Fiscais"}]
             pending_requests = self._extract_fiscal_tables(
                 page,
                 spreadsheet_row.cnpj,
@@ -390,9 +392,32 @@ class SigaContributorExtractor:
         taxpayer_folder_name: str,
         selected_tabs: list[str] | None = None,
     ) -> list[PendingDetailRequest]:
-        """Percorre as abas fiscais selecionadas e agrega as solicitações de download."""
+        """Percorre as abas fiscais selecionadas e agrega as solicitações de download.
+
+        As abas "Malha Fiscal" e "Débitos Fiscais" possuem fluxos próprios e são
+        despachadas para métodos dedicados antes do loop de abas fiscais padrão.
+        """
         results: list[PendingDetailRequest] = []
         allowed_tabs = self._normalize_selected_tabs(selected_tabs)
+
+        # --- Abas especiais que não seguem o fluxo de Informações Fiscais ---
+        if "Malha Fiscal" in allowed_tabs:
+            try:
+                request = self._request_malha_fiscal(page, cgf, month_reference, taxpayer_folder_name)
+                if request is not None:
+                    results.append(request)
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("Falha ao solicitar Malha Fiscal para o CNPJ %s", cgf)
+
+        if "Débitos Fiscais" in allowed_tabs:
+            try:
+                request = self._request_debitos_fiscais(page, cgf, month_reference, taxpayer_folder_name)
+                if request is not None:
+                    results.append(request)
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("Falha ao solicitar Débitos Fiscais para o CNPJ %s", cgf)
+
+        # --- Abas fiscais padrão (NF-e, NFC-e, CT-e) ---
         for tab_config in self._build_fiscal_tab_configs():
             if tab_config.tab_name not in allowed_tabs:
                 LOGGER.info("Ignorando a aba fiscal %s porque ela não foi selecionada", tab_config.tab_name)
@@ -446,8 +471,18 @@ class SigaContributorExtractor:
         )
 
     def _normalize_selected_tabs(self, selected_tabs: list[str] | None) -> set[str]:
-        """Converte a seleção do usuário em um conjunto válido de abas fiscais."""
+        """Converte a seleção do usuário em um conjunto válido de abas fiscais.
+
+        As abas especiais "Malha Fiscal" e "Débitos Fiscais" são incluídas no
+        conjunto disponível mas processadas por métodos dedicados, não pelo
+        loop de FiscalTabConfig padrão.
+        """
+        # Abas do loop padrão (NF-e, NFC-e, CT-e)
         available_tabs = {config.tab_name: config.tab_name for config in self._build_fiscal_tab_configs()}
+        # Abas especiais adicionais
+        for special_tab in ("Malha Fiscal", "Débitos Fiscais"):
+            available_tabs[special_tab] = special_tab
+
         if not selected_tabs:
             return set(available_tabs.keys())
 
@@ -993,6 +1028,182 @@ class SigaContributorExtractor:
             fallback_task="Localize e clique na seção, aba ou botão chamado Informações Fiscais.",
         )
         page.wait_for_timeout(1_000)
+
+    # ------------------------------------------------------------------
+    # Métodos dedicados para Malha Fiscal e Débitos Fiscais
+    # ------------------------------------------------------------------
+
+    def _request_malha_fiscal(
+        self,
+        page: Page,
+        cgf: str,
+        month_reference: str,
+        taxpayer_folder_name: str,
+    ) -> "PendingDetailRequest | None":
+        """Navega até Malha Fiscal, solicita o download de indícios e retorna a
+        solicitação pendente para ser resgatada na Central de Downloads.
+
+        Fluxo:
+            1. Abre o menu lateral e clica em "Malha Fiscal".
+            2. Localiza o botão "Baixar todos os indícios (XLSX)" e clica.
+            3. Aguarda a mensagem de confirmação de solicitação do download.
+            4. Retorna um PendingDetailRequest apontando para a Central de Downloads.
+        """
+        import time as _time
+        LOGGER.info("Iniciando extração de Malha Fiscal para o CNPJ %s", cgf)
+        self._ensure_side_menu_open(page)
+
+        # --- Navegar até Malha Fiscal ---
+        if not self._click_xpath(
+            page,
+            "xpath=//a[contains(@href,'/malha-fiscal') or contains(normalize-space(.),'Malha Fiscal')]",
+            "Menu lateral Malha Fiscal",
+        ):
+            self._click_text_action(
+                page,
+                names=("Malha Fiscal",),
+                artifact_name="malha-fiscal",
+                fallback_task="Localize e clique no item de menu chamado 'Malha Fiscal'.",
+            )
+        page.wait_for_timeout(1_500)
+
+        # --- Clicar em Baixar todos os indícios (XLSX) ---
+        baixar_clicked = self._click_xpath(
+            page,
+            "xpath=//button[contains(normalize-space(.),'Baixar todos os ind') or contains(@title,'Baixar todos os ind')]",
+            "Botão Baixar todos os indícios XLSX",
+        )
+        if not baixar_clicked:
+            self._click_text_action(
+                page,
+                names=("Baixar todos os indicios",),
+                artifact_name="malha-fiscal-baixar-indicios",
+                fallback_task=(
+                    "Em 'Indícios de irregularidades', localize o botão "
+                    "'Baixar todos os indícios (XLSX)' e clique nele."
+                ),
+            )
+
+        # --- Aguardar a mensagem de confirmação do toast ---
+        LOGGER.info("Aguardando confirmação de solicitação de download de Malha Fiscal")
+        toast_messages = (
+            "solicitacao de download foi realizada",
+            "solicitacao de download ja foi realizada",
+        )
+        requested_after = _time.time()
+        deadline = _time.time() + 30
+        while _time.time() < deadline:
+            try:
+                body_text = strip_accents(page.locator("body").inner_text(timeout=3_000)).lower()
+                if any(msg in body_text for msg in toast_messages):
+                    LOGGER.info("Confirmação de download de Malha Fiscal recebida")
+                    break
+            except Exception:  # noqa: BLE001
+                pass
+            page.wait_for_timeout(500)
+
+        # Normalizar o CNPJ para 14 dígitos (obrigatório para o título do arquivo)
+        cnpj_digits = self._normalize_numeric_document(cgf).zfill(14)
+        # O título na Central de Downloads segue o padrão:
+        # "Malha Fiscal - Visão Geral - Indícios de Irregularidades - <CNPJ14>"
+        tela_aba = f"Malha Fiscal - Visão Geral - Indícios de Irregularidades - {cnpj_digits}"
+
+        return self._build_pending_request(
+            cgf=cgf,
+            document_tab="Malha Fiscal",
+            profile_name="Indícios",
+            summary_path=None,
+            report_name="malha-fiscal-indicios",
+            tela_aba=tela_aba,
+            requested_after=requested_after,
+            taxpayer_document=cgf,
+            taxpayer_folder_name=taxpayer_folder_name,
+        )
+
+    def _request_debitos_fiscais(
+        self,
+        page: Page,
+        cgf: str,
+        month_reference: str,
+        taxpayer_folder_name: str,
+    ) -> "PendingDetailRequest | None":
+        """Navega até Débitos Fiscais, solicita o download e retorna a
+        solicitação pendente para ser resgatada na Central de Downloads.
+
+        Fluxo:
+            1. Abre o menu lateral e clica em "Débitos Fiscais".
+            2. Localiza o botão de download (XLSX) e clica.
+            3. Aguarda a mensagem de confirmação de solicitação do download.
+            4. Retorna um PendingDetailRequest apontando para a Central de Downloads.
+        """
+        import time as _time
+        LOGGER.info("Iniciando extração de Débitos Fiscais para o CNPJ %s", cgf)
+        self._ensure_side_menu_open(page)
+
+        # --- Navegar até Débitos Fiscais ---
+        if not self._click_xpath(
+            page,
+            "xpath=//a[contains(@href,'/debitos-fiscais') or contains(normalize-space(.),'Débitos Fiscais') or contains(normalize-space(.),'Debitos Fiscais')]",
+            "Menu lateral Débitos Fiscais",
+        ):
+            self._click_text_action(
+                page,
+                names=("Débitos Fiscais", "Debitos Fiscais"),
+                artifact_name="debitos-fiscais",
+                fallback_task="Localize e clique no item de menu chamado 'Débitos Fiscais'.",
+            )
+        page.wait_for_timeout(1_500)
+
+        # --- Clicar no botão de download (XLSX) ---
+        baixar_clicked = self._click_xpath(
+            page,
+            "xpath=//button[contains(normalize-space(.),'Baixar') and (contains(normalize-space(.),'XLSX') or contains(normalize-space(.),'Excel') or contains(@title,'Baixar'))]",
+            "Botão download Débitos Fiscais XLSX",
+        )
+        if not baixar_clicked:
+            self._click_text_action(
+                page,
+                names=("Baixar XLSX", "Baixar Excel", "Download"),
+                artifact_name="debitos-fiscais-baixar",
+                fallback_task=(
+                    "Na tela de Débitos Fiscais, localize o botão para baixar em XLSX ou Excel e clique nele."
+                ),
+            )
+
+        # --- Aguardar a mensagem de confirmação do toast ---
+        LOGGER.info("Aguardando confirmação de solicitação de download de Débitos Fiscais")
+        toast_messages = (
+            "solicitacao de download foi realizada",
+            "solicitacao de download ja foi realizada",
+        )
+        requested_after = _time.time()
+        deadline = _time.time() + 30
+        while _time.time() < deadline:
+            try:
+                body_text = strip_accents(page.locator("body").inner_text(timeout=3_000)).lower()
+                if any(msg in body_text for msg in toast_messages):
+                    LOGGER.info("Confirmação de download de Débitos Fiscais recebida")
+                    break
+            except Exception:  # noqa: BLE001
+                pass
+            page.wait_for_timeout(500)
+
+        # Normalizar o CNPJ para 14 dígitos (obrigatório para o título do arquivo)
+        cnpj_digits = self._normalize_numeric_document(cgf).zfill(14)
+        # O título na Central de Downloads segue o padrão: "Débitos Fiscais - <CNPJ14>"
+        tela_aba = f"Débitos Fiscais - {cnpj_digits}"
+
+        return self._build_pending_request(
+            cgf=cgf,
+            document_tab="Débitos Fiscais",
+            profile_name="Débitos",
+            summary_path=None,
+            report_name="debitos-fiscais",
+            tela_aba=tela_aba,
+            requested_after=requested_after,
+            taxpayer_document=cgf,
+            taxpayer_folder_name=taxpayer_folder_name,
+        )
 
     def _build_fiscal_tab_configs(self) -> tuple[FiscalTabConfig, ...]:
         return (
@@ -2928,10 +3139,24 @@ class SigaContributorExtractor:
         return self._row_contains_signature_fragments(row_text, row_text_ascii, match_fragments)
 
     def _row_contains_signature_fragments(self, row_text: str, row_text_ascii: str, match_fragments: dict[str, str]) -> bool:
-        if "informacoes fiscais" not in row_text_ascii:
-            return False
-        if "detalhamento" not in row_text_ascii:
-            return False
+        """Verifica se uma linha da Central de Downloads corresponde aos fragmentos esperados.
+
+        Para abas especiais (malha fiscal, debitos fiscais) os requisitos de
+        "informacoes fiscais" e "detalhamento" são ignorados, pois elas possuem
+        títulos próprios na Central de Downloads.
+        """
+        special_tabs = ("malha fiscal", "malha-fiscal", "debitos fiscais", "debitos-fiscais")
+        is_special_tab = match_fragments.get("tab") in special_tabs or any(
+            s in row_text_ascii for s in ("malha fiscal", "malha-fiscal", "debitos fiscais", "debitos-fiscais")
+        )
+
+        if not is_special_tab:
+            # Validações estritas apenas para abas do fluxo padrão
+            if "informacoes fiscais" not in row_text_ascii:
+                return False
+            if "detalhamento" not in row_text_ascii:
+                return False
+
         if match_fragments["tab"] and match_fragments["tab"] not in row_text_ascii:
             return False
         if match_fragments["view"] and match_fragments["view"] not in row_text_ascii:
@@ -2976,9 +3201,20 @@ class SigaContributorExtractor:
         return normalized.casefold()
 
     def _extract_download_match_fragments_from_title(self, tela_aba: str) -> dict[str, str]:
+        """Extrai fragmentos de identificação a partir do título da aba de download.
+
+        Para Malha Fiscal e Débitos Fiscais o campo "tab" é preenchido com o tipo
+        especial, permitindo que _row_contains_signature_fragments valide a linha
+        sem os requisitos do fluxo padrão (informacoes fiscais / detalhamento).
+        """
         normalized_target = self._normalize_download_target(tela_aba)
         tab = ""
-        if "nfc-e" in normalized_target:
+        # Verificar abas especiais antes das abas padrão
+        if "malha fiscal" in normalized_target or "malha-fiscal" in normalized_target:
+            tab = "malha fiscal"
+        elif "debitos fiscais" in normalized_target or "debitos-fiscais" in normalized_target:
+            tab = "debitos fiscais"
+        elif "nfc-e" in normalized_target:
             tab = "nfc-e"
         elif "ct-e" in normalized_target:
             tab = "ct-e"
