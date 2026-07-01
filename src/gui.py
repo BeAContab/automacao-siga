@@ -106,7 +106,7 @@ class SigaAutomationGUI:
 
         self.spreadsheet_path_var = tk.StringVar(value=initial_spreadsheet or "cnpj.xlsx")
         self._default_output_dir = Path(self.settings.output_dir)
-        self.output_dir_var = tk.StringVar(value=str(self.settings.output_dir))
+        self.output_dir_var = tk.StringVar(value="")
         self.month_var = tk.StringVar(value=initial_month or self._default_previous_month())
         self.year_var = tk.StringVar(value=initial_year or str(time.localtime().tm_year))
         self.status_var = tk.StringVar(value="Carregue uma planilha XLSX ou informe CNPJs manualmente para iniciar.")
