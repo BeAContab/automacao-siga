@@ -1,5 +1,16 @@
 # Changelog
 
+## [2026-07-02] — Versão 1.4.1
+
+### Adicionado
+- **Manual de Ajuda em HTML:** Criação da página `manual_instrucoes.html` contendo regras e instruções completas para manuseio da ferramenta pela equipe da Barreira & Associados.
+- **Abertura do Manual na GUI:** O botão "Ajuda" do Tkinter foi integrado para abrir o manual local em HTML diretamente no navegador padrão do usuário via biblioteca padrão `webbrowser`.
+
+### Alterado
+- **Gravação de Logs em Tempo Real:** A gravação na planilha Excel foi reestruturada para ocorrer em tempo real (célula a célula), registrando imediatamente data/hora de downloads concluídos ou descrições de erros de solicitações/downloads/empresas não encontradas.
+- **Resiliência do Lote de Downloads:** O processamento e download físico de arquivos na Central de Downloads foi isolado por bloco try-except individual. Erros de timeout ou falhas em um arquivo são registrados no Excel correspondente, mas não interrompem o restante da extração das outras empresas do lote.
+- **Preservação do Excel Original (Cópia de Resultados):** A planilha de entrada importada pelo usuário é mantida 100% inalterada. A ferramenta cria automaticamente uma cópia chamada `[Nome da Planilha]_resultados.xlsx` no mesmo diretório de origem e realiza todas as gravações e logs nela.
+
 ## [2026-07-01] — Versão 1.4.0
 
 ### Alterado

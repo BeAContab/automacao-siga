@@ -340,8 +340,17 @@ def run_interactive_terminal(
     print("Se a sessão já estiver autenticada, apenas pressione Enter.")
     input("Pressione Enter somente depois que o SIGA estiver aberto/autenticado...")
 
+    import shutil
+    output_spreadsheet_path = spreadsheet_path.parent / f"{spreadsheet_path.stem}_resultados{spreadsheet_path.suffix}"
+    try:
+        shutil.copy(spreadsheet_path, output_spreadsheet_path)
+        print(f"Cópia de resultados criada: {output_spreadsheet_path.name}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"Erro ao criar planilha de resultados: {exc}")
+        output_spreadsheet_path = None
+
     flow = SigaLoginFlow(settings)
-    extractor = SigaContributorExtractor(settings, allow_manual_login_prompt=False)
+    extractor = SigaContributorExtractor(settings, allow_manual_login_prompt=False, output_spreadsheet_path=output_spreadsheet_path)
 
     with BrowserSession(settings) as context:
         authenticated_page = flow.confirm_authenticated_context(context, browser=context.browser)

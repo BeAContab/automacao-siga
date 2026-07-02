@@ -736,21 +736,23 @@ class SigaAutomationGUI:
         self.status_var.set(f"{len(self.selection_rows)} empresa(s) prontas para execução.")
 
     def _show_help_dialog(self) -> None:
-        """Exibe um passo a passo simples para orientar o uso da ferramenta."""
-        help_text = (
-            "Passo a passo para usar o SIGA Automação:\n\n"
-            "1. Abra a aba 'Importar Planilha' e carregue um arquivo XLSX, ou use 'Entrada Manual' para colar CNPJs.\n"
-            "2. Clique em 'Carregar CNPJs manuais' se estiver usando a entrada digitada.\n"
-            "3. Escolha o mês, ano, documentos e a pasta de saída no painel lateral.\n"
-            "4. Clique em 'Iniciar Navegador' e faça o login manual no SIGA.\n"
-            "5. Quando o navegador estiver autenticado, clique em 'Executar Extração'.\n"
-            "6. Acompanhe o andamento pelo painel de log à direita.\n\n"
-            "Dicas:\n"
-            "- Você pode marcar ou desmarcar NF-e, NFC-e e CT-e antes de executar.\n"
-            "- Se uma empresa não for localizada, a ferramenta gera um arquivo .txt de aviso e segue para a próxima.\n"
-            "- Os downloads ficam organizados por COD, EMPRESA, CNPJ, mês e documento."
-        )
-        messagebox.showinfo("Ajuda - SIGA Automação", help_text)
+        """Abre a página HTML local com as instruções completas de manuseio."""
+        import webbrowser
+        import os
+        manual_path = os.path.abspath("manual_instrucoes.html")
+        if os.path.exists(manual_path):
+            webbrowser.open(f"file:///{manual_path.replace(os.sep, '/')}")
+        else:
+            # Fallback para mensagem simples caso o manual não esteja na raiz
+            help_text = (
+                "Passo a passo para usar o SIGA Automação:\n\n"
+                "1. Abra a aba 'Importar Planilha' e carregue um arquivo XLSX, ou use 'Entrada Manual' para colar CNPJs.\n"
+                "2. Escolha o mês, ano e a pasta de saída no painel lateral.\n"
+                "3. Clique em 'Iniciar Navegador' e faça o login manual no SIGA.\n"
+                "4. Quando o navegador estiver autenticado, clique em 'Executar Extração'.\n"
+                "5. Acompanhe o andamento pelo painel de log à direita."
+            )
+            messagebox.showinfo("Ajuda - SIGA Automação", help_text)
 
     def _browse_output_dir(self) -> None:
         """Abre o seletor de pasta para o usuario apontar o destino dos arquivos."""
@@ -1012,7 +1014,20 @@ class SigaAutomationGUI:
         month_reference: str,
         year_value: str,
     ) -> None:
-        extractor = SigaContributorExtractor(self.settings, allow_manual_login_prompt=False)
+        import shutil
+        is_manual_mode = (self.input_notebook is not None and self.input_notebook.index("current") == 1)
+        output_spreadsheet_path = None
+        if not is_manual_mode:
+            input_spreadsheet_path = Path(self.spreadsheet_path_var.get().strip())
+            output_spreadsheet_path = input_spreadsheet_path.parent / f"{input_spreadsheet_path.stem}_resultados{input_spreadsheet_path.suffix}"
+            try:
+                shutil.copy(input_spreadsheet_path, output_spreadsheet_path)
+                self._append_log_line(f"Cópia de resultados criada: {output_spreadsheet_path.name}")
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception("Falha ao criar cópia da planilha para gravação de resultados")
+                self._append_log_line(f"Erro ao criar planilha de resultados: {exc}")
+
+        extractor = SigaContributorExtractor(self.settings, allow_manual_login_prompt=False, output_spreadsheet_path=output_spreadsheet_path)
         flow = SigaLoginFlow(self.settings)
 
         with BrowserSession(self.settings) as context:

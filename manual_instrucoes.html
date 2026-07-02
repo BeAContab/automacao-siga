@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manual de Instruções - SIGA Automação</title>
+    <style>
+        :root {
+            --bg-color: #f7f9ff;
+            --primary-color: #0d1d2a;
+            --success-color: #006e25;
+            --border-color: #bfcaba;
+            --text-color: #333333;
+            --card-bg: #ffffff;
+            --text-muted: #666666;
+        }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+        }
+
+        header {
+            background-color: var(--primary-color);
+            color: #ffffff;
+            padding: 24px 40px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 4px solid var(--success-color);
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        header span {
+            font-size: 14px;
+            opacity: 0.8;
+        }
+
+        main {
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+
+        .section {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.02);
+        }
+
+        h2 {
+            color: var(--primary-color);
+            margin-top: 0;
+            border-bottom: 2px solid var(--bg-color);
+            padding-bottom: 8px;
+            font-size: 20px;
+        }
+
+        .step-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .step-item {
+            display: flex;
+            margin-bottom: 20px;
+            align-items: flex-start;
+        }
+
+        .step-number {
+            background-color: var(--primary-color);
+            color: #ffffff;
+            font-weight: bold;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 15px;
+            flex-shrink: 0;
+            font-size: 14px;
+        }
+
+        .step-content strong {
+            display: block;
+            color: var(--primary-color);
+            font-size: 16px;
+            margin-bottom: 4px;
+        }
+
+        .rule-card {
+            border-left: 4px solid #e97000;
+            background-color: #fff9f3;
+            padding: 15px 20px;
+            border-radius: 0 8px 8px 0;
+            margin-bottom: 15px;
+        }
+
+        .rule-card strong {
+            color: #d15600;
+        }
+
+        .success-card {
+            border-left: 4px solid var(--success-color);
+            background-color: #f2faf4;
+            padding: 15px 20px;
+            border-radius: 0 8px 8px 0;
+            margin-bottom: 15px;
+        }
+
+        .success-card strong {
+            color: var(--success-color);
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 60px;
+            padding: 20px;
+            font-size: 13px;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border-color);
+        }
+
+        code {
+            background-color: #f0f0f0;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: Consolas, monospace;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>SIGA Automação - Manual de Instruções</h1>
+        <span>Versão 1.4.0</span>
+    </header>
+
+    <main>
+        <!-- Visão Geral -->
+        <div class="section">
+            <h2>1. Visão Geral</h2>
+            <p>
+                O <strong>SIGA Automação</strong> é uma ferramenta desenvolvida de forma personalizada para a <strong>Barreira & Associados</strong> com o intuito de otimizar e automatizar o processo de consulta e download em lote de documentos fiscais diretamente do portal SIGA da SEFAZ-CE.
+            </p>
+        </div>
+
+        <!-- Instruções de Uso -->
+        <div class="section">
+            <h2>2. Instruções de Uso Passo a Passo</h2>
+            <ul class="step-list">
+                <li class="step-item">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <strong>Preparação da Planilha de Importação</strong>
+                        Prepare a planilha contendo a listagem de empresas no formato Excel (<code>.xlsx</code>). Ela deve conter uma aba chamada <code>SIGA EMPS</code>, com as colunas de dados padrão (<code>COD</code>, <code>EMPRESA</code>, <code>CNPJ</code>) iniciadas a partir da linha 2.
+                    </div>
+                </li>
+                <li class="step-item">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <strong>Carregamento de Dados na Ferramenta</strong>
+                        Abra o sistema e na aba <strong>Importar Planilha</strong> clique em <strong>Abrir</strong> para escolher a planilha e depois em <strong>Carregar</strong>. Alternativamente, você pode usar a aba <strong>Entrada Manual</strong> para digitar ou colar múltiplos CNPJs diretamente.
+                    </div>
+                </li>
+                <li class="step-item">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <strong>Parametrização da Extração</strong>
+                        No painel lateral esquerdo, selecione o <strong>Mês de Referência</strong> e digite o <strong>Ano</strong> desejado. Em <strong>Pasta de Saída</strong>, selecione o diretório onde os arquivos serão salvos.
+                    </div>
+                </li>
+                <li class="step-item">
+                    <div class="step-number">4</div>
+                    <div class="step-content">
+                        <strong>Inicialização do Navegador</strong>
+                        Clique no botão azul <strong>Iniciar Navegador</strong> na coluna da direita. O programa abrirá uma janela limpa do Google Chrome. Realize o login no portal SIGA utilizando suas credenciais (Usuário/Senha ou Certificado Digital).
+                    </div>
+                </li>
+                <li class="step-item">
+                    <div class="step-number">5</div>
+                    <div class="step-content">
+                        <strong>Execução da Extração</strong>
+                        Assim que estiver autenticado na página inicial do SIGA, volte para a janela do aplicativo e clique no botão verde <strong>Executar Extração</strong>. A automação executará todo o processo em segundo plano.
+                    </div>
+                </li>
+            </ul>
+        </div>
+
+        <!-- Regras Importantes -->
+        <div class="section">
+            <h2>3. Regras Importantes de Funcionamento</h2>
+            
+            <div class="rule-card">
+                <strong>Não feche o navegador Chrome:</strong> A janela do Chrome aberta pelo aplicativo é controlada diretamente por ele. Fechá-la ou navegar manualmente por ela durante a extração interromperá o processo e corromperá a fila de downloads.
+            </div>
+
+            <div class="rule-card">
+                <strong>Pasta de Saída em branco por padrão:</strong> O campo da pasta de saída inicia vazio por motivos de segurança, forçando o operador a selecionar explicitamente a pasta correta de destinação para evitar que arquivos fiscais sejam gravados em locais impróprios.
+            </div>
+
+            <div class="success-card">
+                <strong>Planilha de Resultados e logs em Tempo Real:</strong> Ao executar o lote, o sistema cria automaticamente uma cópia da planilha importada sob o nome <code>[Nome_da_Planilha]_resultados.xlsx</code> no mesmo diretório. 
+                <br>O status de cada download (data/hora de conclusão com sucesso ou mensagem de erro específica) é gravado nessa planilha <strong>em tempo real</strong>, célula a célula, à medida que a automação avança.
+            </div>
+
+            <div class="success-card">
+                <strong>Gravação Organizada:</strong> Os arquivos baixados são salvos e organizados de forma determinística na seguinte estrutura de pastas:
+                <br><code>[Pasta de Saída] / [COD - EMPRESA - CNPJ] / [Mês de Referência] / [Aba Fiscal] / [Nome_do_Arquivo]</code>
+            </div>
+        </div>
+
+        <!-- Suporte -->
+        <div class="section">
+            <h2>4. Suporte Técnico</h2>
+            <p>
+                Este software é confidencial e de propriedade privada da <strong>Barreira & Associados</strong>. Para dúvidas de manutenção, reporte de inconsistências do portal SIGA ou solicitações de novas funcionalidades, contate o administrador do sistema.
+            </p>
+        </div>
+    </main>
+
+    <footer>
+        Copyright &copy; 2026 Barreira & Associados. Todos os direitos reservados.
+    </footer>
+
+</body>
+</html>

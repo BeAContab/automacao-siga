@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -13,7 +13,7 @@ from openpyxl import Workbook
 
 from src.auth.siga_login import SigaLoginFlow
 from src.config import Settings
-from src.extraction.spreadsheet import SpreadsheetRow
+from src.extraction.spreadsheet import SpreadsheetRow, write_status_to_spreadsheet_cell
 from src.utils.browser import BrowserSession
 from src.utils.selenium_compat import BrowserContext, Download, Error, Locator, Page, TimeoutError
 from src.utils.siga_page import SigaPageInspector
@@ -40,6 +40,7 @@ class FiscalDownloadResult:
     detail_path: Path
     selected_report_name: str
     month_reference: str
+    downloaded_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -51,6 +52,8 @@ class BatchExtractionResult:
     final_url: str
     status: str
     message: str
+    row_number: int = 0
+    download_statuses: dict[str, str] = field(default_factory=dict)
 
 
 class TaxpayerNotFoundError(Exception):
@@ -70,6 +73,7 @@ class PendingDetailRequest:
     taxpayer_document: str
     month_reference: str
     taxpayer_folder_name: str
+    row_number: int
 
 
 @dataclass(slots=True)
@@ -129,10 +133,11 @@ class FiscalTabConfig:
 
 class SigaContributorExtractor:
     """Orquestra a navegação no SIGA, a busca do contribuinte e o download dos arquivos."""
-    def __init__(self, settings: Settings, allow_manual_login_prompt: bool = True) -> None:
+    def __init__(self, settings: Settings, allow_manual_login_prompt: bool = True, output_spreadsheet_path: Path | None = None) -> None:
         self.settings = settings
         self.allow_manual_login_prompt = allow_manual_login_prompt
         self.page_inspector = SigaPageInspector(settings)
+        self.output_spreadsheet_path = output_spreadsheet_path
 
     def run(self, cnpj: str) -> ExtractionResult:
         """Executa a extração completa para um único contribuinte."""
@@ -206,11 +211,31 @@ class SigaContributorExtractor:
         page = context.pages[0] if context.pages else context.new_page()
         page = self._ensure_authenticated(page, context)
 
+        all_possible_tabs = ["NF-e", "NFC-e", "CT-e", "Malha Fiscal", "Débitos Fiscais"]
+
         for spreadsheet_row in spreadsheet_rows:
             # Cada linha da planilha vira uma busca independente dentro do SIGA.
             LOGGER.info("Processando o CNPJ %s da linha %s da planilha", spreadsheet_row.cnpj, spreadsheet_row.row_number)
             taxpayer_folder_name = self._build_taxpayer_folder_name(spreadsheet_row)
             taxpayer_folder_names_by_row_number[spreadsheet_row.row_number] = taxpayer_folder_name
+
+            # Determinar abas selecionadas para esta linha
+            tabs_for_row = selected_tabs
+            if selected_tabs_by_row_number is not None:
+                tabs_for_row = selected_tabs_by_row_number.get(spreadsheet_row.row_number)
+            elif selected_tabs_by_cnpj is not None:
+                tabs_for_row = selected_tabs_by_cnpj.get(spreadsheet_row.cnpj)
+
+            if tabs_for_row is not None:
+                tabs_for_row = [tab for tab in tabs_for_row if tab in all_possible_tabs]
+            else:
+                tabs_for_row = all_possible_tabs
+
+            # Gravar imediatamente "Não solicitado" para abas não marcadas nesta linha
+            for tab in all_possible_tabs:
+                if tab not in tabs_for_row:
+                    write_status_to_spreadsheet_cell(self.output_spreadsheet_path, spreadsheet_row.row_number, tab, "Não solicitado")
+
             try:
                 self._open_taxpayer_from_home(page, spreadsheet_row.cnpj)
             except TaxpayerNotFoundError as exc:
@@ -221,6 +246,11 @@ class SigaContributorExtractor:
                     message=str(exc),
                     taxpayer_folder_name=taxpayer_folder_name,
                 )
+                
+                # Gravar erro de contribuinte não encontrado em tempo real
+                for tab in tabs_for_row:
+                    write_status_to_spreadsheet_cell(self.output_spreadsheet_path, spreadsheet_row.row_number, tab, "Erro: Contribuinte não encontrado")
+
                 prebuilt_results_by_row_number[spreadsheet_row.row_number] = BatchExtractionResult(
                     cnpj=spreadsheet_row.cnpj,
                     month_reference=normalized_month,
@@ -229,29 +259,32 @@ class SigaContributorExtractor:
                     final_url=page.url,
                     status="taxpayer_not_found",
                     message=f"CNPJ {spreadsheet_row.cnpj} nao foi encontrado no SIGA.",
+                    row_number=spreadsheet_row.row_number,
                 )
                 pending_requests_by_row_number[spreadsheet_row.row_number] = []
                 not_found_row_numbers.add(spreadsheet_row.row_number)
                 continue
+
             # A Central de Downloads so fica acessivel dentro de um contribuinte valido.
             last_successful_taxpayer_cnpj = spreadsheet_row.cnpj
-            tabs_for_row = selected_tabs
-            if selected_tabs_by_row_number is not None:
-                tabs_for_row = selected_tabs_by_row_number.get(spreadsheet_row.row_number)
-            elif selected_tabs_by_cnpj is not None:
-                tabs_for_row = selected_tabs_by_cnpj.get(spreadsheet_row.cnpj)
-            if tabs_for_row is not None:
-                # Validação delegada a _normalize_selected_tabs — sem filtro rígido aqui
-                tabs_for_row = [tab for tab in tabs_for_row
-                                if tab in {"NF-e", "NFC-e", "CT-e", "Malha Fiscal", "Débitos Fiscais"}]
-            pending_requests = self._extract_fiscal_tables(
-                page,
-                spreadsheet_row.cnpj,
-                normalized_month,
-                normalized_year,
-                taxpayer_folder_name,
-                tabs_for_row,
-            )
+            
+            try:
+                pending_requests = self._extract_fiscal_tables(
+                    page,
+                    spreadsheet_row.cnpj,
+                    normalized_month,
+                    normalized_year,
+                    taxpayer_folder_name,
+                    tabs_for_row,
+                    row_number=spreadsheet_row.row_number,
+                )
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception("Falha ao extrair tabelas fiscais para o CNPJ %s", spreadsheet_row.cnpj)
+                # Marcar erro em todas as abas selecionadas que falharam na solicitação
+                for tab in tabs_for_row:
+                    write_status_to_spreadsheet_cell(self.output_spreadsheet_path, spreadsheet_row.row_number, tab, f"Erro: {exc}")
+                pending_requests = []
+
             pending_requests_by_row_number[spreadsheet_row.row_number] = pending_requests
             all_pending_requests.extend(pending_requests)
 
@@ -274,17 +307,28 @@ class SigaContributorExtractor:
                 results.append(prebuilt_results_by_row_number[spreadsheet_row.row_number])
                 continue
             pending_requests = pending_requests_by_row_number.get(spreadsheet_row.row_number, [])
-            fiscal_results = [
-                FiscalDownloadResult(
-                    document_tab=request.document_tab,
-                    profile_name=request.profile_name,
-                    summary_path=request.summary_path,
-                    detail_path=detail_paths[request.request_key],
-                    selected_report_name=request.report_name,
-                    month_reference=normalized_month,
+            fiscal_results = []
+            
+            for request in pending_requests:
+                detail_path = detail_paths.get(request.request_key)
+                
+                downloaded_at = None
+                if detail_path is not None:
+                    path_str = str(detail_path)
+                    if not path_str.startswith("__ERROR__") and detail_path.suffix != ".txt":
+                        downloaded_at = datetime.now()
+
+                fiscal_results.append(
+                    FiscalDownloadResult(
+                        document_tab=request.document_tab,
+                        profile_name=request.profile_name,
+                        summary_path=request.summary_path,
+                        detail_path=detail_path,
+                        selected_report_name=request.report_name,
+                        month_reference=normalized_month,
+                        downloaded_at=downloaded_at,
+                    )
                 )
-                for request in pending_requests
-            ]
 
             results.append(
                 BatchExtractionResult(
@@ -302,6 +346,7 @@ class SigaContributorExtractor:
                         if fiscal_results
                         else f"Nenhum download foi solicitado para {spreadsheet_row.cnpj}."
                     ),
+                    row_number=spreadsheet_row.row_number,
                 )
             )
 
@@ -391,6 +436,7 @@ class SigaContributorExtractor:
         reference_year: str,
         taxpayer_folder_name: str,
         selected_tabs: list[str] | None = None,
+        row_number: int = 0,
     ) -> list[PendingDetailRequest]:
         """Percorre as abas fiscais selecionadas e agrega as solicitações de download.
 
@@ -403,35 +449,46 @@ class SigaContributorExtractor:
         # --- Abas especiais que não seguem o fluxo de Informações Fiscais ---
         if "Malha Fiscal" in allowed_tabs:
             try:
-                request = self._request_malha_fiscal(page, cgf, month_reference, taxpayer_folder_name)
+                request = self._request_malha_fiscal(page, cgf, month_reference, taxpayer_folder_name, row_number)
                 if request is not None:
                     results.append(request)
-            except Exception:  # noqa: BLE001
+                else:
+                    write_status_to_spreadsheet_cell(self.output_spreadsheet_path, row_number, "Malha Fiscal", "Sem indícios de irregularidades")
+            except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Falha ao solicitar Malha Fiscal para o CNPJ %s", cgf)
+                write_status_to_spreadsheet_cell(self.output_spreadsheet_path, row_number, "Malha Fiscal", f"Erro: {exc}")
 
         if "Débitos Fiscais" in allowed_tabs:
             try:
-                request = self._request_debitos_fiscais(page, cgf, month_reference, taxpayer_folder_name)
+                request = self._request_debitos_fiscais(page, cgf, month_reference, taxpayer_folder_name, row_number)
                 if request is not None:
                     results.append(request)
-            except Exception:  # noqa: BLE001
+                else:
+                    write_status_to_spreadsheet_cell(self.output_spreadsheet_path, row_number, "Débitos Fiscais", "Sem débitos fiscais")
+            except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Falha ao solicitar Débitos Fiscais para o CNPJ %s", cgf)
+                write_status_to_spreadsheet_cell(self.output_spreadsheet_path, row_number, "Débitos Fiscais", f"Erro: {exc}")
 
         # --- Abas fiscais padrão (NF-e, NFC-e, CT-e) ---
         for tab_config in self._build_fiscal_tab_configs():
             if tab_config.tab_name not in allowed_tabs:
                 LOGGER.info("Ignorando a aba fiscal %s porque ela não foi selecionada", tab_config.tab_name)
                 continue
-            results.extend(
-                self._collect_fiscal_tab_requests(
-                    page,
-                    cgf,
-                    month_reference,
-                    reference_year,
-                    taxpayer_folder_name,
-                    tab_config,
+            try:
+                results.extend(
+                    self._collect_fiscal_tab_requests(
+                        page,
+                        cgf,
+                        month_reference,
+                        reference_year,
+                        taxpayer_folder_name,
+                        tab_config,
+                        row_number,
+                    )
                 )
-            )
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception("Falha ao solicitar %s para o CNPJ %s", tab_config.tab_name, cgf)
+                write_status_to_spreadsheet_cell(self.output_spreadsheet_path, row_number, tab_config.tab_name, f"Erro: {exc}")
         return results
 
     def _build_pending_request(
@@ -447,6 +504,7 @@ class SigaContributorExtractor:
         requested_after: datetime,
         taxpayer_document: str,
         taxpayer_folder_name: str,
+        row_number: int = 0,
     ) -> PendingDetailRequest:
         """Cria uma solicitacao com chave unica para nao misturar downloads de CNPJs diferentes."""
         request_key = "|".join(
@@ -468,6 +526,7 @@ class SigaContributorExtractor:
             taxpayer_document=taxpayer_document,
             month_reference=month_reference,
             taxpayer_folder_name=taxpayer_folder_name,
+            row_number=row_number,
         )
 
     def _normalize_selected_tabs(self, selected_tabs: list[str] | None) -> set[str]:
@@ -509,6 +568,7 @@ class SigaContributorExtractor:
         reference_year: str,
         taxpayer_folder_name: str,
         tab_config: FiscalTabConfig,
+        row_number: int = 0,
     ) -> list[PendingDetailRequest]:
         """Extrai uma aba fiscal inteira e guarda apenas as solicitações de detalhamento."""
         LOGGER.info("Iniciando a extração fiscal da aba %s", tab_config.tab_name)
@@ -579,6 +639,7 @@ class SigaContributorExtractor:
                         reference_year,
                         summary_paths[profile.label],
                         taxpayer_folder_name,
+                        row_number,
                     )
                 )
                 continue
@@ -604,7 +665,15 @@ class SigaContributorExtractor:
                     requested_after=requested_after,
                     taxpayer_document=self._current_taxpayer_document(page),
                     taxpayer_folder_name=taxpayer_folder_name,
+                    row_number=row_number,
                 )
+            )
+        if not pending_requests:
+            write_status_to_spreadsheet_cell(
+                self.output_spreadsheet_path,
+                row_number,
+                tab_config.tab_name,
+                "Sem movimento",
             )
         return pending_requests
 
@@ -1039,6 +1108,7 @@ class SigaContributorExtractor:
         cgf: str,
         month_reference: str,
         taxpayer_folder_name: str,
+        row_number: int = 0,
     ) -> "PendingDetailRequest | None":
         """Navega até Malha Fiscal, solicita o download de indícios e retorna a
         solicitação pendente para ser resgatada na Central de Downloads.
@@ -1119,6 +1189,7 @@ class SigaContributorExtractor:
             requested_after=requested_after,
             taxpayer_document=cgf,
             taxpayer_folder_name=taxpayer_folder_name,
+            row_number=row_number,
         )
 
     def _request_debitos_fiscais(
@@ -1127,6 +1198,7 @@ class SigaContributorExtractor:
         cgf: str,
         month_reference: str,
         taxpayer_folder_name: str,
+        row_number: int = 0,
     ) -> "PendingDetailRequest | None":
         """Navega até Débitos Fiscais, solicita o download e retorna a
         solicitação pendente para ser resgatada na Central de Downloads.
@@ -1205,6 +1277,7 @@ class SigaContributorExtractor:
             requested_after=requested_after,
             taxpayer_document=cgf,
             taxpayer_folder_name=taxpayer_folder_name,
+            row_number=row_number,
         )
 
     def _build_fiscal_tab_configs(self) -> tuple[FiscalTabConfig, ...]:
@@ -1739,6 +1812,7 @@ class SigaContributorExtractor:
         reference_year: str,
         summary_path: Path,
         taxpayer_folder_name: str,
+        row_number: int = 0,
     ) -> list[PendingDetailRequest]:
         positive_reports = self._select_positive_reports(page)
         if not positive_reports:
@@ -1775,6 +1849,7 @@ class SigaContributorExtractor:
                     requested_after=requested_after,
                     taxpayer_document=self._current_taxpayer_document(page),
                     taxpayer_folder_name=taxpayer_folder_name,
+                    row_number=row_number,
                 )
             )
         return requests
@@ -2492,6 +2567,12 @@ class SigaContributorExtractor:
                     tela_aba=target.request.tela_aba,
                     taxpayer_folder_name=target.request.taxpayer_folder_name,
                 )
+                write_status_to_spreadsheet_cell(
+                    self.output_spreadsheet_path,
+                    target.request.row_number,
+                    target.request.document_tab,
+                    "Erro: Não localizado na Central de Downloads",
+                )
                 continue
             page_targets.setdefault(match.page_number, []).append(target)
 
@@ -2505,11 +2586,29 @@ class SigaContributorExtractor:
         while current_page <= max_page:
             for target in page_targets.get(current_page, []):
                 match = matches[target.request.request_key]
-                detail_paths[target.request.request_key] = self._capture_download_for_match(
-                    page=page,
-                    target=target,
-                    match=match,
-                )
+                try:
+                    path = self._capture_download_for_match(
+                        page=page,
+                        target=target,
+                        match=match,
+                    )
+                    detail_paths[target.request.request_key] = path
+                    status_str = match.requested_at.strftime("%d/%m/%Y %H:%M:%S") if match.requested_at else datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                    write_status_to_spreadsheet_cell(
+                        self.output_spreadsheet_path,
+                        target.request.row_number,
+                        target.request.document_tab,
+                        status_str,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    LOGGER.error("Falha ao baixar %s: %s", target.request.tela_aba, exc)
+                    detail_paths[target.request.request_key] = Path(f"__ERROR__:{exc}")
+                    write_status_to_spreadsheet_cell(
+                        self.output_spreadsheet_path,
+                        target.request.row_number,
+                        target.request.document_tab,
+                        f"Erro: {exc}",
+                    )
 
             if current_page == max_page:
                 break

@@ -145,3 +145,49 @@ def _extract_documents_from_text(value: object) -> list[str]:
 
     digits = _normalize_document(text)
     return [digits] if len(digits) == 14 else []
+
+
+def write_status_to_spreadsheet_cell(
+    spreadsheet_path: Path,
+    row_number: int,
+    document_tab: str,
+    status_str: str,
+) -> None:
+    """Escreve em tempo real o status do download na coluna correspondente na planilha de resultados."""
+    if not spreadsheet_path or not row_number:
+        return
+
+    # Usar data_only=False para preservar as fórmulas originais da planilha
+    workbook = load_workbook(spreadsheet_path, read_only=False, data_only=False)
+    sheet = workbook["SIGA EMPS"] if "SIGA EMPS" in workbook.sheetnames else workbook.active
+
+    # Localizar a linha de cabeçalho (a mesma lógica do carregamento)
+    required_document_headers = {"cnpj", "cgf"}
+    cod_headers = {"cod", "codigo", "código"}
+    company_headers = {"empresa", "nome empresa", "razao social", "razão social", "razao social completa"}
+    
+    header_map: dict[str, int] = {}
+    for r_idx, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+        normalized_cells = [_normalize_header(cell) for cell in row]
+        if any(cell in normalized_cells for cell in required_document_headers | cod_headers | company_headers):
+            for index, value in enumerate(normalized_cells):
+                if value:
+                    header_map[value] = index + 1  # 1-based para openpyxl
+            break
+
+    # Normalizar o nome da aba fiscal para fazer a correspondência com a coluna
+    norm_tab = _normalize_header(document_tab)
+    col_index = None
+
+    # Mapear a coluna que contém o nome da aba fiscal (ex: "nf-e" ou "debitos fiscais")
+    for key, val in header_map.items():
+        if norm_tab in key or key in norm_tab:
+            col_index = val
+            break
+
+    if col_index is not None:
+        sheet.cell(row=row_number, column=col_index, value=status_str)
+        workbook.save(spreadsheet_path)
+
+    workbook.close()
+
