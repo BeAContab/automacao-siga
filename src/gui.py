@@ -687,6 +687,9 @@ class SigaAutomationGUI:
         if path:
             self.spreadsheet_path_var.set(path)
             self._reload_spreadsheet()
+            # Preencher a pasta de saída com o mesmo diretório da planilha importada
+            parent_dir = Path(path).parent
+            self.output_dir_var.set(str(parent_dir))
 
     def _reload_spreadsheet(self) -> None:
         path = Path(self.spreadsheet_path_var.get()).expanduser()
