@@ -3355,6 +3355,8 @@ class SigaContributorExtractor:
         return self._row_cnpj_base_key(row) == "0"
 
     def _row_cnpj_base_key(self, row: Locator) -> str:
+        # Retorna o documento completo (CNPJ alfanumérico ou CGF) sem limitar aos 8 caracteres de CNPJ base.
+        # Isso evita colisões na verificação de downloads entre diferentes filiais.
         try:
             cnpj_base_text = self._normalize_spaces(row.locator("td").nth(0).inner_text(timeout=2_000))
         except Error:
@@ -3362,14 +3364,14 @@ class SigaContributorExtractor:
         digits = self._normalize_numeric_document(cnpj_base_text)
         if not digits:
             return ""
-        return digits[:8]
+        return digits
 
     def _taxpayer_base_key(self, taxpayer_document: str) -> str:
+        # Retorna o documento completo para fins de comparação direta e precisa dos arquivos na central de downloads.
+        # Impede que filiais distintas misturem seus relatórios no disco.
         digits = self._normalize_numeric_document(taxpayer_document)
         if not digits:
             return ""
-        if len(digits) >= 8:
-            digits = digits[:8]
         return digits
 
     def _extract_download_match_fragments(self, normalized_target: str) -> dict[str, str]:
@@ -3675,7 +3677,9 @@ class SigaContributorExtractor:
         self.page_inspector.save_debug_artifacts(page, name)
 
     def _normalize_numeric_document(self, value: str) -> str:
-        return re.sub(r"\D", "", value)
+        # Retém tanto letras quanto números para suportar o novo padrão de CNPJ alfanumérico.
+        # Remove apenas pontuações, traços, barras e espaços.
+        return re.sub(r"[^a-zA-Z0-9]", "", value)
 
     def _format_cnpj(self, value: str) -> str:
         digits = self._normalize_numeric_document(value)

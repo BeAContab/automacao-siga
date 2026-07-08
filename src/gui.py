@@ -1122,7 +1122,8 @@ class SigaAutomationGUI:
             self._set_widget_state(child, state)
 
     def _format_cnpj(self, value: str) -> str:
-        digits = "".join(char for char in value if char.isdigit())
+        # Formata o CNPJ mantendo letras e números para dar suporte ao CNPJ alfanumérico.
+        digits = "".join(char for char in value if char.isalnum())
         if len(digits) != 14:
             return value
         return f"{digits[:2]}.{digits[2:5]}.{digits[5:8]}/{digits[8:12]}-{digits[12:]}"

@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-07-07] — Versão 1.4.2
+
+### Alterado
+- **Busca por CNPJ Completo:** Alterada a correspondência da Central de Downloads para buscar pelo CNPJ inteiro de 14 caracteres em vez de apenas os 8 primeiros dígitos (CNPJ base), evitando que downloads de empresas filiais (com mesmo radical) se misturem e sejam salvos nas pastas umas das outras.
+- **Suporte a CNPJ Alfanumérico:** Atualizada a lógica de higienização de CNPJs e documentos no extrator, no leitor de planilhas e na interface gráfica para reter tanto letras quanto números, adequando a ferramenta à nova regulamentação de CNPJ alfanumérico.
+
 ## [2026-07-02] — Versão 1.4.1
 
 ### Adicionado

@@ -103,10 +103,11 @@ def _normalize_header(value: object) -> str:
 
 
 def _normalize_document(value: object) -> str:
+    # Normaliza o documento preservando letras e números para dar suporte ao CNPJ alfanumérico.
     if value is None:
         return ""
-    text = "".join(char for char in str(value) if char.isdigit())
-    # O CNPJ precisa permanecer com 14 dígitos, inclusive os zeros à esquerda.
+    text = "".join(char for char in str(value) if char.isalnum())
+    # O CNPJ precisa permanecer com 14 caracteres, inclusive os zeros à esquerda se for numérico.
     if not text:
         return ""
     return text.zfill(14) if len(text) <= 14 else text
@@ -129,7 +130,7 @@ def _find_header_index(header_map: dict[str, int], aliases: set[str]) -> int | N
 
 
 def _extract_documents_from_text(value: object) -> list[str]:
-    """Extrai todos os blocos numéricos de 14 dígitos presentes em um texto livre."""
+    """Extrai todos os blocos alfanuméricos de 14 caracteres presentes em um texto livre."""
     if value is None:
         return []
 
