@@ -16,6 +16,7 @@ No cenário tributário atual, a agilidade na coleta de dados fiscais é essenci
 * **Cobertura de Documentos:** Suporte completo para consulta e download de Notas Fiscais Eletrônicas (NF-e), Notas Fiscais de Consumidor Eletrônicas (NFC-e), Conhecimentos de Transporte Eletrônicos (CT-e), assim como relatórios especiais de **Malha Fiscal** (indícios de irregularidades) e **Débitos Fiscais**.
 * **Organização Estruturada:** Classificação e armazenamento automático dos arquivos baixados em pastas organizadas por código interno, nome da empresa e CNPJ (`COD - EMPRESA - CNPJ`), facilitando a posterior importação em sistemas ERP ou de auditoria.
 * **Interface Fluida e Assistida:** Painel gráfico refinado, estruturado sob diretrizes modernas de design, para facilitar a operação diária sem necessidade de conhecimentos técnicos de desenvolvimento.
+* **Resiliência e Recuperação de Erros:** Mecanismo automático para aguardar o término de carregamentos/travamentos do portal e detecção inteligente de CNPJs sem cadastro ativo, evitando travamentos em lote e garantindo que o processamento continue de forma fluida.
 * **Rastreabilidade e Auditoria:** Console de log dinâmico com identificação visual por níveis (sucesso, alertas, falhas de conexão ou empresas não localizadas), garantindo total visibilidade sobre cada execução do lote.
 * **Flexibilidade de Entrada:** Permite importar dados de forma rápida utilizando planilhas eletrônicas padronizadas ou inserindo as informações diretamente na interface.
 

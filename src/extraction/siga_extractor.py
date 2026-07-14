@@ -380,8 +380,44 @@ class SigaContributorExtractor:
             f"Nao foi possivel pesquisar e abrir o contribuinte {cgf} apos retentativas."
         ) from last_error
 
+    def _wait_for_loading_overlays_to_disappear(self, page: Page) -> None:
+        """Espera até que qualquer div de bloqueio ou carregamento (PrimeNG blockUI/spinners) desapareça da tela."""
+        deadline = time.time() + 15
+        script = """
+        () => {
+            const isVisible = (el) => {
+                const style = window.getComputedStyle(el);
+                return style && style.display !== 'none' && style.visibility !== 'hidden' && el.offsetWidth > 0;
+            };
+            const overlays = [...document.querySelectorAll("div")].filter(el => {
+                const style = window.getComputedStyle(el);
+                if (!style) return false;
+                const isFixedOrAbsolute = style.position === 'fixed' || style.position === 'absolute';
+                const isFullScreen = (el.offsetWidth >= window.innerWidth * 0.9) && (el.offsetHeight >= window.innerHeight * 0.9);
+                const hasLoaderClass = el.className && (
+                    el.className.includes('loading') || 
+                    el.className.includes('blockui') || 
+                    el.className.includes('spinner') || 
+                    el.className.includes('overlay')
+                );
+                const zIndexVal = parseFloat(style.zIndex);
+                const isBlockingOverlay = isFixedOrAbsolute && isFullScreen && (!isNaN(zIndexVal) && zIndexVal >= 0);
+                return isVisible(el) && (hasLoaderClass || isBlockingOverlay);
+            });
+            return overlays.length > 0;
+        }
+        """
+        while time.time() < deadline:
+            try:
+                if not page.evaluate(script):
+                    return
+            except Error:
+                pass
+            page.wait_for_timeout(500)
+
     def _wait_for_taxpayer_list_ready(self, page: Page) -> bool:
         """Espera a lista de contribuintes se estabilizar antes de digitar o CGF."""
+        self._wait_for_loading_overlays_to_disappear(page)
         deadline = time.time() + min(max(8, self.settings.timeout_ms / 1000), 12)
         skeleton_selector = ".p-skeleton, .skeleton, [class*='skeleton']"
         row_selector = "tr.p-selectable-row, tr[role='row'] td, .p-datatable-tbody tr"
@@ -726,6 +762,7 @@ class SigaContributorExtractor:
     def _search_taxpayer(self, page: Page, document_value: str) -> None:
         """Envia o CGF ou CNPJ para a busca e aguarda o resultado filtrado."""
         LOGGER.info("Pesquisando contribuinte %s", document_value)
+        self._wait_for_loading_overlays_to_disappear(page)
         search_input = self._find_search_input(page)
         search_input.click()
         search_input.fill("")
@@ -759,12 +796,20 @@ class SigaContributorExtractor:
             const rows = [...document.querySelectorAll(rowSelector)].filter(isVisible);
             const matchingRows = rows.filter((row) => digits(row.innerText || row.textContent).includes(targetDigits));
             const bodyText = normalize(document.body ? document.body.innerText : "");
+            
+            // Lista expandida de marcadores para identificar a ausência de cadastro de forma instantânea
             const noResult = [
                 "nenhum registro",
                 "nenhum resultado",
                 "nao ha registros",
                 "nao foram encontrados",
-            ].some((marker) => bodyText.includes(marker));
+                "nao foram localizados",
+                "nao localizado",
+                "sem registros",
+                "sem resultados",
+                "nenhum item",
+                "nenhuma ocorrencia"
+            ].some((marker) => bodyText.includes(marker)) || (rows.length === 0 && !skeletonVisible);
 
             return {
                 skeletonVisible,

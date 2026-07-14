@@ -1,5 +1,16 @@
 # Changelog
 
+## [2026-07-14] — Versão 1.4.3
+
+### Corrigido
+- **Resiliência a Overlays e Bloqueios:** Implementada a rotina de espera automática por elementos de carregamento (loaders, spinners e overlays do PrimeNG) na interface do SIGA, prevenindo que cliques e digitações sejam perdidos pela automação.
+- **Detecção Eficiente de Erros de Busca:** Expandido o mapeamento de mensagens de "registro não encontrado" (como "não foram localizados", "sem registros", etc.) e inserida a detecção de tabelas vazias instantâneas, evitando a perda de 30 segundos de timeout para CNPJs sem cadastro.
+
+## [2026-07-13] — Geração de Binários (Versão 1.4.2)
+
+### Adicionado
+- **Distribuição Atualizada:** Compilação de novo executável autônomo (`siga-automacao-gui.exe`) e empacotamento do instalador atualizado (`SIGA-Automacao-Setup.exe`) via Inno Setup, contendo todas as alterações de correções de CNPJ e suporte alfanumérico da versão 1.4.2.
+
 ## [2026-07-07] — Versão 1.4.2
 
 ### Alterado

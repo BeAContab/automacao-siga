@@ -11,6 +11,9 @@ chrome-live-profile/
 edge-live-profile/
 logs/
 saida/
+downloads/
+scratch/
+testes/*.txt
 .env
 *.xlsx
 *.csv
