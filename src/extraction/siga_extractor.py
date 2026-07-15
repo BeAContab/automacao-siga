@@ -237,7 +237,11 @@ class SigaContributorExtractor:
 
         all_possible_tabs = ["NF-e", "NFC-e", "CT-e", "Malha Fiscal", "Débitos Fiscais"]
 
-        for spreadsheet_row in spreadsheet_rows:
+        queue = list(spreadsheet_rows)
+        row_retry_counts: dict[int, int] = {}
+
+        while queue:
+            spreadsheet_row = queue.pop(0)
             # Cada linha da planilha vira uma busca independente dentro do SIGA.
             LOGGER.info("Processando o CNPJ %s da linha %s da planilha", spreadsheet_row.cnpj, spreadsheet_row.row_number)
             taxpayer_folder_name = self._build_taxpayer_folder_name(spreadsheet_row)
@@ -255,10 +259,11 @@ class SigaContributorExtractor:
             else:
                 tabs_for_row = all_possible_tabs
 
-            # Gravar imediatamente "Não solicitado" para abas não marcadas nesta linha
-            for tab in all_possible_tabs:
-                if tab not in tabs_for_row:
-                    write_status_to_spreadsheet_cell(self.output_spreadsheet_path, spreadsheet_row.row_number, tab, "Não solicitado")
+            # Gravar imediatamente "Não solicitado" para abas não marcadas nesta linha (apenas no primeiro processamento)
+            if spreadsheet_row.row_number not in row_retry_counts:
+                for tab in all_possible_tabs:
+                    if tab not in tabs_for_row:
+                        write_status_to_spreadsheet_cell(self.output_spreadsheet_path, spreadsheet_row.row_number, tab, "Não solicitado")
 
             try:
                 self._open_taxpayer_from_home(page, spreadsheet_row.cnpj)
@@ -289,10 +294,28 @@ class SigaContributorExtractor:
                 not_found_row_numbers.add(spreadsheet_row.row_number)
                 continue
             except Exception as exc:  # noqa: BLE001
-                # Um erro inesperado ao abrir o contribuinte nao deve descartar as solicitacoes
-                # ja preparadas para as linhas anteriores; registra o erro e segue para a proxima linha.
-                LOGGER.exception("Falha inesperada ao abrir o contribuinte para o CNPJ %s", spreadsheet_row.cnpj)
+                # Se for um erro temporário (como TimeoutError, erro de conexão ou página em branco)
+                # e ainda houver tentativas para esta linha, coloca no final da fila.
+                retry_count = row_retry_counts.get(spreadsheet_row.row_number, 0)
+                if retry_count < 2:
+                    row_retry_counts[spreadsheet_row.row_number] = retry_count + 1
+                    LOGGER.warning(
+                        "Falha temporaria ao abrir o contribuinte para o CNPJ %s na linha %s (%s). "
+                        "Reenfileirando para tentar no final do lote (tentativa %s/2).",
+                        spreadsheet_row.cnpj,
+                        spreadsheet_row.row_number,
+                        exc,
+                        retry_count + 1,
+                    )
+                    queue.append(spreadsheet_row)
+                    continue
 
+                # Se esgotou as retentativas, registra o erro definitivo
+                LOGGER.exception(
+                    "Falha definitiva ao abrir o contribuinte para o CNPJ %s após %s retentativas",
+                    spreadsheet_row.cnpj,
+                    retry_count,
+                )
                 for tab in tabs_for_row:
                     write_status_to_spreadsheet_cell(self.output_spreadsheet_path, spreadsheet_row.row_number, tab, f"Erro: {exc}")
 

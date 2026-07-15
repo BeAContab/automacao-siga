@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-07-15] — Versão 1.5.2
+
+### Adicionado
+- **Re-enfileiramento de CNPJs Fiel a Falhas Temporárias:** O laço de orquestração do lote `_run_batch_from_spreadsheet_in_context` em `src/extraction/siga_extractor.py` foi convertido em uma fila dinâmica (`while queue:`). Se a abertura de um contribuinte falhar por erros de rede, navegador ou página em branco (exceto quando explicitamente não encontrado), o CNPJ é recolocado no final da lista para processamento posterior. Limitado a no máximo 2 re-enfileiramentos por linha (3 tentativas no total) para evitar loops infinitos, maximizando as chances de obter 100% de sucesso da planilha.
+
 ## [2026-07-15] — Versão 1.5.1
 
 ### Corrigido
