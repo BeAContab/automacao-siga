@@ -1,5 +1,61 @@
 # Changelog
 
+## [2026-07-15] — Versão 1.4.9
+
+### Adicionado
+- **Validação Prévia de CNPJ/CGF:** Nova função `_is_likely_valid_document` em `src/extraction/spreadsheet.py` que rejeita documentos com comprimento diferente de 14 caracteres ou sequências puramente numéricas com todos os dígitos iguais (ex: `00000000000000`, `11111111111111`), emitindo aviso explícito no log antes de tentar a busca no SIGA — evita que o robô gaste até 30 segundos por CNPJ obviamente malformado.
+- **Verificação de PID Após Encerramento do Navegador:** Nova função `_wait_for_pids_to_exit` em `src/utils/browser.py` que, após o `taskkill`, verifica via PowerShell se os processos do navegador realmente terminaram (não apenas se a porta CDP fechou). Registra `WARNING` se o processo ainda existir após o timeout — detecta processos zumbi que fecharam o listener sem de fato encerrar.
+- **Seletores Semânticos para Toggle do Menu Lateral:** `_ensure_side_menu_open` em `src/extraction/siga_extractor.py` agora tenta três seletores em ordem de robustez — atributo ARIA, componente Angular e, como último fallback, o XPath posicional anterior. Quando o fallback posicional for necessário, registra `WARNING` indicando possível mudança de layout no SIGA.
+
+### Alterado
+- **Deduplicação da Lógica de Cabeçalho da Planilha:** Aliases de cabeçalho (`_REQUIRED_DOCUMENT_HEADERS`, `_COD_HEADERS`, `_COMPANY_HEADERS`) extraídos para constantes de módulo em `src/extraction/spreadsheet.py`; nova função `_scan_header_row` compartilhada entre leitura (`load_cnpjs_from_xlsx`) e escrita de status (`_build_status_header_map`), eliminando a reimplementação duplicada e garantindo que qualquer ajuste futuro de alias seja feito em um único lugar.
+- **Botão Ajuda usa Caminho de Asset Consistente:** `_show_help_dialog` em `src/gui.py` substituiu `os.path.abspath("manual_instrucoes.html")` (relativo ao CWD) por `self._resolve_asset_path("manual_instrucoes.html")`, que funciona corretamente tanto no desenvolvimento quanto no executável PyInstaller independentemente do diretório de trabalho atual.
+- **Aviso de Limite Atingido em `_find_row_by_digits`:** Quando o loop de varredura atinge o limite de `max_candidates` sem encontrar o alvo em `src/extraction/siga_extractor.py`, registra `WARNING` explícito com o total real de linhas na página — facilita o diagnóstico em tabelas que cresceram além do limite padrão de 80 candidatos.
+
+## [2026-07-15] — Versão 1.4.8
+
+### Alterado
+- **Varredura Mais Eficiente da Central de Downloads:** `_scan_downloads_table_once` em `src/extraction/siga_extractor.py` passou a parar de paginar assim que todas as solicitações do lote são localizadas (concluídas ou em processamento) nas varreduras intermediárias do laço de espera, evitando reler páginas finais irrelevantes a cada ciclo — o que degradava de forma aproximadamente quadrática em lotes grandes (muitas linhas × muitas abas). Isso é seguro porque, como todas as solicitações são feitas antes de abrir a tela, a paginação permanece estável durante a espera (nenhuma linha nova aparece; apenas o status muda de "processando" para "concluído" no mesmo lugar). Para preservar integralmente a resolução de duplicatas independentemente da ordenação da tela, uma varredura completa (`full_scan=True`, sem parada antecipada) é sempre executada antes de retornar o resultado final. Nenhuma mudança no resultado esperado — apenas menos leituras de página durante a espera.
+
+## [2026-07-15] — Versão 1.4.7
+
+### Adicionado
+- **Planilha de Resultados para Entrada Manual de CNPJ:** A GUI agora gera uma planilha de resultados (`resultados_manual_<timestamp>.xlsx`) também para CNPJs digitados manualmente (`build_manual_entry_workbook` em `src/extraction/spreadsheet.py`), mantendo o mesmo rastro de status em tempo real que já existia para o fluxo de importação por planilha.
+
+### Corrigido
+- **Matching de Documento por Igualdade Exata:** `_row_matches_taxpayer_document` em `src/extraction/siga_extractor.py` deixou de aceitar correspondência por prefixo (`startswith`), que podia atribuir um número mais longo (ex.: um processo interno da SEFAZ que começa com os mesmos dígitos) ao contribuinte errado.
+- **Prevenção de Vazamento de Processo do Navegador:** `BrowserSession.__enter__` em `src/utils/browser.py` passou a fechar explicitamente o driver/contexto já criado quando uma etapa posterior falha, já que o protocolo de context manager não aciona `__exit__` se `__enter__` não retornar.
+- **Localização do Navegador em Instalações Não Padrão:** `resolve_browser_executable` em `src/utils/browser.py` agora usa `shutil.which` como fallback quando o Chrome/Edge não está nos caminhos fixos do Program Files.
+- **Sem Reuso de Linha da Central de Downloads entre Solicitações:** `_scan_downloads_current_page_for_targets` em `src/extraction/siga_extractor.py` passou a controlar as linhas já reivindicadas nesta passada de varredura, impedindo que duas solicitações com títulos parecidos (mesmo mês/ano/aba) acabem usando a mesma linha e dupliquem o arquivo em pastas diferentes.
+- **Falha Explícita sem Terminal Interativo:** `wait_for_manual_login` em `src/auth/siga_login.py` agora verifica `sys.stdin.isatty()` antes do `input()` bloqueante, levantando um erro claro em vez de travar/lançar exceção obscura quando não há console interativo disponível.
+
+## [2026-07-15] — Versão 1.4.6
+
+### Alterado
+- **Seleção de Certificado com Confirmação do Operador:** `configure_auto_certificate_selection` em `src/utils/certificate_policy.py` deixou de escolher silenciosamente o certificado de maior validade quando há mais de um certificado de autenticação elegível. Agora, com apenas um certificado, a aplicação continua automática; com vários, a escolha é solicitada ao operador no terminal (`_prompt_certificate_choice` em `src/main.py`), exibindo CN e validade de cada opção. Sem terminal interativo ou se o operador cancelar, a política não é aplicada e o navegador exibe o prompt padrão de certificado, evitando o risco de usar o certificado (CNPJ) de outra empresa.
+- **Abertura do Navegador sem Congelar a Interface (GUI):** `_start_browser_if_needed` em `src/gui.py` passou a iniciar o navegador em uma thread de trabalho, atualizando a interface via `root.after`. Antes, a espera pela disponibilidade do CDP (até 15s) rodava na thread principal do Tkinter, deixando a janela "Não respondendo".
+- **Fechamento Seguro da GUI Durante uma Execução:** `_on_close` em `src/gui.py` passou a detectar execuções em andamento e pedir confirmação antes de sair. Ao confirmar, sinaliza o encerramento (`_closing`/`_stop_requested`), encerra o navegador da automação para liberar a thread de trabalho e aguarda seu término com timeout antes de destruir a janela. As atualizações de interface disparadas por threads passaram a usar um agendador protegido (`_ui_after`), eliminando exceções `TclError` quando a janela é fechada durante o processamento.
+
+## [2026-07-15] — Versão 1.4.5
+
+### Adicionado
+- **Flag `--keep-certificate-policy`:** Nova opção de linha de comando para manter a política de seleção automática de certificado ativa após o fim da execução (comportamento anterior). Por padrão, a política agora é removida automaticamente ao final de cada execução.
+
+### Corrigido
+- **Remoção Automática da Política de Certificado:** `main()` em `src/main.py` passou a aplicar a política de seleção automática de certificado dentro de um bloco `try/finally`, removendo-a ao final da execução (sucesso ou erro). Antes, a política gravada em `HKCU` permanecia ativa indefinidamente no navegador do usuário, mesmo fora da automação, até que `--clear-certificate-policy` fosse executado manualmente.
+
+### Alterado
+- **Escrita de Status em Lote sem Reabertura Repetida da Planilha:** `write_status_to_spreadsheet_cell` em `src/extraction/spreadsheet.py` deixou de reabrir e reescanear o cabeçalho da planilha de resultados a cada célula gravada. O workbook agora é mantido em cache (por caminho de planilha) durante todo o lote — `close_status_workbook` libera o arquivo ao final de `run_batch_from_spreadsheet_in_context` — reduzindo custo de I/O repetido e risco de colisão com o arquivo aberto no Excel. A gravação em tempo real (uma escrita em disco por atualização de status) foi preservada. Como efeito colateral, uma coluna de aba fiscal não encontrada na planilha agora gera aviso explícito no log em vez de falhar silenciosamente.
+- **Remoção de Código Morto no Extrator:** Removidas do `src/extraction/siga_extractor.py` as funções não referenciadas em nenhum ponto do código (`_extract_download_match_fragments`, `_download_row_matches_taxpayer`, `_document_key`, `_find_latest_download_row`, `_click_xlsx_detail_download_button`, `_find_xlsx_detail_download_button`, `_return_from_detail_to_fiscal_menu`, `_is_zero_cnpj_base_row`, `_row_cnpj_base_key`), remanescentes de refatorações anteriores do fluxo de correspondência de downloads. Nenhum comportamento em produção foi alterado — os fluxos ativos usam as funções equivalentes já em uso (`_extract_download_match_fragments_from_title`, `_row_matches_download_target`, `_row_matches_taxpayer_document`).
+
+## [2026-07-15] — Versão 1.4.4
+
+### Corrigido
+- **Correspondência Exata vs. Aproximada na Central de Downloads:** Corrigido `_row_matches_download_target` em `src/extraction/siga_extractor.py`, onde os dois ramos da checagem `exact_only` executavam a mesma lógica, anulando o desempate por pontuação (`_download_match_score`) entre relatórios pendentes com títulos parecidos no mesmo mês/aba. Agora uma correspondência só é tratada como exata quando o título completo bate literalmente com a linha da Central de Downloads.
+- **Gravação de Status Resiliente a Planilha Aberta no Excel:** `write_status_to_spreadsheet_cell` em `src/extraction/spreadsheet.py` passou a tratar `PermissionError`/`OSError` ao abrir ou salvar a planilha de resultados, registrando aviso no log em vez de abortar o lote inteiro quando o arquivo `_resultados.xlsx` está aberto no Excel.
+- **Resiliência a Erros Inesperados na Abertura do Contribuinte:** `run_batch_from_spreadsheet_in_context` em `src/extraction/siga_extractor.py` passou a capturar também exceções genéricas (além de `TaxpayerNotFoundError`) ao abrir cada contribuinte, registrando o erro na planilha de resultados e seguindo para o próximo CNPJ, em vez de abortar o lote e descartar downloads já solicitados no SIGA para as linhas anteriores.
+- **Encerramento Seguro de Processos do Navegador:** `terminate_browser_processes` em `src/utils/browser.py` deixou de encerrar indiscriminadamente todos os processos `chrome.exe`/`msedge.exe` da máquina. Agora identifica, via PowerShell, apenas os processos cuja linha de comando referencia o perfil de depuração da automação, preservando janelas pessoais do usuário. Quando o perfil do sistema está em uso (`--system-browser-profile`), o encerramento forçado é ignorado por segurança.
+
 ## [2026-07-14] — Versão 1.4.3
 
 ### Corrigido

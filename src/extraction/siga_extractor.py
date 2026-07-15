@@ -13,7 +13,7 @@ from openpyxl import Workbook
 
 from src.auth.siga_login import SigaLoginFlow
 from src.config import Settings
-from src.extraction.spreadsheet import SpreadsheetRow, write_status_to_spreadsheet_cell
+from src.extraction.spreadsheet import SpreadsheetRow, close_status_workbook, write_status_to_spreadsheet_cell
 from src.utils.browser import BrowserSession
 from src.utils.selenium_compat import BrowserContext, Download, Error, Locator, Page, TimeoutError
 from src.utils.siga_page import SigaPageInspector
@@ -196,6 +196,30 @@ class SigaContributorExtractor:
         selected_tabs_by_row_number: dict[int, list[str]] | None = None,
     ) -> list[BatchExtractionResult]:
         """Reaproveita um contexto já autenticado para processar vários documentos em sequência."""
+        try:
+            return self._run_batch_from_spreadsheet_in_context(
+                context,
+                spreadsheet_rows,
+                month_reference,
+                reference_year,
+                selected_tabs,
+                selected_tabs_by_cnpj,
+                selected_tabs_by_row_number,
+            )
+        finally:
+            # Libera o workbook de status mantido em memória durante o lote (ver spreadsheet.py).
+            close_status_workbook(self.output_spreadsheet_path)
+
+    def _run_batch_from_spreadsheet_in_context(
+        self,
+        context: BrowserContext,
+        spreadsheet_rows: list[SpreadsheetRow],
+        month_reference: str,
+        reference_year: str | None = None,
+        selected_tabs: list[str] | None = None,
+        selected_tabs_by_cnpj: dict[str, list[str]] | None = None,
+        selected_tabs_by_row_number: dict[int, list[str]] | None = None,
+    ) -> list[BatchExtractionResult]:
         normalized_month = month_reference.strip()
         if not normalized_month:
             raise ValueError("Informe o mes de referencia antes de iniciar a extracao.")
@@ -259,6 +283,27 @@ class SigaContributorExtractor:
                     final_url=page.url,
                     status="taxpayer_not_found",
                     message=f"CNPJ {spreadsheet_row.cnpj} nao foi encontrado no SIGA.",
+                    row_number=spreadsheet_row.row_number,
+                )
+                pending_requests_by_row_number[spreadsheet_row.row_number] = []
+                not_found_row_numbers.add(spreadsheet_row.row_number)
+                continue
+            except Exception as exc:  # noqa: BLE001
+                # Um erro inesperado ao abrir o contribuinte nao deve descartar as solicitacoes
+                # ja preparadas para as linhas anteriores; registra o erro e segue para a proxima linha.
+                LOGGER.exception("Falha inesperada ao abrir o contribuinte para o CNPJ %s", spreadsheet_row.cnpj)
+
+                for tab in tabs_for_row:
+                    write_status_to_spreadsheet_cell(self.output_spreadsheet_path, spreadsheet_row.row_number, tab, f"Erro: {exc}")
+
+                prebuilt_results_by_row_number[spreadsheet_row.row_number] = BatchExtractionResult(
+                    cnpj=spreadsheet_row.cnpj,
+                    month_reference=normalized_month,
+                    taxpayer_folder=self._build_taxpayer_output_dir(taxpayer_folder_name, normalized_month),
+                    fiscal_results=[],
+                    final_url=page.url,
+                    status="error",
+                    message=f"Falha inesperada ao abrir o CNPJ {spreadsheet_row.cnpj}: {exc}",
                     row_number=spreadsheet_row.row_number,
                 )
                 pending_requests_by_row_number[spreadsheet_row.row_number] = []
@@ -2155,26 +2200,6 @@ class SigaContributorExtractor:
             return visible_buttons[-1]
         return None
 
-    def _find_xlsx_detail_download_button(self, page: Page) -> Locator | None:
-        """Localiza diretamente o botao novo do detalhamento, sem depender de indice."""
-        candidates = (
-            page.locator("xpath=//button[contains(normalize-space(.), 'Baixar Tabela (XLSX)')]"),
-            page.get_by_role("button", name=re.compile(r"Baixar Tabela\s*\(XLSX\)", re.IGNORECASE)),
-        )
-        for locator in candidates:
-            try:
-                count = locator.count()
-            except Error:
-                continue
-            for index in range(count):
-                candidate = locator.nth(index)
-                try:
-                    if candidate.is_enabled():
-                        return candidate
-                except Error:
-                    continue
-        return None
-
     def _click_detail_xlsx_button(self, page: Page) -> bool:
         """Clica diretamente no splitbutton principal do detalhamento."""
         script = """
@@ -2424,11 +2449,17 @@ class SigaContributorExtractor:
         target_keys = {target.request.request_key for target in targets}
 
         while time.time() < deadline:
+            # Varredura intermediaria: pode parar cedo assim que todas as solicitacoes forem
+            # avistadas, pois aqui so precisamos saber se algo ainda esta em processamento.
             latest_matches, processing_counts = self._scan_downloads_table_once(page, targets)
             waiting_keys = self._download_keys_still_processing(targets, latest_matches, processing_counts)
-            missing_keys = sorted(target_keys - set(latest_matches.keys()))
 
             if not waiting_keys:
+                # Antes de retornar, faz uma varredura completa (sem parada antecipada) para
+                # garantir a resolucao de duplicatas em paginas posteriores, independentemente
+                # da ordenacao da Central de Downloads.
+                latest_matches, _ = self._scan_downloads_table_once(page, targets, full_scan=True)
+                missing_keys = sorted(target_keys - set(latest_matches.keys()))
                 if missing_keys:
                     LOGGER.warning(
                         "Downloads nao localizados apos a varredura completa: %s",
@@ -2438,7 +2469,7 @@ class SigaContributorExtractor:
 
             delay_ms = 1_500 if len(waiting_keys) <= 2 else 2_000
             LOGGER.info(
-                "Downloads ainda em processamento para %s; nova varredura completa em %s ms.",
+                "Downloads ainda em processamento para %s; nova varredura em %s ms.",
                 ", ".join(self._pending_request_labels(targets, waiting_keys)),
                 delay_ms,
             )
@@ -2456,10 +2487,28 @@ class SigaContributorExtractor:
         self,
         page: Page,
         targets: list[DownloadLookupTarget],
+        full_scan: bool = False,
     ) -> tuple[dict[str, DownloadRowMatch], dict[str, int]]:
-        """Le todas as paginas uma vez e monta o melhor match por TELA/ABA."""
+        """Le as paginas necessarias e monta o melhor match por TELA/ABA.
+
+        A paginacao da Central de Downloads e estavel durante a espera: todas as solicitacoes
+        deste lote ja foram feitas antes de abrir a tela, entao nenhuma linha nova aparece e cada
+        solicitacao ocupa exatamente uma linha; apenas o status muda de "processando" para
+        "concluido" no lugar. Por isso, nas varreduras intermediarias, assim que todas as
+        solicitacoes tiverem sido localizadas (como concluidas ou ainda em processamento), as
+        paginas seguintes nao contem nada de interesse e a varredura pode parar, evitando o custo
+        quadratico de reler paginas finais vazias a cada ciclo de espera (ver PLANO_CORRECOES.md
+        item 16). Com `full_scan=True`, a parada antecipada e desativada e todas as paginas sao
+        lidas, garantindo a resolucao de duplicatas antes de retornar o resultado final.
+        """
         matches: dict[str, DownloadRowMatch] = {}
         processing_counts: dict[str, int] = {}
+        # Garante que uma mesma linha fisica da tabela nao seja usada como resultado de
+        # duas solicitacoes diferentes nesta passada (ver PLANO_CORRECOES.md item 15).
+        claimed_rows: dict[tuple[int, int], str] = {}
+        # Solicitacoes ja avistadas nesta passada (concluidas ou em processamento).
+        located_keys: set[str] = set()
+        target_keys = {target.request.request_key for target in targets}
         self._go_to_first_downloads_page(page)
         page_number = 1
 
@@ -2470,7 +2519,13 @@ class SigaContributorExtractor:
                 page_number,
                 matches,
                 processing_counts,
+                claimed_rows,
+                located_keys,
             )
+            # Todas as solicitacoes ja foram encontradas: nao ha motivo para paginar adiante
+            # (exceto quando full_scan exige ler tudo para resolver duplicatas).
+            if not full_scan and target_keys and located_keys >= target_keys:
+                break
             if not self._go_to_next_downloads_page(page):
                 break
             page_number += 1
@@ -2484,6 +2539,8 @@ class SigaContributorExtractor:
         page_number: int,
         matches: dict[str, DownloadRowMatch],
         processing_counts: dict[str, int],
+        claimed_rows: dict[tuple[int, int], str],
+        located_keys: set[str],
     ) -> None:
         rows = page.locator("tr")
         try:
@@ -2503,9 +2560,17 @@ class SigaContributorExtractor:
             row_text = self._normalize_download_target(" ".join(row_cells))
             status_text = self._row_status_text(row_cells)
             requested_at = self._row_request_datetime(row_cells)
+            row_id = (page_number, index)
 
             for target in targets:
                 request_key = target.request.request_key
+
+                # Linha ja reivindicada por outra solicitacao nesta passada: nao pode ser
+                # reaproveitada, mesmo que os fragmentos de titulo tambem batam com este alvo.
+                claimed_by = claimed_rows.get(row_id)
+                if claimed_by is not None and claimed_by != request_key:
+                    continue
+
                 if not self._row_matches_download_target(
                     row_cells,
                     target.normalized_target,
@@ -2520,6 +2585,7 @@ class SigaContributorExtractor:
 
                 if any(status_key in status_text for status_key in ("processando", "aguardando", "gerando")):
                     processing_counts[request_key] = processing_counts.get(request_key, 0) + 1
+                    located_keys.add(request_key)
                     continue
                 if "concluido" not in status_text:
                     continue
@@ -2542,6 +2608,8 @@ class SigaContributorExtractor:
                         target.match_fragments,
                     ),
                 )
+                claimed_rows[row_id] = request_key
+                located_keys.add(request_key)
                 self._store_best_download_match(matches, candidate)
 
     def _store_best_download_match(
@@ -2787,26 +2855,6 @@ class SigaContributorExtractor:
 
         candidates.sort(key=lambda item: item[1], reverse=True)
         return candidates[0][0]
-
-    def _find_latest_download_row(self, page: Page) -> Locator:
-        deadline = time.time() + (self.settings.download_wait_timeout_ms / 1000)
-        while time.time() < deadline:
-            rows = page.locator("tr, [role='row'], .p-datatable-row, .card")
-            try:
-                row_count = rows.count()
-            except Error:
-                row_count = 0
-            for index in range(row_count):
-                row = rows.nth(index)
-                try:
-                    text = strip_accents(row.inner_text(timeout=2_000)).lower()
-                except Error:
-                    continue
-                if "csv" in text or "download" in text or "gerado" in text:
-                    return row
-            page.wait_for_timeout(self.settings.download_poll_interval_ms)
-
-        raise TimeoutError("Nao foi possivel localizar a linha do arquivo solicitado na central de Downloads.")
 
     def _click_download_action(self, row: Locator, page: Page | None = None, tela_aba: str | None = None) -> None:
         candidates = (
@@ -3281,7 +3329,8 @@ class SigaContributorExtractor:
         if normalized_target in row_text or normalized_target_ascii in row_text_ascii:
             return True
         if exact_only:
-            return self._row_contains_signature_fragments(row_text, row_text_ascii, match_fragments)
+            # Sem correspondência literal do título completo, a linha não é uma correspondência exata.
+            return False
         return self._row_contains_signature_fragments(row_text, row_text_ascii, match_fragments)
 
     def _row_contains_signature_fragments(self, row_text: str, row_text_ascii: str, match_fragments: dict[str, str]) -> bool:
@@ -3336,7 +3385,10 @@ class SigaContributorExtractor:
             cell_digits = self._normalize_numeric_document(cell_text)
             if not cell_digits:
                 continue
-            if cell_digits == taxpayer_base_key or cell_digits.startswith(taxpayer_base_key):
+            # Igualdade exata evita que um numero mais longo que apenas comeca com os mesmos
+            # digitos do CNPJ-alvo (ex.: um numero de processo interno da SEFAZ) seja aceito
+            # como pertencente ao contribuinte errado.
+            if cell_digits == taxpayer_base_key:
                 return True
         return False
 
@@ -3396,21 +3448,6 @@ class SigaContributorExtractor:
             "detail": detail,
         }
 
-    def _is_zero_cnpj_base_row(self, row: Locator) -> bool:
-        return self._row_cnpj_base_key(row) == "0"
-
-    def _row_cnpj_base_key(self, row: Locator) -> str:
-        # Retorna o documento completo (CNPJ alfanumérico ou CGF) sem limitar aos 8 caracteres de CNPJ base.
-        # Isso evita colisões na verificação de downloads entre diferentes filiais.
-        try:
-            cnpj_base_text = self._normalize_spaces(row.locator("td").nth(0).inner_text(timeout=2_000))
-        except Error:
-            return ""
-        digits = self._normalize_numeric_document(cnpj_base_text)
-        if not digits:
-            return ""
-        return digits
-
     def _taxpayer_base_key(self, taxpayer_document: str) -> str:
         # Retorna o documento completo para fins de comparação direta e precisa dos arquivos na central de downloads.
         # Impede que filiais distintas misturem seus relatórios no disco.
@@ -3418,37 +3455,6 @@ class SigaContributorExtractor:
         if not digits:
             return ""
         return digits
-
-    def _extract_download_match_fragments(self, normalized_target: str) -> dict[str, str]:
-        tab = ""
-        if "nfc-e" in normalized_target:
-            tab = "nfc-e"
-        elif "ct-e" in normalized_target:
-            tab = "ct-e"
-        elif "nf-e" in normalized_target:
-            tab = "nf-e"
-        view = ""
-        if "destinatario" in normalized_target:
-            view = "destinatario"
-        elif "emissor" in normalized_target:
-            view = "emissor"
-        elif "emitente" in normalized_target:
-            view = "emitente"
-        elif "tomador" in normalized_target:
-            view = "tomador"
-        month_match = re.search(
-            r"detalhamento\s+([a-zçãõáéíóúâêîôû]+)\s+de\s+(\d{4})",
-            normalized_target,
-            re.IGNORECASE,
-        )
-        month = month_match.group(1) if month_match else ""
-        year = month_match.group(2) if month_match else ""
-        return {
-            "tab": tab,
-            "view": view,
-            "month": month,
-            "year": year,
-        }
 
     def _parse_request_datetime(self, value: str) -> datetime:
         normalized = strip_accents(self._normalize_spaces(value)).lower()
@@ -3467,22 +3473,6 @@ class SigaContributorExtractor:
         if not match:
             return ""
         return self._normalize_numeric_document(match.group(1))
-
-    def _download_row_matches_taxpayer(self, row: Locator, taxpayer_key: str) -> bool:
-        cells = row.locator("td")
-        row_documents: list[str] = []
-        for cell_index in (0, 1):
-            try:
-                cell_text = cells.nth(cell_index).inner_text(timeout=2_000)
-            except Error:
-                continue
-            document_key = self._document_key(cell_text)
-            if document_key:
-                row_documents.append(document_key)
-        return taxpayer_key in row_documents
-
-    def _document_key(self, value: str) -> str:
-        return self._normalize_numeric_document(value)
 
     def _capture_download_from_row(
         self,
@@ -3526,18 +3516,6 @@ class SigaContributorExtractor:
             return float(cleaned)
         except ValueError:
             return 0.0
-
-    def _return_from_detail_to_fiscal_menu(self, page: Page) -> None:
-        back_candidates = (
-            page.get_by_role("button", name=re.compile(r"voltar|retornar|fechar", re.IGNORECASE)),
-            page.get_by_role("link", name=re.compile(r"voltar|retornar|fechar", re.IGNORECASE)),
-        )
-        for locator in back_candidates:
-            target = self._first_visible_enabled(locator)
-            if target is not None:
-                target.click()
-                page.wait_for_timeout(1_000)
-                return
 
     def _return_to_home(self, page: Page) -> None:
         try:
@@ -3781,14 +3759,41 @@ class SigaContributorExtractor:
         return True
 
     def _ensure_side_menu_open(self, page: Page) -> bool:
-        """Expande o menu lateral quando ele estiver recolhido, evitando bloqueio de navegação."""
-        menu_toggle_xpath = (
-            "xpath=//*[@id='main-structure-header-id']/div/div[1]/ed-header-v2-track-one/"
-            "div/div/div/div[1]/div/i"
-        )
-        menu_toggle = self._first_visible_enabled(page.locator(menu_toggle_xpath))
+        """Expande o menu lateral quando ele estiver recolhido, evitando bloqueio de navegação.
+
+        Tenta os seletores em ordem de preferência semântica, usando o XPath posicional apenas
+        como último recurso — se cair no fallback, registra WARNING como sinal de possível
+        mudança no layout do SIGA.
+        """
+        # Seletores em ordem de robustez: semântico > componente > posicional
+        toggle_selectors = [
+            # 1ª tentativa: atributo ARIA ou classe de toggle de menu
+            "[aria-label*='menu' i], [aria-label*='toggle' i], button.menu-toggle, [class*='menu-toggle']",
+            # 2ª tentativa: ícone dentro do componente de cabeçalho Angular do SIGA
+            "ed-header-v2-track-one i, #main-structure-header-id i",
+            # 3ª tentativa (fallback posicional) — frágil a mudanças de layout
+            "//*[@id='main-structure-header-id']/div/div[1]/ed-header-v2-track-one/div/div/div/div[1]/div/i",
+        ]
+
+        menu_toggle = None
+        used_fallback = False
+        for idx, selector in enumerate(toggle_selectors):
+            # XPath só funciona com o prefixo correto no locator
+            loc = page.locator(f"xpath={selector}") if selector.startswith("/") else page.locator(selector)
+            menu_toggle = self._first_visible_enabled(loc)
+            if menu_toggle is not None:
+                if idx == len(toggle_selectors) - 1:
+                    used_fallback = True
+                break
+
         if menu_toggle is None:
             return False
+
+        if used_fallback:
+            LOGGER.warning(
+                "Toggle do menu lateral localizado apenas pelo XPath posicional (fallback). "
+                "Isso pode indicar uma mudança no layout do SIGA — verifique se os seletores semanticos precisam ser atualizados."
+            )
 
         try:
             body_text = strip_accents(page.locator("body").inner_text(timeout=2_000)).lower()
@@ -3818,48 +3823,6 @@ class SigaContributorExtractor:
                 continue
         return None
 
-    def _click_xlsx_detail_download_button(self, page: Page) -> bool:
-        """Clica no botao XLSX por locator ou, se preciso, direto pelo DOM."""
-        target = self._find_xlsx_detail_download_button(page)
-        if target is not None:
-            target.click(force=True)
-            return True
-
-        script = """
-        (buttonText) => {
-            const normalize = (value) => String(value || "")
-                .normalize("NFD")
-                .replace(/[\\u0300-\\u036f]/g, "")
-                .replace(/\\s+/g, " ")
-                .trim()
-                .toLowerCase();
-            const wanted = normalize(buttonText);
-            const candidates = [...document.querySelectorAll("button, a, [role='button']")];
-
-            for (const element of candidates) {
-                const text = normalize(
-                    element.innerText ||
-                    element.textContent ||
-                    element.getAttribute("aria-label") ||
-                    element.getAttribute("title")
-                );
-                if (!text) {
-                    continue;
-                }
-                if (text === wanted || (text.includes("baixar tabela") && text.includes("xlsx"))) {
-                    element.scrollIntoView({block: "center", inline: "center"});
-                    element.click();
-                    return true;
-                }
-            }
-            return false;
-        }
-        """
-        try:
-            return bool(page.evaluate(script, "Baixar Tabela (XLSX)"))
-        except Error:
-            return False
-
     def _find_row_by_digits(self, page: Page, target_digits: str, max_candidates: int = 80) -> Locator | None:
         candidates = page.locator("tr, [role='row'], .p-datatable-row, .card")
         try:
@@ -3867,7 +3830,8 @@ class SigaContributorExtractor:
         except Error:
             return None
 
-        if count > max_candidates:
+        limited = count > max_candidates
+        if limited:
             LOGGER.info(
                 "Limitando a varredura de digitos do contribuinte a %s de %s elementos candidatos de linha/cartao",
                 max_candidates,
@@ -3885,6 +3849,17 @@ class SigaContributorExtractor:
             normalized = re.sub(r"\D", "", text)
             if target_digits and target_digits in normalized:
                 return candidate
+
+        # Emite aviso explícito quando o limite foi atingido sem encontrar o alvo —
+        # sinal de que a tabela cresceu além do limite padrão de varredura.
+        if limited:
+            LOGGER.warning(
+                "Alvo '%s' nao encontrado dentro do limite de %s candidatos (total na pagina: %s). "
+                "Considere aumentar max_candidates se a tabela cresceu significativamente.",
+                target_digits,
+                max_candidates,
+                count,
+            )
         return None
 
     def _is_taxpayer_detail_page(self, page: Page) -> bool:

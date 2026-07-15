@@ -15,8 +15,18 @@ from tkinter import filedialog, messagebox, ttk
 from src.auth.siga_login import SigaLoginFlow
 from src.config import Settings
 from src.extraction.siga_extractor import SigaContributorExtractor
-from src.extraction.spreadsheet import SpreadsheetRow, load_cnpjs_from_text, load_cnpjs_from_xlsx
-from src.utils.browser import BrowserSession, get_connect_browser_url, launch_debug_browser
+from src.extraction.spreadsheet import (
+    SpreadsheetRow,
+    build_manual_entry_workbook,
+    load_cnpjs_from_text,
+    load_cnpjs_from_xlsx,
+)
+from src.utils.browser import (
+    BrowserSession,
+    get_connect_browser_url,
+    launch_debug_browser,
+    shutdown_debug_browser,
+)
 from src.utils.logging_setup import configure_logging
 from src.months import MONTH_OPTIONS
 
@@ -114,7 +124,9 @@ class SigaAutomationGUI:
 
         self.selection_rows: list[RowSelectionWidgets] = []
         self._worker_thread: threading.Thread | None = None
+        self._browser_thread: threading.Thread | None = None
         self._stop_requested = False
+        self._closing = False
         self._row_columns = (40, 180, 50, 55, 50, 60, 65)
         self._browser_started = False
         self.start_browser_button: ttk.Button | None = None
@@ -739,12 +751,15 @@ class SigaAutomationGUI:
         self.status_var.set(f"{len(self.selection_rows)} empresa(s) prontas para execução.")
 
     def _show_help_dialog(self) -> None:
-        """Abre a página HTML local com as instruções completas de manuseio."""
+        """Abre a página HTML local com as instruções completas de manuseio.
+
+        Usa _resolve_asset_path para localizar o manual tanto no código-fonte quanto
+        no executável empacotado (PyInstaller), sem depender do CWD no momento da execução.
+        """
         import webbrowser
-        import os
-        manual_path = os.path.abspath("manual_instrucoes.html")
-        if os.path.exists(manual_path):
-            webbrowser.open(f"file:///{manual_path.replace(os.sep, '/')}")
+        manual_path = self._resolve_asset_path("manual_instrucoes.html")
+        if manual_path.exists():
+            webbrowser.open(manual_path.as_uri())
         else:
             # Fallback para mensagem simples caso o manual não esteja na raiz
             help_text = (
@@ -944,20 +959,48 @@ class SigaAutomationGUI:
             self.status_var.set("O navegador já foi iniciado. Faça o login manual e clique em Executar.")
             return
 
+        if self._browser_thread is not None and self._browser_thread.is_alive():
+            self.status_var.set("O navegador já está sendo iniciado. Aguarde alguns instantes.")
+            return
+
         if not self.settings.connect_browser_url:
             self.settings.connect_browser_url = get_connect_browser_url(self.settings)
-        try:
-            launch_debug_browser(self.settings)
-            self._browser_started = True
-            if self.start_browser_button is not None:
-                self.start_browser_button.state(["disabled"])
-            if self.execute_button is not None:
-                self.execute_button.state(["!disabled"])
-            self.status_var.set("Navegador iniciado. Faça o login manualmente e, depois, clique em Executar.")
-            self._append_log_line("Navegador iniciado. Aguardando login manual do usuário.")
-        except Exception as exc:  # noqa: BLE001
-            self.status_var.set(f"Nao foi possivel abrir o navegador automaticamente: {exc}")
-            LOGGER.exception("Não foi possível abrir o navegador de depuração pela GUI")
+
+        # A abertura do navegador (incluindo a espera pelo CDP) pode levar segundos; rodar em
+        # thread evita congelar o loop de eventos do Tkinter e a janela "Não responde".
+        if self.start_browser_button is not None:
+            self.start_browser_button.state(["disabled"])
+        self.status_var.set("Iniciando o navegador... aguarde.")
+        self._append_log_line("Iniciando o navegador de depuração...")
+
+        def worker() -> None:
+            try:
+                launch_debug_browser(self.settings)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception("Não foi possível abrir o navegador de depuração pela GUI")
+                self._append_log_line(f"Falha ao iniciar o navegador: {exc}")
+                self._ui_after(0, lambda exc=exc: self._on_browser_start_failed(exc))
+            else:
+                self._ui_after(0, self._on_browser_start_succeeded)
+
+        self._browser_thread = threading.Thread(target=worker, daemon=True)
+        self._browser_thread.start()
+
+    def _on_browser_start_succeeded(self) -> None:
+        """Atualiza a interface na thread principal após o navegador abrir com sucesso."""
+        self._browser_started = True
+        if self.start_browser_button is not None:
+            self.start_browser_button.state(["disabled"])
+        if self.execute_button is not None:
+            self.execute_button.state(["!disabled"])
+        self.status_var.set("Navegador iniciado. Faça o login manualmente e, depois, clique em Executar.")
+        self._append_log_line("Navegador iniciado. Aguardando login manual do usuário.")
+
+    def _on_browser_start_failed(self, exc: Exception) -> None:
+        """Restaura o botão de iniciar o navegador quando a abertura falha."""
+        if self.start_browser_button is not None:
+            self.start_browser_button.state(["!disabled"])
+        self.status_var.set(f"Nao foi possivel abrir o navegador automaticamente: {exc}")
 
     def _run_selected(self) -> None:
         if self._worker_thread and self._worker_thread.is_alive():
@@ -1000,12 +1043,12 @@ class SigaAutomationGUI:
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Falha na execução pela GUI")
                 self._append_log_line(f"Falha na execução: {exc}")
-                self.root.after(0, lambda exc=exc: messagebox.showerror("SIGA Automação", str(exc)))
+                self._ui_after(0, lambda exc=exc: messagebox.showerror("SIGA Automação", str(exc)))
             finally:
-                self.root.after(0, lambda: self._set_controls_state("normal"))
-                self.root.after(0, self._restore_browser_controls_state)
-                self.root.after(0, lambda: self.progress_var.set(100))
-                self.root.after(0, lambda: self.status_var.set("Execução finalizada."))
+                self._ui_after(0, lambda: self._set_controls_state("normal"))
+                self._ui_after(0, self._restore_browser_controls_state)
+                self._ui_after(0, lambda: self.progress_var.set(100))
+                self._ui_after(0, lambda: self.status_var.set("Execução finalizada."))
 
         self._worker_thread = threading.Thread(target=worker, daemon=True)
         self._worker_thread.start()
@@ -1029,6 +1072,18 @@ class SigaAutomationGUI:
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Falha ao criar cópia da planilha para gravação de resultados")
                 self._append_log_line(f"Erro ao criar planilha de resultados: {exc}")
+        else:
+            # A entrada manual não parte de nenhum arquivo existente; gera uma planilha de
+            # resultados dedicada para que o status de cada CNPJ também fique rastreável.
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            output_spreadsheet_path = Path(self.settings.output_dir) / f"resultados_manual_{timestamp}.xlsx"
+            try:
+                build_manual_entry_workbook(selected_rows, output_spreadsheet_path)
+                self._append_log_line(f"Planilha de resultados criada: {output_spreadsheet_path.name}")
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception("Falha ao criar planilha de resultados para a entrada manual")
+                self._append_log_line(f"Erro ao criar planilha de resultados: {exc}")
+                output_spreadsheet_path = None
 
         extractor = SigaContributorExtractor(self.settings, allow_manual_login_prompt=False, output_spreadsheet_path=output_spreadsheet_path)
         flow = SigaLoginFlow(self.settings)
@@ -1080,6 +1135,8 @@ class SigaAutomationGUI:
         self.log_queue.put(text)
 
     def _drain_log_queue(self) -> None:
+        if self._closing:
+            return
         drained = False
         while True:
             try:
@@ -1091,6 +1148,16 @@ class SigaAutomationGUI:
         if drained:
             self.log_text.see("end")
         self.root.after(100, self._drain_log_queue)
+
+    def _ui_after(self, delay: int, callback) -> None:
+        """Agenda uma atualização de UI a partir de threads, ignorando-a se a janela já fechou."""
+        if self._closing:
+            return
+        try:
+            self.root.after(delay, callback)
+        except tk.TclError:
+            # A janela pode ter sido destruída entre a checagem e o agendamento.
+            pass
 
     def _append_text(self, line: str) -> None:
         """Insere uma linha no log e aplica cor automática com base no nível detectado."""
@@ -1200,6 +1267,32 @@ class SigaAutomationGUI:
             self.execute_button.state(["!disabled"] if self._browser_started else ["disabled"])
 
     def _on_close(self) -> None:
+        worker_running = self._worker_thread is not None and self._worker_thread.is_alive()
+
+        if worker_running:
+            confirmed = messagebox.askyesno(
+                "SIGA Automação",
+                "Uma extração está em andamento. Deseja realmente sair?\n\n"
+                "A operação atual será interrompida e o navegador de automação será encerrado.",
+            )
+            if not confirmed:
+                return
+
+        # Sinaliza o encerramento para as threads e impede novos agendamentos de UI.
+        self._closing = True
+        self._stop_requested = True
+
+        if worker_running:
+            self._append_log_line("Encerrando a execução a pedido do usuário...")
+            # Encerrar o navegador da automação faz as chamadas do Selenium falharem rápido,
+            # permitindo que a thread de trabalho saia do bloco de sessão em vez de ficar presa.
+            try:
+                shutdown_debug_browser(self.settings)
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("Falha ao encerrar o navegador durante o fechamento da interface")
+            # Aguarda um encerramento gracioso da thread, sem travar a interface indefinidamente.
+            self._worker_thread.join(timeout=10)
+
         logging.getLogger().removeHandler(self.log_handler)
         self.root.destroy()
 
