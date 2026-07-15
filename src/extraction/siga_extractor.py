@@ -428,6 +428,23 @@ class SigaContributorExtractor:
                     exc,
                 )
                 if attempt < 3:
+                    # Se a página estiver em branco ou quebrada, estabilizar imediatamente antes
+                    # de retentar — evita desperdiçar uma tentativa digitando em tela inutilizável.
+                    try:
+                        diagnosis = self.page_inspector.inspect(page)
+                        if diagnosis["needs_recovery"]:
+                            LOGGER.warning(
+                                "Pagina em branco detectada durante a tentativa %s para %s (motivo: %s); "
+                                "estabilizando antes de retentar.",
+                                attempt,
+                                cgf,
+                                diagnosis["reason"],
+                            )
+                            self.page_inspector.stabilize_after_navigation(
+                                page, f"retry-before-taxpayer-open-{cgf}"
+                            )
+                    except Exception:  # noqa: BLE001
+                        pass
                     page.wait_for_timeout(1_000)
 
         self._save_debug_snapshot(page, f"taxpayer-open-cycle-failed-{cgf}")

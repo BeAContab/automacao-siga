@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-07-15] — Versão 1.5.1
+
+### Corrigido
+- **Recuperação de Página em Branco Entre Retentativas:** Em `_open_taxpayer_from_home` (`src/extraction/siga_extractor.py`), após qualquer falha de navegador (`TimeoutError`/`Error`), a automação agora inspeciona o estado da página com `SigaPageInspector.inspect()` antes de aguardar e retentar. Se a página estiver em estado de recuperação necessária (`empty-app-root`, `missing-app-root`, `nearly-empty-body`), chama `stabilize_after_navigation` imediatamente — garantindo que cada nova tentativa comece com uma interface válida e evitando que uma tela inutilizável consuma retentativas desnecessárias.
+
 ## [2026-07-15] — Versão 1.5.0
 
 ### Corrigido
