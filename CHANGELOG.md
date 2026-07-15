@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-07-15] — Versão 1.5.0
+
+### Corrigido
+- **Resiliência contra Página em Branco:** `_wait_for_taxpayer_list_ready` em `src/extraction/siga_extractor.py` agora levanta `TimeoutError` em vez de retornar `False` silenciosamente se a página permanecer completamente vazia ou sem renderizar a estrutura básica ao fim do tempo de espera. Isso aciona o ciclo automático de retentativas para recarregar a página e tentar novamente.
+- **Retentativas de Busca de Contribuinte:** A rotina `_open_taxpayer_from_home` foi atualizada para capturar `TaxpayerNotFoundError` e realizar até 3 tentativas de busca antes de propagar o erro definitivamente. Isso evita falsos-negativos (como falhas causadas por lentidão de rede na transição de busca) e garante que o CNPJ de fallback da Central de Downloads seja aberto com sucesso.
+
 ## [2026-07-15] — Versão 1.4.9
 
 ### Adicionado

@@ -407,8 +407,18 @@ class SigaContributorExtractor:
                 self._search_taxpayer(page, cgf)
                 self._open_taxpayer(page, cgf)
                 return
-            except TaxpayerNotFoundError:
-                raise
+            except TaxpayerNotFoundError as exc:
+                last_error = exc
+                LOGGER.warning(
+                    "A tentativa %s indicou que o contribuinte %s nao foi encontrado: %s",
+                    attempt,
+                    cgf,
+                    exc,
+                )
+                if attempt == 3:
+                    raise
+                if attempt < 3:
+                    page.wait_for_timeout(1_000)
             except (TimeoutError, Error) as exc:
                 last_error = exc
                 LOGGER.warning(
@@ -503,6 +513,12 @@ class SigaContributorExtractor:
                 pass
 
             page.wait_for_timeout(500)
+
+        diagnosis = self.page_inspector.inspect(page)
+        if diagnosis["needs_recovery"]:
+            raise TimeoutError(
+                f"A pagina do SIGA permaneceu em branco ou inacessivel (motivo: {diagnosis['reason']})."
+            )
 
         LOGGER.info(
             "A lista de contribuintes não terminou de carregar visualmente; continuando porque a busca agora é feita por paginação direta."
