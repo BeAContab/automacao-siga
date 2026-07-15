@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,6 +24,7 @@ from src.live_assist import LiveAssistSession
 from src.months import MONTH_OPTIONS
 from src.utils.browser import BrowserSession, get_connect_browser_url, launch_debug_browser
 from src.utils.certificate_policy import (
+    ClientCertificate,
     clear_auto_certificate_selection,
     configure_auto_certificate_selection,
 )
@@ -89,6 +91,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--clear-certificate-policy",
         action="store_true",
         help="Remove the certificate auto-selection policy configured by this tool and exit.",
+    )
+    parser.add_argument(
+        "--keep-certificate-policy",
+        action="store_true",
+        help=(
+            "Do not remove the certificate auto-selection policy after this run finishes. "
+            "By default the policy is cleared automatically once the run completes."
+        ),
     )
     parser.add_argument(
         "--manual-login-timeout",
@@ -300,6 +310,34 @@ def _prompt_document_tabs() -> list[str]:
             print("Opção inválida. Use NF-e, NFC-e, CT-e, Malha Fiscal, Débitos Fiscais ou Todos.")
 
 
+def _prompt_certificate_choice(certificates: list[ClientCertificate]) -> ClientCertificate | None:
+    """Pede ao operador que escolha, entre vários certificados, qual usar para o login no SIGA."""
+    # Sem terminal interativo não há como confirmar com segurança; pula a política.
+    if not sys.stdin or not sys.stdin.isatty():
+        print(
+            "Vários certificados de autenticação foram encontrados, mas não há terminal interativo "
+            "para escolher. A seleção automática de certificado não será configurada."
+        )
+        return None
+
+    print("")
+    print("Foram encontrados vários certificados de autenticação de cliente:")
+    for index, certificate in enumerate(certificates, start=1):
+        validade = f" (válido até {certificate.not_after})" if certificate.not_after else ""
+        print(f"{index}. {certificate.subject_cn}{validade}")
+    print("Pressione Enter sem digitar nada para não configurar a seleção automática.")
+
+    while True:
+        raw_value = input("Escolha o número do certificado a usar: ").strip()
+        if not raw_value:
+            return None
+        if raw_value.isdigit():
+            position = int(raw_value)
+            if 1 <= position <= len(certificates):
+                return certificates[position - 1]
+        print(f"Opção inválida. Informe um número de 1 a {len(certificates)} ou Enter para cancelar.")
+
+
 def _print_batch_summary(results: list[BatchExtractionResult], total_rows: int) -> None:
     """Mostra um resumo compacto do lote ao final da execução."""
     download_count = sum(len(result.fiscal_results) for result in results)
@@ -412,22 +450,31 @@ def main() -> int:
     )
     configure_logging(settings.log_dir / "run.log")
 
-    try:
-        # Este modo apenas limpa a política de certificado e encerra.
-        if args.clear_certificate_policy:
-            removed = clear_auto_certificate_selection(settings)
-            print(
-                "Política de seleção automática de certificado removida."
-                if removed
-                else "Nenhuma política de seleção automática de certificado foi encontrada."
-            )
-            return 0
+    # Este modo apenas limpa a política de certificado e encerra.
+    if args.clear_certificate_policy:
+        removed = clear_auto_certificate_selection(settings)
+        print(
+            "Política de seleção automática de certificado removida."
+            if removed
+            else "Nenhuma política de seleção automática de certificado foi encontrada."
+        )
+        return 0
 
+    certificate_policy_applied = False
+    try:
         # A política de certificado é aplicada antes do navegador para reduzir atrito no login.
         if settings.configure_certificate_policy:
-            certificate_policy = configure_auto_certificate_selection(settings)
+            certificate_policy = configure_auto_certificate_selection(
+                settings, selector=_prompt_certificate_choice
+            )
+            certificate_policy_applied = certificate_policy.applied
             if certificate_policy.applied and certificate_policy.subject_cn:
                 print(f"Certificado configurado para seleção automática: {certificate_policy.subject_cn}")
+            elif certificate_policy.requires_manual_selection:
+                print(
+                    "A seleção automática de certificado não foi configurada. "
+                    "O navegador exibirá o prompt padrão para você escolher o certificado no login."
+                )
             elif certificate_policy.reg_file_path:
                 print("Não foi possível gravar a política de certificado automaticamente.")
                 print(f"Arquivo .reg gerado para aplicação manual: {certificate_policy.reg_file_path}")
@@ -460,6 +507,13 @@ def main() -> int:
     except Exception:
         logging.exception("Erro fatal não tratado durante a execução")
         return 1
+    finally:
+        # A política fica ativa no navegador do usuário mesmo fora da automação se não for
+        # removida; por padrão a limpeza acontece ao final de toda execução (sucesso ou erro).
+        if certificate_policy_applied and not args.keep_certificate_policy:
+            with suppress(Exception):
+                if clear_auto_certificate_selection(settings):
+                    logging.info("Política de seleção automática de certificado removida ao final da execução.")
 
 
 if __name__ == "__main__":

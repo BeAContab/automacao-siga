@@ -21,6 +21,8 @@ testes/*.txt
 
 # Local project notes and chat context
 brain/
+graphify-out/
+.claude/
 
 # Local certificates and secrets
 certificado/

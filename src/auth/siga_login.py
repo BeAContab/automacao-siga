@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 import time
 from dataclasses import dataclass
 
@@ -60,6 +61,12 @@ class SigaLoginFlow:
 
         if self.settings.headless:
             raise TimeoutError("Login manual exige navegador visivel. Execute sem --headless.")
+
+        if not sys.stdin or not sys.stdin.isatty():
+            raise RuntimeError(
+                "Login manual requer um terminal interativo para confirmar com Enter, mas nenhum "
+                "terminal foi detectado. Use a GUI (--gui) ou --disable-attach com uma sessao ja autenticada."
+            )
 
         LOGGER.info("Navegador aberto para login manual em %s", page.url)
         input("Faca o login manualmente no navegador aberto e pressione Enter para continuar...")

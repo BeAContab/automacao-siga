@@ -6,6 +6,7 @@ import json
 import logging
 import subprocess
 import winreg
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,25 +31,75 @@ class CertificatePolicyError(RuntimeError):
 
 
 @dataclass(slots=True)
+class ClientCertificate:
+    """Representa um certificado de autenticação de cliente disponível no repositório do usuário."""
+    subject_cn: str
+    not_after: str
+    thumbprint: str
+
+
+@dataclass(slots=True)
 class CertificatePolicyResult:
     """Resultado consolidado da tentativa de aplicar ou limpar a política."""
     subject_cn: str | None
     applied: bool
     registry_path: str | None = None
     reg_file_path: Path | None = None
+    # Sinaliza que havia mais de um certificado elegível e nenhuma escolha foi feita,
+    # então a política não foi aplicada por segurança (evita usar o CNPJ errado).
+    requires_manual_selection: bool = False
 
 
-def configure_auto_certificate_selection(settings: Settings) -> CertificatePolicyResult:
-    """Cria ou atualiza a política de seleção automática do certificado de cliente."""
+# Um seletor recebe a lista de certificados elegíveis e devolve o escolhido, ou None para cancelar.
+CertificateSelector = Callable[[Sequence[ClientCertificate]], ClientCertificate | None]
+
+
+def configure_auto_certificate_selection(
+    settings: Settings,
+    selector: CertificateSelector | None = None,
+) -> CertificatePolicyResult:
+    """Cria ou atualiza a política de seleção automática do certificado de cliente.
+
+    Quando há mais de um certificado elegível, a escolha não é automática: o `selector`
+    (quando fornecido) decide qual usar. Sem seletor e com ambiguidade, a política não é
+    aplicada, evitando selecionar silenciosamente o certificado de outra empresa.
+    """
     policy_path = POLICY_PATHS.get(settings.browser_channel)
     if not policy_path:
         LOGGER.info("Ignorando a politica de certificado para canal de navegador nao suportado: %s", settings.browser_channel)
         return CertificatePolicyResult(subject_cn=None, applied=False)
 
-    subject_cn = _find_client_auth_certificate_cn()
-    if not subject_cn:
+    certificates = _list_client_auth_certificates()
+    if not certificates:
         LOGGER.warning("Nenhum certificado de autenticacao de cliente com chave privada foi encontrado em CurrentUser\\My")
         return CertificatePolicyResult(subject_cn=None, applied=False, registry_path=policy_path)
+
+    if len(certificates) == 1:
+        subject_cn = certificates[0].subject_cn
+    else:
+        # Mais de um certificado elegível: não escolher automaticamente por validade.
+        if selector is None:
+            LOGGER.warning(
+                "Foram encontrados %s certificados de autenticacao elegiveis; a politica nao foi "
+                "aplicada automaticamente para evitar usar o certificado incorreto.",
+                len(certificates),
+            )
+            return CertificatePolicyResult(
+                subject_cn=None,
+                applied=False,
+                registry_path=policy_path,
+                requires_manual_selection=True,
+            )
+        chosen = selector(certificates)
+        if chosen is None:
+            LOGGER.info("Selecao de certificado cancelada pelo operador; politica nao aplicada.")
+            return CertificatePolicyResult(
+                subject_cn=None,
+                applied=False,
+                registry_path=policy_path,
+                requires_manual_selection=True,
+            )
+        subject_cn = chosen.subject_cn
 
     try:
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, policy_path, 0, winreg.KEY_SET_VALUE) as key:
@@ -101,16 +152,18 @@ def clear_auto_certificate_selection(settings: Settings) -> bool:
     return removed
 
 
-def _find_client_auth_certificate_cn() -> str | None:
-    """Localiza o CN do certificado atual do usuário que suporta autenticação cliente."""
+def _list_client_auth_certificates() -> list[ClientCertificate]:
+    """Lista os certificados do usuário que suportam autenticação de cliente, do mais recente ao mais antigo."""
     command = (
-        "$cert = Get-ChildItem Cert:\\CurrentUser\\My | "
+        "$certs = Get-ChildItem Cert:\\CurrentUser\\My | "
         "Where-Object { $_.HasPrivateKey -and "
         f"($_.EnhancedKeyUsageList | Where-Object {{ $_.ObjectId -eq '{CLIENT_AUTH_EKU}' }}) }} | "
-        "Sort-Object NotAfter -Descending | Select-Object -First 1; "
-        "if ($cert) { "
-        "$cert.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) "
-        "}"
+        "Sort-Object NotAfter -Descending; "
+        "$list = $certs | ForEach-Object { [PSCustomObject]@{ "
+        "cn = $_.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false); "
+        "notAfter = $_.NotAfter.ToString('dd/MM/yyyy'); "
+        "thumbprint = $_.Thumbprint } }; "
+        "ConvertTo-Json -InputObject @($list) -Compress"
     )
     result = subprocess.run(
         ["powershell", "-NoProfile", "-Command", command],
@@ -121,8 +174,32 @@ def _find_client_auth_certificate_cn() -> str | None:
     if result.returncode != 0:
         raise CertificatePolicyError(result.stderr.strip() or "Falha ao ler o armazenamento de certificados CurrentUser")
 
-    subject_cn = result.stdout.strip()
-    return subject_cn or None
+    raw_output = result.stdout.strip()
+    if not raw_output:
+        return []
+
+    try:
+        parsed = json.loads(raw_output)
+    except json.JSONDecodeError as exc:
+        raise CertificatePolicyError("Nao foi possivel interpretar a lista de certificados retornada pelo PowerShell") from exc
+
+    # ConvertTo-Json devolve um objeto (dict) quando ha apenas um item e uma lista quando ha varios.
+    entries = parsed if isinstance(parsed, list) else [parsed]
+
+    certificates: list[ClientCertificate] = []
+    for entry in entries:
+        subject_cn = str(entry.get("cn") or "").strip()
+        if not subject_cn:
+            # Sem CN nao ha como montar o filtro da politica; ignora o item.
+            continue
+        certificates.append(
+            ClientCertificate(
+                subject_cn=subject_cn,
+                not_after=str(entry.get("notAfter") or "").strip(),
+                thumbprint=str(entry.get("thumbprint") or "").strip(),
+            )
+        )
+    return certificates
 
 
 def _policy_payloads(subject_cn: str) -> list[dict[str, object]]:
