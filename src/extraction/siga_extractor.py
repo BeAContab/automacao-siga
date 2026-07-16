@@ -2588,6 +2588,12 @@ class SigaContributorExtractor:
         quadratico de reler paginas finais vazias a cada ciclo de espera (ver PLANO_CORRECOES.md
         item 16). Com `full_scan=True`, a parada antecipada e desativada e todas as paginas sao
         lidas, garantindo a resolucao de duplicatas antes de retornar o resultado final.
+
+        Adicionalmente, como a Central de Downloads e ordenada por data de solicitacao decrescente
+        (mais recente primeiro), quando a data de uma linha for anterior ao inicio do lote atual
+        (com 60s de margem), nenhuma linha subsequente pode pertencer a este lote — a paginacao
+        para imediatamente. Isso reduz em ~90% o numero de paginas varridas por ciclo quando o
+        historico de downloads acumulado e grande.
         """
         matches: dict[str, DownloadRowMatch] = {}
         processing_counts: dict[str, int] = {}
@@ -2597,6 +2603,16 @@ class SigaContributorExtractor:
         # Solicitacoes ja avistadas nesta passada (concluidas ou em processamento).
         located_keys: set[str] = set()
         target_keys = {target.request.request_key for target in targets}
+
+        # Limite inferior de data: linhas mais antigas que este corte nao podem pertencer ao lote
+        # atual (a tabela e ordenada do mais novo para o mais antigo). Margem de 60s para absorver
+        # pequenas diferencas de relogio e atrasos de exibicao.
+        cutoff_dt: datetime | None = None
+        if not full_scan and targets:
+            from datetime import timedelta
+            earliest = min(target.request.requested_after for target in targets)
+            cutoff_dt = earliest - timedelta(seconds=60)
+
         self._go_to_first_downloads_page(page)
         page_number = 1
 
@@ -2618,7 +2634,7 @@ class SigaContributorExtractor:
                 len(located_keys),
                 len(target_keys),
             )
-            self._scan_downloads_current_page_for_targets(
+            past_cutoff = self._scan_downloads_current_page_for_targets(
                 page,
                 targets,
                 page_number,
@@ -2626,10 +2642,21 @@ class SigaContributorExtractor:
                 processing_counts,
                 claimed_rows,
                 located_keys,
+                cutoff_dt=cutoff_dt,
             )
             # Todas as solicitacoes ja foram encontradas: nao ha motivo para paginar adiante
             # (exceto quando full_scan exige ler tudo para resolver duplicatas).
             if not full_scan and target_keys and located_keys >= target_keys:
+                break
+            # Corte por timestamp: linha mais antiga que o inicio do lote foi encontrada;
+            # nao ha arquivos do lote atual nas paginas seguintes (ordem DESC por data).
+            if past_cutoff:
+                LOGGER.info(
+                    "Corte por timestamp ativado na pagina %s: linhas anteriores ao inicio do lote "
+                    "detectadas; interrompendo a varredura (full_scan=%s).",
+                    page_number,
+                    full_scan,
+                )
                 break
             if not self._go_to_next_downloads_page(page):
                 break
@@ -2652,7 +2679,15 @@ class SigaContributorExtractor:
         processing_counts: dict[str, int],
         claimed_rows: dict[tuple[int, int], str],
         located_keys: set[str],
-    ) -> None:
+        cutoff_dt: datetime | None = None,
+    ) -> bool:
+        """Varre uma pagina da Central de Downloads e atualiza os dicionarios de resultados.
+
+        Retorna True se encontrou alguma linha com data de solicitacao anterior ao corte
+        (cutoff_dt), sinalizando que as paginas seguintes tambem so contem historico antigo
+        e a varredura pode ser interrompida.
+        """
+        past_cutoff = False
         rows = page.locator("tr")
         try:
             row_count = rows.count()
@@ -2675,6 +2710,12 @@ class SigaContributorExtractor:
             status_text = self._row_status_text(row_cells)
             requested_at = self._row_request_datetime(row_cells)
             row_id = (page_number, index)
+
+            # Corte por timestamp: se a linha for mais antiga que o inicio do lote, sinaliza
+            # ao chamador para interromper a paginacao. Continua processando as demais linhas
+            # desta pagina (podem existir arquivos do lote antes do corte nesta mesma pagina).
+            if cutoff_dt is not None and requested_at != datetime.min and requested_at < cutoff_dt:
+                past_cutoff = True
 
             for target in targets:
                 request_key = target.request.request_key
@@ -2725,6 +2766,8 @@ class SigaContributorExtractor:
                 claimed_rows[row_id] = request_key
                 located_keys.add(request_key)
                 self._store_best_download_match(matches, candidate)
+
+        return past_cutoff
 
     def _store_best_download_match(
         self,
