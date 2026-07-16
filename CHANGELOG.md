@@ -1,11 +1,11 @@
 # Changelog
 
-## [2026-07-16] — Versão 1.5.4
+## [2026-07-16] — Versão 1.7.2
 
 ### Melhorado
 - **Corte por Timestamp na Central de Downloads (~90% mais rápido por ciclo):** `_scan_downloads_table_once` e `_scan_downloads_current_page_for_targets` em `src/extraction/siga_extractor.py` passam a usar um corte por timestamp nas varreduras intermediárias (`full_scan=False`). Como a Central de Downloads é ordenada por data de solicitação decrescente (mais recente primeiro), ao detectar uma linha com data anterior ao início do lote atual (com 60s de margem), a paginação é interrompida imediatamente — os arquivos do lote atual estarão sempre nas páginas iniciais. Redução estimada de **~90% no número de páginas varridas por ciclo** e **~51% no tempo total** da fase de downloads, especialmente em históricos grandes. A varredura final (`full_scan=True`), executada uma única vez ao confirmar que todos os arquivos estão prontos, continua percorrendo tudo para garantir resolução de duplicatas históricas.
 
-## [2026-07-16] — Versão 1.5.3
+## [2026-07-16] — Versão 1.7.1
 
 ### Alterado
 - **Consolidação do Ponto de Entrada:** `main_gui.py` foi excluído e sua lógica de inicialização (injeção de `--skip-certificate-policy` para não bloquear a abertura da interface gráfica) foi incorporada diretamente em `main.py`. O projeto agora possui um único ponto de entrada que inicia a GUI automaticamente.
