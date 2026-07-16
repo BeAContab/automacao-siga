@@ -4,7 +4,7 @@ Este arquivo fornece orientações ao Claude Code (claude.ai/code) para trabalha
 
 ## Visão geral do projeto
 
-O SIGA Automação é uma ferramenta desktop para Windows (Python + Selenium) que automatiza a extração em lote de documentos fiscais (NF-e, NFC-e, CT-e, Malha Fiscal, Débitos Fiscais) do portal SIGA da SEFAZ-CE (Secretaria da Fazenda do Estado do Ceará). A ferramenta controla um navegador real (Chrome/Edge) via CDP, permite que o usuário faça login manualmente (inclusive com certificado digital) e então percorre o portal por CNPJ, solicitando e baixando os relatórios, organizando a saída em pastas `COD - EMPRESA - CNPJ`. O produto conta com uma GUI em Tkinter e uma CLI interativa de terminal, distribuídas como executável `.exe` via PyInstaller e instalador Inno Setup. Consulte [README.md](README.md) e [PRD.md](PRD.md) para a descrição completa do produto.
+O SIGA Automação é uma ferramenta desktop para Windows (Python + Selenium) que automatiza a extração em lote de documentos fiscais (NF-e, NFC-e, CT-e, Malha Fiscal, Débitos Fiscais) do portal SIGA da SEFAZ-CE (Secretaria da Fazenda do Estado do Ceará). A ferramenta controla um navegador real (Chrome/Edge) via CDP, permite que o usuário faça login manualmente (inclusive com certificado digital) e então percorre o portal por CNPJ, solicitando e baixando os relatórios, organizando a saída em pastas `COD - EMPRESA - CNPJ`. **A GUI em Tkinter é a única interface de extração suportada** (o antigo modo de lote via terminal foi descontinuado), distribuída como executável `.exe` via PyInstaller e instalador Inno Setup. Consulte [README.md](README.md) e [PRD.md](PRD.md) para a descrição completa do produto.
 
 ## Comandos
 
@@ -15,19 +15,14 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Executar o fluxo interativo de terminal:
+Executar a GUI Tkinter (ponto de entrada único):
 ```
-python main.py [--spreadsheet path.xlsx] [--month Maio] [--year 2026] [--docs NF-e CT-e]
-```
-
-Executar a GUI Tkinter diretamente:
-```
-python main.py --gui
-# ou, pelo ponto de entrada dedicado da GUI (força --gui --skip-certificate-policy):
-python main_gui.py
+python main.py
+# Também aceita prefill de dados via flags:
+python main.py [--spreadsheet path.xlsx] [--month Junho] [--year 2026]
 ```
 
-Flags úteis da CLI (ver `build_parser()` em [src/main.py](src/main.py)): `--headless`, `--browser-channel chrome|msedge`, `--connect-browser-url`, `--disable-attach`, `--reset-browser-profile`, `--force-restart-browser`, `--system-browser-profile` / `--isolated-browser-profile`, `--chrome-profile-directory`, `--skip-certificate-policy`, `--clear-certificate-policy`, `--manual-login-timeout`, `--live-assist` / `--live-command` (ações assistidas de navegador passo a passo, ver `src/live_assist.py`).
+Flags úteis de `main.py` (ver `build_parser()` em [src/main.py](src/main.py)) — servem para pré-preencher a GUI ou ajustar o ambiente do navegador, não para rodar um modo alternativo de extração: `--spreadsheet`/`--month`/`--year` (pré-preenchem a GUI), `--headless`, `--browser-channel chrome|msedge`, `--connect-browser-url`, `--disable-attach`, `--reset-browser-profile`, `--force-restart-browser`, `--system-browser-profile` / `--isolated-browser-profile`, `--chrome-profile-directory`, `--skip-certificate-policy`, `--clear-certificate-policy`, `--manual-login-timeout`, `--live-assist` / `--live-command` (ações assistidas de navegador passo a passo para depuração, ver `src/live_assist.py` — não é um modo de extração para o usuário final).
 
 Não há suíte de testes automatizados (sem configuração de pytest/unittest). A validação manual/ao vivo é feita em `testes/run_test_live.py`, um script autônomo que abre um navegador real contra uma planilha real `testes/teste.xlsx` e grava log em `testes/live_test_log.txt`:
 ```
@@ -35,18 +30,17 @@ python testes/run_test_live.py
 ```
 Isso exige login real e acesso de rede ao SIGA — não trate como um teste seguro para CI.
 
-Gerar um executável Windows (PyInstaller), a partir dos arquivos `.spec` na raiz do repositório:
+Gerar o executável Windows (PyInstaller):
 ```
-pyinstaller siga-automacao.spec       # build CLI com console -> dist/siga-automacao
 pyinstaller siga-automacao-gui.spec   # build GUI sem console -> dist/siga-automacao-gui (empacota images/logo, images/icons)
 ```
 O instalador é gerado separadamente com o Inno Setup (ver `installer/`).
 
 ## Arquitetura
 
-Pontos de entrada: [main.py](main.py) (CLI) e [main_gui.py](main_gui.py) (wrapper exclusivo da GUI que força `--gui --skip-certificate-policy`) delegam ambos para `src.main.main()`.
+Pontos de entrada: [main.py](main.py) é o ponto de entrada único do projeto. Ao ser executado, injeta automaticamente `--skip-certificate-policy` e inicia a GUI diretamente via `src.main.main()`.
 
-`src/main.py` interpreta os argumentos, constrói um objeto `Settings` ([src/config.py](src/config.py) — um único dataclass que reúne caminhos, timeouts e flags), configura o logging e direciona para um dos fluxos: limpeza da política de certificado, modo assistido (live-assist), modo GUI (`src/gui.py`) ou o fluxo interativo de lote em terminal (`run_interactive_terminal`).
+`src/main.py` interpreta os argumentos, constrói um objeto `Settings` ([src/config.py](src/config.py) — um único dataclass que reúne caminhos, timeouts e flags), configura o logging e direciona para um dos fluxos: limpeza da política de certificado, modo assistido de depuração (live-assist, ver `src/live_assist.py`) ou a GUI (`src/gui.py`, `run_gui_mode`) — a GUI é o destino padrão quando nenhum dos outros modos é selecionado.
 
 Pipeline principal, na ordem de execução:
 1. **Sessão de navegador** — [src/utils/browser.py](src/utils/browser.py) inicia um processo real do Chrome/Edge com um perfil de depuração persistente e conecta via CDP (`get_connect_browser_url`, `launch_debug_browser`, `BrowserSession`). Uma camada de compatibilidade baseada em Selenium (`Browser`/`BrowserContext`/`Page`) fica em [src/utils/selenium_compat.py](src/utils/selenium_compat.py) — essa é a abstração sobre a qual o restante do código (extrator, fluxo de login, inspetor de página) é escrito, então trate-a como a "API de driver" em vez de chamar o Selenium diretamente em código novo.
@@ -54,12 +48,12 @@ Pipeline principal, na ordem de execução:
 3. **Entrada de dados** — [src/extraction/spreadsheet.py](src/extraction/spreadsheet.py) lê linhas de CNPJ de um XLSX (`load_cnpjs_from_xlsx`) e grava o status de cada linha em tempo real numa cópia `_resultados.xlsx` (`write_status_to_spreadsheet_cell`), de modo que o arquivo de entrada original nunca é alterado.
 4. **Extração** — [src/extraction/siga_extractor.py](src/extraction/siga_extractor.py) (`SigaContributorExtractor`) é o módulo maior e mais importante (~3900 linhas): abre cada contribuinte por CNPJ, navega pelas abas NF-e/NFC-e/CT-e/Malha Fiscal/Débitos Fiscais, solicita os detalhamentos dos relatórios, controla `PendingDetailRequest`s e depois varre a "Central de Downloads" do SIGA para casar e baixar os arquivos resultantes (lógica de correspondência aproximada via `DownloadLookupTarget`/`DownloadRowMatch`, já que a lista da central de downloads não mapeia 1:1 com as solicitações). Lança `TaxpayerNotFoundError` quando um CNPJ não tem cadastro ativo, para que o loop de lote pule e continue em vez de abortar.
 5. **Auxiliares de estrutura de página** — [src/utils/siga_page.py](src/utils/siga_page.py) (`SigaPageInspector`) e [src/utils/text.py](src/utils/text.py) (`slugify`, `strip_accents`) sustentam a correspondência robusta contra a interface Angular/PrimeNG do SIGA, que é propensa a overlays de carregamento e a divergências de acentuação/caixa nos títulos.
-6. **GUI** — [src/gui.py](src/gui.py) (~1200 linhas) é uma interface desktop em Tkinter/ttk estilizada conforme [design/DESIGN.md](design/DESIGN.md) (tokens de cor, tipografia e espaçamento em front matter YAML + diretrizes em prosa — verde floresta `#006e25` como cor primária, sidebar azul-marinho escuro, fontes Inter/JetBrains Mono, escala de espaçamento de 8px). Ela aciona as mesmas classes de backend usadas pela CLI, adicionando um console de log em tempo real, importação de planilha por arrastar-e-soltar, checkboxes por documento e um botão "Ajuda" que abre `manual_instrucoes.html`.
-7. **Modo assistido (live-assist)** — [src/live_assist.py](src/live_assist.py) expõe comandos de navegador passo a passo (`click-text`, `fill-selector`, `download-table`, `request-positive-details`, etc.) acionados via `--live-command`, usados em sessões de depuração assistida/manual sobre o navegador já aberto, em vez de uma execução completa de lote.
+6. **GUI** — [src/gui.py](src/gui.py) (~1200 linhas) é uma interface desktop em Tkinter/ttk estilizada conforme [design/DESIGN.md](design/DESIGN.md) (tokens de cor, tipografia e espaçamento em front matter YAML + diretrizes em prosa — verde floresta `#006e25` como cor primária, sidebar azul-marinho escuro, fontes Inter/JetBrains Mono, escala de espaçamento de 8px). Ela é a única interface de extração do produto: aciona diretamente as classes de backend (`SigaContributorExtractor`, `SigaLoginFlow`), adicionando um console de log em tempo real, importação de planilha por arrastar-e-soltar, checkboxes por documento e um botão "Ajuda" que abre `manual_instrucoes.html`.
+7. **Modo assistido (live-assist)** — [src/live_assist.py](src/live_assist.py) expõe comandos de navegador passo a passo (`click-text`, `fill-selector`, `download-table`, `request-positive-details`, etc.) acionados via `--live-command`, usados em sessões de depuração assistida/manual sobre o navegador já aberto — é uma ferramenta de depuração interna, não um modo de extração para o usuário final.
 
-Os lotes são processados um mês por vez (`run_interactive_terminal` itera sobre `month_references`) e, dentro de cada mês, uma linha da planilha (CNPJ) por vez; os downloads de todo o lote são varridos na Central de Downloads ao final de cada passagem de contribuinte/mês, em vez de um a um, por questão de performance (ver `brain/2026-06-12-downloads-globais-no-final.md`).
+Os lotes são processados um mês por vez (`SigaContributorExtractor.run_batch_from_spreadsheet_in_context` itera sobre `month_references`) e, dentro de cada mês, uma linha da planilha (CNPJ) por vez; os downloads de todo o lote são varridos na Central de Downloads ao final de cada passagem de contribuinte/mês, em vez de um a um, por questão de performance (ver `brain/2026-06-12-downloads-globais-no-final.md`).
 
-O logging é centralizado por [src/utils/logging_setup.py](src/utils/logging_setup.py) (`configure_logging`), gravando em `logs/run.log`; as mensagens de log voltadas ao usuário são escritas em português propositalmente (os operadores são a equipe contábil brasileira).
+O logging técnico é centralizado por [src/utils/logging_setup.py](src/utils/logging_setup.py) (`configure_logging`), gravando em `logs/run.log`/`logs/errors.log` (detalhe de XPath/seletor, útil para diagnosticar mudanças de layout do SIGA). Separadamente, [src/utils/narration.py](src/utils/narration.py) (`configure_narration`, `narrate`/`narrate_success`/`narrate_warning`/`narrate_error`) é um canal de log paralelo dedicado a narrar as ações em português simples para o operador não técnico (ex.: "Digitando o CNPJ...", "Clicando em..."), gravado em `logs/atividades.log` e exibido no console da GUI — os dois canais nunca se misturam (loggers distintos, `propagate=False`).
 
 ## Convenções
 

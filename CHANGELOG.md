@@ -1,5 +1,51 @@
 # Changelog
 
+## [2026-07-16] — Versão 1.5.3
+
+### Alterado
+- **Consolidação do Ponto de Entrada:** `main_gui.py` foi excluído e sua lógica de inicialização (injeção de `--skip-certificate-policy` para não bloquear a abertura da interface gráfica) foi incorporada diretamente em `main.py`. O projeto agora possui um único ponto de entrada que inicia a GUI automaticamente.
+
+### Removido
+- **`main_gui.py`:** Arquivo excluído da raiz do projeto. `main.py` é agora o único ponto de entrada.
+
+## [2026-07-16] — Versão 1.7.0
+
+### Removido
+- **Modo de Lote via Terminal (CLI) Descontinuado:** o produto passa a ser exclusivamente GUI. Removidos de `src/main.py`: `run_interactive_terminal`, `_prompt_months`, `_prompt_year`, `_prompt_spreadsheet`, `_prompt_document_tabs`, `_print_batch_summary`, `_normalize_selected_months`, `_normalize_selected_tabs`, `DOCUMENT_TAB_OPTIONS`, e o argumento `--docs`. O flag `--gui` também foi removido — a GUI passa a ser o destino padrão de `main()` sempre que nenhum outro modo (assistido/limpeza de política) é selecionado, então `python main.py` (sem argumentos) já abre a interface gráfica diretamente. Removido também o build `siga-automacao.spec` (console CLI), cujo único propósito era esse modo — o instalador já só empacotava `siga-automacao-gui.exe`. `README.md`, `PRD.md` e `CLAUDE.md` atualizados para refletir o produto GUI-only. Mantidos: `--live-assist`/`--live-command` (ferramenta de depuração interna, não é um modo de extração do usuário final) e `--clear-certificate-policy`/`--keep-certificate-policy` (utilitários de linha de comando independentes do modo de extração).
+
+## [2026-07-16] — Versão 1.6.0
+
+### Adicionado
+- **Canal de Narração Amigável ("Digitando o CNPJ...", "Clicando em...", "Baixando..."):** Novo módulo `src/utils/narration.py` introduz um canal de log separado do técnico, dedicado a narrar as ações da automação em português simples para o operador (equipe contábil, não técnica). Funções `narrate`/`narrate_success`/`narrate_warning`/`narrate_error`, com logger próprio (`siga.narracao`, `propagate=False`) que nunca se mistura com o log técnico existente (`run.log`/`errors.log`, que continuam intactos, com todo o detalhe de XPath/seletor preservado para diagnóstico de mudanças de layout do SIGA). A narração é gravada em `logs/atividades.log` e, na CLI, também aparece diretamente no terminal (sem prefixo técnico).
+- **Console da GUI Simplificado:** `QueueLogHandler` em `src/gui.py` foi reescrito para trabalhar com duas fontes: o canal de narração (nível INFO, mostrado com um horário curto `HH:MM:SS` e cor por tom) e uma "rede de segurança" técnica (root logger, nível WARNING+, para que nenhum erro real fique invisível mesmo em pontos ainda não narrados explicitamente — erros de nível ERROR ganham um aviso "mais detalhes em logs\errors.log"). A varredura por palavra-chave que antes tentava adivinhar a cor da linha (`_append_text`) foi removida — a cor agora vem explicitamente da origem do registro.
+- Instrumentados ~26 pontos de ação ao longo do fluxo principal com narração amigável: login, progresso por CNPJ do lote (início/não encontrado/nova tentativa/falha definitiva/resumo final), busca e abertura do contribuinte, cliques genéricos (`_click_xpath`/`_click_text_action`, que cobrem dezenas de botões/menus/abas), solicitação de Malha Fiscal/Débitos Fiscais/NF-e/NFC-e/CT-e, e todo o fluxo da Central de Downloads (abertura, ajuste de linhas por página, progresso por página, download concluído/repetição/não localizado).
+
+### Alterado
+- **Terminal da CLI sem Ruído Técnico:** em `src/utils/logging_setup.py`, o `stream_handler` (console) subiu de nível INFO para WARNING — a narração agora cobre o fluxo informativo do terminal, então deixar o log técnico solto no mesmo console só duplicaria a poluição que a narração existe para eliminar. WARNING/ERROR continuam aparecendo como rede de segurança. Em `src/main.py`, as linhas de status que eram `print()` (abertura de navegador, login confirmado, progresso por mês, resumo do lote) passaram a usar o canal de narração, unificando o texto que também aparece na GUI; os menus/prompts interativos (seleção de mês, ano, planilha, certificado) continuam como `print()`, por não serem narração de ação automatizada.
+
+## [2026-07-16] — Versão 1.5.6
+
+### Adicionado
+- **Log de Progresso na Varredura da Central de Downloads:** `_scan_downloads_table_once` em `src/extraction/siga_extractor.py` agora registra uma linha de log a cada página varrida (com a contagem de solicitações já localizadas) e um resumo ao final. Antes, uma varredura de muitas linhas podia ficar minutos em silêncio total no log, indistinguível de um travamento — foi exatamente o que levou o usuário a encerrar manualmente um processo que na verdade ainda estava trabalhando.
+
+### Corrigido
+- **Timeout por Célula Reduzido na Varredura em Lote:** `_row_cell_texts` (mesmo arquivo) ganhou um parâmetro `cell_timeout_ms`, usado pela varredura em lote da Central de Downloads com um valor bem menor (400ms em vez do padrão de 2000ms). Uma linha obsoleta logo após um re-render grande da tabela (ex.: após a mudança de linhas por página da v1.5.4) fazia cada célula dela esperar o timeout inteiro antes de cair no fallback — em uma tabela com dezenas de linhas, isso somava minutos de espera. Os demais pontos do código que leem células de linha continuam com o timeout padrão de 2000ms (sem alteração de comportamento).
+
+## [2026-07-16] — Versão 1.5.5
+
+### Corrigido
+- **`_find_elements` Podia Devolver `None` e Escapar dos Tratamentos de Erro:** `src/utils/selenium_compat.py` (`Page._find_elements` e `Page._descendants`) agora normaliza qualquer retorno `None` do Selenium para lista vazia. Em raros casos, quando o elemento raiz consultado está no meio de uma re-renderização do DOM (comum na SPA Angular do SIGA), o Selenium pode devolver `None` em vez de uma lista vazia — como `Error` (usado em quase todo `except` do projeto) é um apelido para `WebDriverException`, o `TypeError: 'NoneType' object is not iterable` resultante escapava sem tratamento, derrubando a extração inteira (reportado em produção: `_row_cell_texts` → `_scan_downloads_current_page_for_targets`, logo após a seleção de linhas por página da v1.5.4 aumentar a chance de pegar essa condição de corrida). Reforçado também em `_select_max_downloads_page_size` (`src/extraction/siga_extractor.py`), aumentando a espera após trocar o tamanho de página (500ms → 1.500ms) para dar mais tempo ao Angular de terminar de renderizar a tabela maior antes da varredura começar.
+
+## [2026-07-16] — Versão 1.5.4
+
+### Adicionado
+- **Varredura Mais Rápida da Central de Downloads (Máximo de Linhas por Página):** Nova função `_select_max_downloads_page_size` em `src/extraction/siga_extractor.py` seleciona automaticamente a maior opção de "linhas por página" disponível no paginador da Central de Downloads (localizado via `[aria-label='Rows per page']`, com fallbacks por classe), reduzindo proporcionalmente o número de páginas a percorrer numa varredura (ex.: de 100 páginas de 10 linhas para 10 páginas de 100). A seleção é reaplicada automaticamente após cada `page.reload()` do fluxo de download em lote, já que o recarregamento da SPA reseta essa preferência para o padrão. Totalmente resiliente: se o seletor não for encontrado (mudança de layout do SIGA), a automação apenas registra aviso e segue com o comportamento anterior, sem quebrar.
+
+## [2026-07-16] — Versão 1.5.3
+
+### Corrigido
+- **Falha de Paginação na Central de Downloads Não Derruba Mais o Lote Inteiro:** `_download_found_pending_requests` em `src/extraction/siga_extractor.py` levantava uma exceção não tratada quando não conseguia avançar para a próxima página da Central de Downloads no meio de um lote (diagnosticado a partir de uma execução real: `logs/run.log`, 2026-07-15 16:27), abortando toda a extração e descartando downloads já concluídos com sucesso. Agora, uma nova função `_advance_to_next_downloads_page_with_retry` tenta uma recuperação (recarregar a página e reavançar até a posição esperada) antes de desistir; se mesmo assim não for possível prosseguir, `_mark_unreached_download_pages_as_unavailable` marca apenas os itens das páginas ainda não alcançadas como "Erro: Falha ao navegar na Central de Downloads" (gerando o aviso `.txt` e o status na planilha), e o lote é encerrado de forma graciosa em vez de travar com uma mensagem de erro genérica na GUI.
+
 ## [2026-07-15] — Versão 1.5.2
 
 ### Adicionado
