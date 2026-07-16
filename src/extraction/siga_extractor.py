@@ -2845,6 +2845,19 @@ class SigaContributorExtractor:
                 )
                 narrate_warning("Não foi possível localizar o arquivo de %s na Central de Downloads.", target.request.tela_aba)
                 continue
+
+            LOGGER.info(
+                "Arquivo localizado na Central de Downloads: %s para o CNPJ %s (Solicitado em %s, Página %s)",
+                target.request.tela_aba,
+                target.request.taxpayer_cnpj,
+                match.requested_at.strftime("%d/%m/%Y %H:%M:%S") if match.requested_at else "desconhecido",
+                match.page_number,
+            )
+            narrate(
+                "Arquivo localizado na Central: %s (CNPJ: %s)",
+                target.request.tela_aba,
+                self._normalize_numeric_document(target.request.taxpayer_cnpj),
+            )
             page_targets.setdefault(match.page_number, []).append(target)
 
         if not page_targets:

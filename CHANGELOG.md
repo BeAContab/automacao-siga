@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-07-16] — Versão 1.7.4
+
+### Adicionado
+- **Log individual para arquivos da Central de Downloads:** Agora a automação informa explicitamente no console e no log (ex: *"Arquivo localizado na Central: Malha Fiscal (CNPJ: 123...)"*) para cada arquivo de relatório detectado com sucesso na Central de Downloads, antes mesmo do processo físico de download iniciar. Isso fornece muito mais visibilidade do progresso de espera para o operador.
+
 ## [2026-07-16] — Versão 1.7.3
 
 ### Alterado
