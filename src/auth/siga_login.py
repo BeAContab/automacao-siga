@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from src.config import Settings
 from src.utils.selenium_compat import Browser, BrowserContext, Error, Page, TimeoutError
 from src.utils.browser import BrowserSession
+from src.utils.narration import narrate, narrate_success
 from src.utils.siga_page import SigaPageInspector
 
 
@@ -65,10 +66,11 @@ class SigaLoginFlow:
         if not sys.stdin or not sys.stdin.isatty():
             raise RuntimeError(
                 "Login manual requer um terminal interativo para confirmar com Enter, mas nenhum "
-                "terminal foi detectado. Use a GUI (--gui) ou --disable-attach com uma sessao ja autenticada."
+                "terminal foi detectado. Use a GUI ou --disable-attach com uma sessao ja autenticada."
             )
 
         LOGGER.info("Navegador aberto para login manual em %s", page.url)
+        narrate("Aguardando você concluir o login manual no navegador...")
         input("Faca o login manualmente no navegador aberto e pressione Enter para continuar...")
         LOGGER.info("Usuário confirmou o login manual; aguardando a página autenticada do SIGA")
         return self.confirm_authenticated_context(context, browser=browser)
@@ -76,7 +78,9 @@ class SigaLoginFlow:
     def confirm_authenticated_context(self, context: BrowserContext, browser: Browser | None = None) -> Page:
         """Espera até localizar uma página do SIGA já autenticada."""
         LOGGER.info("Validando a página autenticada do SIGA")
-        return self._wait_for_authenticated_page(context, browser=browser)
+        page = self._wait_for_authenticated_page(context, browser=browser)
+        narrate_success("Login confirmado no SIGA.")
+        return page
 
     def attach_to_existing_authenticated_page(
         self,
@@ -92,6 +96,7 @@ class SigaLoginFlow:
                         continue
                     candidate.bring_to_front()
                     LOGGER.info("Conectado à página autenticada do SIGA em %s", candidate.url)
+                    narrate_success("Sessão do SIGA já autenticada foi reaproveitada.")
                     return candidate
                 except Error:
                     continue
@@ -101,6 +106,7 @@ class SigaLoginFlow:
     def _open_siga(self, page: Page) -> None:
         """Abre a URL principal do SIGA e aguarda a estabilização inicial da tela."""
         LOGGER.info("Abrindo o SIGA em %s", self.settings.siga_url)
+        narrate("Abrindo o SIGA no navegador...")
         page.goto(self.settings.siga_url, wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
         if "siga.sefaz.ce.gov.br/ui" in page.url:
             self.page_inspector.stabilize_after_navigation(page, "siga-open")

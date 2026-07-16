@@ -390,4 +390,62 @@ Cada item traz: localização, problema, cenário concreto que o dispara, corre�
 
 ---
 
-*As Fases 1 (itens 1–4), 2 (itens 5–10), 3 (itens 11–18) e 4 (itens 19–24) já foram implementadas — código alterado em `src/extraction/siga_extractor.py`, `src/extraction/spreadsheet.py`, `src/utils/browser.py`, `src/utils/certificate_policy.py`, `src/auth/siga_login.py`, `src/main.py` e `src/gui.py`, registrado em `CHANGELOG.md` nas versões v1.4.4 a v1.4.9. O item 25 (refatoração transversal de `except Exception`) é tratado como iniciativa contínua a ser aplicada gradualmente.*
+## Pós-plano — Achados de execução real (fora dos 25 itens originais)
+
+Itens descobertos após a conclusão das Fases 1–4, a partir da análise de logs de execuções reais (`logs/run.log`, `logs/errors.log`), não fazem parte da revisão estática original de 25 pontos.
+
+### 26. Falha de paginação na Central de Downloads aborta o lote inteiro sem tratamento
+**Local:** `src/extraction/siga_extractor.py` (`_download_found_pending_requests`)
+
+**Problema:** quando `_go_to_next_downloads_page` falha no meio do lote (não consegue avançar para a próxima página da Central de Downloads), o código levantava `TimeoutError` sem tratamento, propagando até a GUI e abortando toda a extração — mesmo com downloads já concluídos com sucesso em páginas anteriores.
+
+**Como foi descoberto:** diagnóstico de um erro real relatado pelo usuário (`logs/run.log`, 2026-07-15 16:27:19), correlacionado com uma sequência de falhas de re-localização de linha na "página 2" nos minutos anteriores, sugerindo instabilidade pontual da Central de Downloads no meio de um lote longo.
+
+**Correção aplicada:** nova função `_advance_to_next_downloads_page_with_retry` tenta uma recuperação (reload + reavanço até a posição esperada) antes de desistir; se a recuperação falhar, `_mark_unreached_download_pages_as_unavailable` marca os itens das páginas não alcançadas como "Erro: Falha ao navegar na Central de Downloads" (aviso `.txt` + status na planilha) e o lote termina de forma graciosa, preservando os downloads já concluídos.
+
+**Status:** ✅ Aplicado (Sonnet 5, esforço `high`, `CHANGELOG.md` v1.5.3). Validado com 3 cenários de teste (mocks): avanço direto sem retry, recuperação via reload, falha total tratada sem exceção — incluindo o fluxo completo (`_download_found_pending_requests`) com resultado parcial preservado. **Pendente:** validação contra uma Central de Downloads real, já que a causa raiz da instabilidade da paginação (overlay do SIGA, mudança na lista, etc.) não pôde ser reproduzida neste ambiente.
+
+---
+
+### 27. Varredura da Central de Downloads não usa o maior tamanho de página disponível
+**Local:** `src/extraction/siga_extractor.py` (`_download_pending_detail_requests`, `_find_pending_download_matches`, `_advance_to_next_downloads_page_with_retry`)
+
+**Problema:** a automação nunca ajustava o "linhas por página" do paginador PrimeNG da Central de Downloads, deixando-o no padrão da tela (normalmente baixo, ex. 10). Para um histórico acumulado de solicitações (às vezes 100+ páginas), isso obriga a varredura a navegar página por página um número desnecessariamente alto de vezes, mesmo para lotes pequenos (ex.: 1 único contribuinte).
+
+**Como foi descoberto:** relatado pelo usuário durante uso real ("as vezes 100 páginas ou mais, e perde muito tempo"); o usuário inspecionou o elemento no DevTools do navegador e forneceu o HTML do dropdown (`p-dropdown` do PrimeNG, `aria-label="Rows per page"`), permitindo escrever um seletor preciso sem acesso direto ao SIGA neste ambiente.
+
+**Correção aplicada:** nova função `_select_max_downloads_page_size` localiza o dropdown (via `[aria-label='Rows per page']`, com fallback por classe `.p-paginator-rpp-options`), lê o texto de todas as opções da lista, identifica a de maior valor numérico (sem fixar um número no código) e a seleciona. Chamada uma vez ao entrar na tela de Downloads e reaplicada após cada `page.reload()` do fluxo (que reseta a preferência de volta ao padrão). Se o dropdown ou as opções não forem encontrados, registra aviso e mantém o comportamento anterior — sem regressão funcional.
+
+**Status:** ✅ Aplicado (Sonnet 5, esforço `high`, `CHANGELOG.md` v1.5.4). Validado com 3 cenários de teste (mocks): seleção correta do maior valor (inclusive fora de ordem), ausência do seletor tratada sem exceção, opções sem texto numérico tratadas com `Escape` para fechar o dropdown sem selecionar nada. **Pendente:** confirmar no SIGA real quais valores de "linhas por página" estão realmente disponíveis (o usuário viu "10" como valor atual, mas as opções da lista aberta ainda não foram confirmadas) e o ganho de tempo efetivo em um lote real com histórico grande. **Efeito colateral encontrado em uso real:** esta mudança expôs o bug descrito no item 28 abaixo (já corrigido).
+
+**Achado colateral (não corrigido, fora de escopo):** durante a investigação, `_download_requested_file`/`_find_download_row_by_screen_name` (por volta da linha 3063 e 3159 do arquivo) foram encontradas sem nenhuma chamada em todo o repositório — parecem ser código morto remanescente de uma versão anterior do fluxo de download (antes do lote via `_download_pending_detail_requests`), na mesma linha do item 10. Não removidas agora para não ampliar o escopo desta correção; candidatas a uma limpeza futura.
+
+---
+
+### 28. `_find_elements` podia devolver `None` e escapar dos tratamentos de erro existentes
+**Local:** `src/utils/selenium_compat.py` (`Page._find_elements`, `Page._descendants`)
+
+**Problema:** em casos raros, quando o elemento raiz consultado está no meio de uma re-renderização do DOM (comum na SPA Angular do SIGA), o Selenium pode devolver `None` em vez de uma lista vazia. Como `Error` (usado em quase todo `except` do projeto, inclusive em `_row_cell_texts`) é apenas um apelido para `WebDriverException`, e `TypeError` não é uma subclasse dele, o `TypeError: 'NoneType' object is not iterable` resultante escapava de **todos** os pontos do código que tentavam se proteger com `except Error:` — não só na Central de Downloads.
+
+**Como foi descoberto:** relatado pelo usuário em uso real, logo após a mudança do item 27 entrar em produção. A seleção de 100 linhas por página causa uma re-renderização grande da tabela (10 → 100 linhas de uma vez), o que tornou muito mais provável bater nessa condição de corrida do Selenium durante a varredura subsequente. O bug em si é anterior ao item 27 e podia (mais raramente) afetar qualquer leitura de linha/célula em qualquer parte do extrator.
+
+**Correção aplicada:** `_find_elements` e `_descendants` normalizam qualquer retorno `None` para lista vazia (`result if result is not None else []`), fazendo esse tipo de falha ser tratado pelos `except Error:` já existentes em todo o código, em vez de escapar como exceção não tratada. Reforço complementar em `_select_max_downloads_page_size` (item 27): espera pós-seleção aumentada de 500ms para 1.500ms, dando mais tempo ao Angular para terminar de renderizar a tabela maior antes da varredura começar.
+
+**Status:** ✅ Aplicado (Sonnet 5, esforço `high`, `CHANGELOG.md` v1.5.5). Validado com teste de ponta a ponta reproduzindo a cadeia exata do crash relatado (`row.locator("td")` com `find_elements` retornando `None`): antes da correção, levantava `TypeError`; depois, resulta em `0` células encontradas (tratado normalmente pelo código existente). Testado também o caminho normal (lista real de elementos) para garantir que não houve regressão.
+
+---
+
+### 29. Varredura em lote silenciosa por minutos após a correção do item 27, sem log de progresso
+**Local:** `src/extraction/siga_extractor.py` (`_scan_downloads_table_once`, `_scan_downloads_current_page_for_targets`, `_row_cell_texts`)
+
+**Problema:** mesmo depois do item 28 (que impede o crash), a varredura em lote da Central de Downloads não registrava nenhum log durante seu andamento — nenhuma linha aparecia até a página inteira ser processada. Combinado com o timeout padrão de 2000ms por célula em `_row_cell_texts`, uma linha obsoleta logo após o re-render grande causado pela mudança de linhas por página (item 27) podia fazer cada célula dela esperar o timeout inteiro antes de desistir; numa tabela de dezenas de linhas, isso somava minutos de silêncio total no log.
+
+**Como foi descoberto:** relatado pelo usuário em uso real — após aplicar corretamente o novo tamanho de página (50 linhas), o processo ficou ~11 minutos sem gravar nenhuma linha nova no log. Sem forma de diferenciar "ainda trabalhando, só que devagar" de "travado", o usuário encerrou o processo manualmente pelo Gerenciador de Tarefas, interrompendo a extração antes de chegar aos downloads.
+
+**Correção aplicada:** (1) `_scan_downloads_table_once` agora registra uma linha de log a cada página varrida (com a contagem de solicitações já localizadas) e um resumo ao final — silêncio total no log nunca mais deve durar mais que o tempo de uma única página. (2) `_row_cell_texts` ganhou o parâmetro `cell_timeout_ms`, usado pela varredura em lote com um valor bem menor (400ms em vez do padrão de 2000ms) — reduz em até 5x o custo de cada célula obsoleta, sem alterar o timeout dos demais pontos do código que leem células de linha (mantidos em 2000ms).
+
+**Status:** ✅ Aplicado (Sonnet 5, esforço `high`, `CHANGELOG.md` v1.5.6). Validado com mocks: log de progresso disparado a cada página varrida e resumo final; timeout de 400ms confirmado na varredura em lote e timeout padrão de 2000ms confirmado inalterado nos demais call sites de `_row_cell_texts`. **Limite de honestidade:** não foi possível confirmar contra o SIGA real qual é o mecanismo exato por trás do silêncio de 11 minutos (hipótese: acúmulo de timeouts de 2s em células obsoleto após o re-render da tabela) — a correção ataca o sintoma observável (silêncio + timeout longo) mesmo sem certeza absoluta da causa raiz exata; o log de progresso, por si só, já resolve o problema de "parecer travado" independentemente da causa.
+
+---
+
+*As Fases 1 (itens 1–4), 2 (itens 5–10), 3 (itens 11–18) e 4 (itens 19–24) já foram implementadas — código alterado em `src/extraction/siga_extractor.py`, `src/extraction/spreadsheet.py`, `src/utils/browser.py`, `src/utils/certificate_policy.py`, `src/utils/selenium_compat.py`, `src/auth/siga_login.py`, `src/main.py` e `src/gui.py`, registrado em `CHANGELOG.md` nas versões v1.4.4 a v1.4.9 e v1.5.3 a v1.5.6. O item 25 (refatoração transversal de `except Exception`) é tratado como iniciativa contínua a ser aplicada gradualmente. Os itens 26–29 (pós-plano) foram implementados a partir da análise de erros e comportamentos reais de execução.*

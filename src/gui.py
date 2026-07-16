@@ -28,6 +28,14 @@ from src.utils.browser import (
     shutdown_debug_browser,
 )
 from src.utils.logging_setup import configure_logging
+from src.utils.narration import (
+    NARRATION_LOGGER_NAME,
+    configure_narration,
+    narrate,
+    narrate_error,
+    narrate_success,
+    narrate_warning,
+)
 from src.months import MONTH_OPTIONS
 
 
@@ -46,19 +54,60 @@ class RowSelectionWidgets:
     debitos_var: tk.BooleanVar
 
 
-class QueueLogHandler(logging.Handler):
-    """Encaminha mensagens de log para a fila consumida pela interface."""
+def _tag_for_record(record: logging.LogRecord) -> str:
+    """Escolhe a cor da linha a partir do tom explícito (narração) ou do nível (log técnico)."""
+    tone = getattr(record, "tone", None)
+    if tone == "success":
+        return "log_success"
+    if record.levelno >= logging.ERROR:
+        return "log_error"
+    if record.levelno >= logging.WARNING:
+        return "log_warning"
+    return "log_info"
 
-    def __init__(self, output_queue: queue.Queue[str]) -> None:
+
+def _narration_line(record: logging.LogRecord) -> tuple[str, str]:
+    """Formata uma linha do canal de narração: só horário curto + mensagem, sem jargão."""
+    hora = time.strftime("%H:%M:%S", time.localtime(record.created))
+    return f"{hora}  {record.getMessage()}", _tag_for_record(record)
+
+
+def _technical_bridge_line(record: logging.LogRecord) -> tuple[str, str]:
+    """Formata uma linha da rede de segurança técnica (root logger, nível WARNING+).
+
+    Cobre avisos/erros ainda não narrados explicitamente, para que nada fique invisível
+    ao operador — mas aponta para o log técnico em vez de expor o texto interno completo.
+    """
+    hora = time.strftime("%H:%M:%S", time.localtime(record.created))
+    text = f"{hora}  {record.getMessage()}"
+    if record.levelno >= logging.ERROR:
+        text += " (mais detalhes em logs\\errors.log)"
+    return text, _tag_for_record(record)
+
+
+class QueueLogHandler(logging.Handler):
+    """Encaminha linhas já prontas (texto + tag de cor) para a fila consumida pela interface.
+
+    Usado tanto para o canal de narração (siga.narracao) quanto como rede de segurança
+    técnica (root logger, nível WARNING+) — dois handlers distintos alimentam a mesma fila,
+    mas cada um decide o texto/tag de forma diferente (ver `_narration_tuple`/`_bridge_tuple`).
+    """
+
+    def __init__(
+        self,
+        output_queue: queue.Queue[tuple[str, str]],
+        line_builder,
+    ) -> None:
         super().__init__()
         self.output_queue = output_queue
+        self._line_builder = line_builder
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            message = self.format(record)
+            line, tag = self._line_builder(record)
         except Exception:  # noqa: BLE001
             return
-        self.output_queue.put(message)
+        self.output_queue.put((line, tag))
 
 
 class ScrollableFrame(ttk.Frame):
@@ -103,16 +152,26 @@ class SigaAutomationGUI:
         self.settings.ensure_runtime_dirs()
         if not logging.getLogger().handlers:
             configure_logging(self.settings.log_dir / "run.log")
+        if not logging.getLogger(NARRATION_LOGGER_NAME).handlers:
+            # console=False: a janela nao tem um terminal util para o operador ler: a
+            # narracao chega pelo console da propria GUI, via self.narration_handler abaixo.
+            configure_narration(self.settings.log_dir, console=False)
 
         self.root = tk.Tk()
         self.root.title("SIGA Automação")
         self.root.geometry("1280x840")
         self.root.minsize(1080, 720)
 
-        self.log_queue: queue.Queue[str] = queue.Queue()
-        self.log_handler = QueueLogHandler(self.log_queue)
-        self.log_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s"))
-        logging.getLogger().addHandler(self.log_handler)
+        self.log_queue: queue.Queue[tuple[str, str]] = queue.Queue()
+        # Canal de narração amigável — o que o operador realmente deve acompanhar.
+        self.narration_handler = QueueLogHandler(self.log_queue, _narration_line)
+        self.narration_handler.setLevel(logging.INFO)
+        logging.getLogger(NARRATION_LOGGER_NAME).addHandler(self.narration_handler)
+        # Rede de seguranca: avisos/erros tecnicos ainda nao narrados explicitamente nao
+        # ficam invisiveis, mas so aparecem a partir de WARNING (o INFO tecnico fica so em run.log).
+        self.error_bridge_handler = QueueLogHandler(self.log_queue, _technical_bridge_line)
+        self.error_bridge_handler.setLevel(logging.WARNING)
+        logging.getLogger().addHandler(self.error_bridge_handler)
 
         self.spreadsheet_path_var = tk.StringVar(value=initial_spreadsheet or "cnpj.xlsx")
         self._default_output_dir = Path(self.settings.output_dir)
@@ -971,14 +1030,14 @@ class SigaAutomationGUI:
         if self.start_browser_button is not None:
             self.start_browser_button.state(["disabled"])
         self.status_var.set("Iniciando o navegador... aguarde.")
-        self._append_log_line("Iniciando o navegador de depuração...")
+        narrate("Iniciando o navegador de depuração...")
 
         def worker() -> None:
             try:
                 launch_debug_browser(self.settings)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Não foi possível abrir o navegador de depuração pela GUI")
-                self._append_log_line(f"Falha ao iniciar o navegador: {exc}")
+                narrate_error("Falha ao iniciar o navegador: %s", exc)
                 self._ui_after(0, lambda exc=exc: self._on_browser_start_failed(exc))
             else:
                 self._ui_after(0, self._on_browser_start_succeeded)
@@ -994,7 +1053,7 @@ class SigaAutomationGUI:
         if self.execute_button is not None:
             self.execute_button.state(["!disabled"])
         self.status_var.set("Navegador iniciado. Faça o login manualmente e, depois, clique em Executar.")
-        self._append_log_line("Navegador iniciado. Aguardando login manual do usuário.")
+        narrate_success("Navegador iniciado. Aguardando login manual do usuário.")
 
     def _on_browser_start_failed(self, exc: Exception) -> None:
         """Restaura o botão de iniciar o navegador quando a abertura falha."""
@@ -1035,14 +1094,14 @@ class SigaAutomationGUI:
             self.execute_button.state(["disabled"])
         self.progress_var.set(0)
         self.status_var.set("Execução iniciada. Aguarde a conclusão no navegador e no log.")
-        self._append_log_line("Execução iniciada pela interface gráfica.")
+        narrate("Execução iniciada pela interface gráfica.")
 
         def worker() -> None:
             try:
                 self._execute_selected(selected_rows, selected_tabs_by_row_number, month_reference, year_value)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Falha na execução pela GUI")
-                self._append_log_line(f"Falha na execução: {exc}")
+                narrate_error("Falha na execução: %s", exc)
                 self._ui_after(0, lambda exc=exc: messagebox.showerror("SIGA Automação", str(exc)))
             finally:
                 self._ui_after(0, lambda: self._set_controls_state("normal"))
@@ -1068,10 +1127,10 @@ class SigaAutomationGUI:
             output_spreadsheet_path = input_spreadsheet_path.parent / f"{input_spreadsheet_path.stem}_resultados{input_spreadsheet_path.suffix}"
             try:
                 shutil.copy(input_spreadsheet_path, output_spreadsheet_path)
-                self._append_log_line(f"Cópia de resultados criada: {output_spreadsheet_path.name}")
+                narrate_success("Cópia de resultados criada: %s", output_spreadsheet_path.name)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Falha ao criar cópia da planilha para gravação de resultados")
-                self._append_log_line(f"Erro ao criar planilha de resultados: {exc}")
+                narrate_warning("Erro ao criar planilha de resultados: %s", exc)
         else:
             # A entrada manual não parte de nenhum arquivo existente; gera uma planilha de
             # resultados dedicada para que o status de cada CNPJ também fique rastreável.
@@ -1079,10 +1138,10 @@ class SigaAutomationGUI:
             output_spreadsheet_path = Path(self.settings.output_dir) / f"resultados_manual_{timestamp}.xlsx"
             try:
                 build_manual_entry_workbook(selected_rows, output_spreadsheet_path)
-                self._append_log_line(f"Planilha de resultados criada: {output_spreadsheet_path.name}")
+                narrate_success("Planilha de resultados criada: %s", output_spreadsheet_path.name)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Falha ao criar planilha de resultados para a entrada manual")
-                self._append_log_line(f"Erro ao criar planilha de resultados: {exc}")
+                narrate_warning("Erro ao criar planilha de resultados: %s", exc)
                 output_spreadsheet_path = None
 
         extractor = SigaContributorExtractor(self.settings, allow_manual_login_prompt=False, output_spreadsheet_path=output_spreadsheet_path)
@@ -1090,7 +1149,7 @@ class SigaAutomationGUI:
 
         with BrowserSession(self.settings) as context:
             authenticated_page = flow.confirm_authenticated_context(context, browser=context.browser)
-            self._append_log_line(f"Login confirmado: {authenticated_page.title()}")
+            narrate_success("Login confirmado: %s", authenticated_page.title())
             results = extractor.run_batch_from_spreadsheet_in_context(
                 context,
                 selected_rows,
@@ -1101,13 +1160,12 @@ class SigaAutomationGUI:
             )
             download_count = sum(len(result.fiscal_results) for result in results)
             not_found_count = sum(1 for result in results if result.status == "taxpayer_not_found")
-            self._append_log_line("")
-            self._append_log_line("Processo concluído.")
-            self._append_log_line(f"Contribuintes processados: {len(results)} de {len(selected_rows)}")
-            self._append_log_line(f"Empresas nao encontradas: {not_found_count}")
-            self._append_log_line(f"Detalhamentos baixados: {download_count}")
+            narrate_success("Processo concluído.")
+            narrate("Contribuintes processados: %s de %s", len(results), len(selected_rows))
+            narrate("Empresas não encontradas: %s", not_found_count)
+            narrate("Detalhamentos baixados: %s", download_count)
             if results:
-                self._append_log_line(f"Pasta da última saída: {results[-1].taxpayer_folder}")
+                narrate("Pasta da última saída: %s", results[-1].taxpayer_folder)
 
     def _collect_selection(self) -> tuple[list[SpreadsheetRow], dict[int, list[str]]]:
         selected_rows: list[SpreadsheetRow] = []
@@ -1131,20 +1189,17 @@ class SigaAutomationGUI:
 
         return selected_rows, tabs_by_row_number
 
-    def _append_log_line(self, text: str) -> None:
-        self.log_queue.put(text)
-
     def _drain_log_queue(self) -> None:
         if self._closing:
             return
         drained = False
         while True:
             try:
-                line = self.log_queue.get_nowait()
+                line, tag = self.log_queue.get_nowait()
             except queue.Empty:
                 break
             drained = True
-            self._append_text(line)
+            self._append_text(line, tag)
         if drained:
             self.log_text.see("end")
         self.root.after(100, self._drain_log_queue)
@@ -1159,19 +1214,9 @@ class SigaAutomationGUI:
             # A janela pode ter sido destruída entre a checagem e o agendamento.
             pass
 
-    def _append_text(self, line: str) -> None:
-        """Insere uma linha no log e aplica cor automática com base no nível detectado."""
+    def _append_text(self, line: str, tag: str) -> None:
+        """Insere uma linha no console com a cor já decidida na origem (ver `_tag_for_record`)."""
         self.log_text.configure(state="normal")
-        # Detectar o nível do log com base em palavras-chave na linha
-        line_lower = line.lower()
-        if any(kw in line_lower for kw in ("erro", "error", "falha", "fail", "exception", "traceback")):
-            tag = "log_error"
-        elif any(kw in line_lower for kw in ("aviso", "warning", "warn", "atenção", "nao encontrado", "não encontrado")):
-            tag = "log_warning"
-        elif any(kw in line_lower for kw in ("concluído", "concluido", "sucesso", "success", "login confirmado", "finalizado")):
-            tag = "log_success"
-        else:
-            tag = "log_info"
         self.log_text.insert("end", f"{line}\n", tag)
         self.log_text.configure(state="disabled")
 
@@ -1283,7 +1328,7 @@ class SigaAutomationGUI:
         self._stop_requested = True
 
         if worker_running:
-            self._append_log_line("Encerrando a execução a pedido do usuário...")
+            narrate_warning("Encerrando a execução a pedido do usuário...")
             # Encerrar o navegador da automação faz as chamadas do Selenium falharem rápido,
             # permitindo que a thread de trabalho saia do bloco de sessão em vez de ficar presa.
             try:
@@ -1293,7 +1338,8 @@ class SigaAutomationGUI:
             # Aguarda um encerramento gracioso da thread, sem travar a interface indefinidamente.
             self._worker_thread.join(timeout=10)
 
-        logging.getLogger().removeHandler(self.log_handler)
+        logging.getLogger(NARRATION_LOGGER_NAME).removeHandler(self.narration_handler)
+        logging.getLogger().removeHandler(self.error_bridge_handler)
         self.root.destroy()
 
 

@@ -15,6 +15,7 @@ from src.auth.siga_login import SigaLoginFlow
 from src.config import Settings
 from src.extraction.spreadsheet import SpreadsheetRow, close_status_workbook, write_status_to_spreadsheet_cell
 from src.utils.browser import BrowserSession
+from src.utils.narration import narrate, narrate_error, narrate_success, narrate_warning
 from src.utils.selenium_compat import BrowserContext, Download, Error, Locator, Page, TimeoutError
 from src.utils.siga_page import SigaPageInspector
 from src.utils.text import slugify, strip_accents
@@ -244,6 +245,7 @@ class SigaContributorExtractor:
             spreadsheet_row = queue.pop(0)
             # Cada linha da planilha vira uma busca independente dentro do SIGA.
             LOGGER.info("Processando o CNPJ %s da linha %s da planilha", spreadsheet_row.cnpj, spreadsheet_row.row_number)
+            narrate("Processando o CNPJ %s (linha %s da planilha)...", self._format_cnpj(spreadsheet_row.cnpj), spreadsheet_row.row_number)
             taxpayer_folder_name = self._build_taxpayer_folder_name(spreadsheet_row)
             taxpayer_folder_names_by_row_number[spreadsheet_row.row_number] = taxpayer_folder_name
 
@@ -269,6 +271,7 @@ class SigaContributorExtractor:
                 self._open_taxpayer_from_home(page, spreadsheet_row.cnpj)
             except TaxpayerNotFoundError as exc:
                 LOGGER.warning("CNPJ %s nao foi encontrado na pesquisa do SIGA; seguindo para o proximo.", spreadsheet_row.cnpj)
+                narrate_warning("CNPJ %s não foi encontrado no SIGA; seguindo para o próximo.", self._format_cnpj(spreadsheet_row.cnpj))
                 notice_path = self._save_taxpayer_not_found_notice(
                     cgf=spreadsheet_row.cnpj,
                     month_reference=normalized_month,
@@ -308,6 +311,11 @@ class SigaContributorExtractor:
                         retry_count + 1,
                     )
                     queue.append(spreadsheet_row)
+                    narrate_warning(
+                        "Tentando novamente o CNPJ %s (tentativa %s de 3)...",
+                        self._format_cnpj(spreadsheet_row.cnpj),
+                        retry_count + 1,
+                    )
                     continue
 
                 # Se esgotou as retentativas, registra o erro definitivo
@@ -315,6 +323,10 @@ class SigaContributorExtractor:
                     "Falha definitiva ao abrir o contribuinte para o CNPJ %s após %s retentativas",
                     spreadsheet_row.cnpj,
                     retry_count,
+                )
+                narrate_error(
+                    "Não foi possível abrir o CNPJ %s após várias tentativas.",
+                    self._format_cnpj(spreadsheet_row.cnpj),
                 )
                 for tab in tabs_for_row:
                     write_status_to_spreadsheet_cell(self.output_spreadsheet_path, spreadsheet_row.row_number, tab, f"Erro: {exc}")
@@ -418,6 +430,7 @@ class SigaContributorExtractor:
                 )
             )
 
+        narrate_success("Processo concluído. %s de %s contribuintes processados.", len(results), len(spreadsheet_rows))
         return results
 
     def _open_taxpayer_from_home(self, page: Page, cgf: str) -> None:
@@ -594,6 +607,7 @@ class SigaContributorExtractor:
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Falha ao solicitar Malha Fiscal para o CNPJ %s", cgf)
                 write_status_to_spreadsheet_cell(self.output_spreadsheet_path, row_number, "Malha Fiscal", f"Erro: {exc}")
+                narrate_warning("Não foi possível solicitar a Malha Fiscal do CNPJ %s.", self._format_cnpj(cgf))
 
         if "Débitos Fiscais" in allowed_tabs:
             try:
@@ -605,6 +619,7 @@ class SigaContributorExtractor:
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Falha ao solicitar Débitos Fiscais para o CNPJ %s", cgf)
                 write_status_to_spreadsheet_cell(self.output_spreadsheet_path, row_number, "Débitos Fiscais", f"Erro: {exc}")
+                narrate_warning("Não foi possível solicitar os Débitos Fiscais do CNPJ %s.", self._format_cnpj(cgf))
 
         # --- Abas fiscais padrão (NF-e, NFC-e, CT-e) ---
         for tab_config in self._build_fiscal_tab_configs():
@@ -612,6 +627,7 @@ class SigaContributorExtractor:
                 LOGGER.info("Ignorando a aba fiscal %s porque ela não foi selecionada", tab_config.tab_name)
                 continue
             try:
+                narrate("Extraindo dados de %s do contribuinte...", tab_config.tab_name)
                 results.extend(
                     self._collect_fiscal_tab_requests(
                         page,
@@ -626,6 +642,7 @@ class SigaContributorExtractor:
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Falha ao solicitar %s para o CNPJ %s", tab_config.tab_name, cgf)
                 write_status_to_spreadsheet_cell(self.output_spreadsheet_path, row_number, tab_config.tab_name, f"Erro: {exc}")
+                narrate_warning("Não foi possível extrair %s do CNPJ %s.", tab_config.tab_name, self._format_cnpj(cgf))
         return results
 
     def _build_pending_request(
@@ -863,6 +880,7 @@ class SigaContributorExtractor:
     def _search_taxpayer(self, page: Page, document_value: str) -> None:
         """Envia o CGF ou CNPJ para a busca e aguarda o resultado filtrado."""
         LOGGER.info("Pesquisando contribuinte %s", document_value)
+        narrate("Digitando o CNPJ %s na busca...", self._format_cnpj(document_value))
         self._wait_for_loading_overlays_to_disappear(page)
         search_input = self._find_search_input(page)
         search_input.click()
@@ -931,6 +949,7 @@ class SigaContributorExtractor:
                         document_value,
                         state.get("matchCount", 0),
                     )
+                    narrate_success("Contribuinte %s localizado.", self._format_cnpj(document_value))
                     return
                 if state.get("skeletonVisible"):
                     empty_result_seen_at = None
@@ -986,6 +1005,7 @@ class SigaContributorExtractor:
     def _open_taxpayer(self, page: Page, document_value: str) -> None:
         """Abre o contribuinte encontrado usando a linha ou célula que melhor bater com o documento."""
         LOGGER.info("Abrindo a linha do contribuinte %s", document_value)
+        narrate("Abrindo a ficha do contribuinte %s...", self._format_cnpj(document_value))
         if self._is_taxpayer_detail_page(page):
             LOGGER.info("A visualização de detalhes do contribuinte já foi detectada; ignorando a seleção de linha para %s", document_value)
             return
@@ -1267,6 +1287,7 @@ class SigaContributorExtractor:
         """
         import time as _time
         LOGGER.info("Iniciando extração de Malha Fiscal para o CNPJ %s", cgf)
+        narrate("Solicitando o relatório de Malha Fiscal do CNPJ %s...", self._format_cnpj(cgf))
         self._ensure_side_menu_open(page)
 
         # --- Navegar até Malha Fiscal ---
@@ -1313,6 +1334,7 @@ class SigaContributorExtractor:
                 body_text = strip_accents(page.locator("body").inner_text(timeout=3_000)).lower()
                 if any(msg in body_text for msg in toast_messages):
                     LOGGER.info("Confirmação de download de Malha Fiscal recebida")
+                    narrate_success("Download de Malha Fiscal solicitado com sucesso.")
                     break
             except Exception:  # noqa: BLE001
                 pass
@@ -1357,6 +1379,7 @@ class SigaContributorExtractor:
         """
         import time as _time
         LOGGER.info("Iniciando extração de Débitos Fiscais para o CNPJ %s", cgf)
+        narrate("Solicitando o relatório de Débitos Fiscais do CNPJ %s...", self._format_cnpj(cgf))
         self._ensure_side_menu_open(page)
 
         # --- Navegar até Débitos Fiscais ---
@@ -1402,6 +1425,7 @@ class SigaContributorExtractor:
                 body_text = strip_accents(page.locator("body").inner_text(timeout=3_000)).lower()
                 if any(msg in body_text for msg in toast_messages):
                     LOGGER.info("Confirmação de download de Débitos Fiscais recebida")
+                    narrate_success("Download de Débitos Fiscais solicitado com sucesso.")
                     break
             except Exception:  # noqa: BLE001
                 pass
@@ -1523,6 +1547,7 @@ class SigaContributorExtractor:
     def _open_document_tab(self, page: Page, tab_config: FiscalTabConfig) -> None:
         """Seleciona a aba fiscal correta, usando XPath primeiro e texto como fallback."""
         LOGGER.info("Abrindo a aba fiscal %s", tab_config.tab_name)
+        narrate("Abrindo a aba %s...", tab_config.tab_name)
         if self._click_xpath(page, tab_config.tab_xpath, f"{tab_config.tab_name} tab"):
             page.wait_for_timeout(1_000)
             return
@@ -1538,6 +1563,7 @@ class SigaContributorExtractor:
     def _open_named_section(self, page: Page, label: str) -> None:
         """Abre uma seção interna como Emissor, Destinatário, Tomador ou Emitente."""
         LOGGER.info("Abrindo a seção fiscal %s", label)
+        narrate("Abrindo a seção %s...", label)
         normalized_label = strip_accents(label).lower()
         if normalized_label == "emissor" and self._click_xpath(
             page,
@@ -2368,6 +2394,7 @@ class SigaContributorExtractor:
     ) -> dict[str, Path]:
         origin_url = page.url
         LOGGER.info("Abrindo o menu de Downloads para buscar %s arquivo(s) de detalhamento pendente(s)", len(pending_requests))
+        narrate("Abrindo a Central de Downloads para buscar %s arquivo(s)...", len(pending_requests))
         page = self._prepare_downloads_context(page, context, fallback_taxpayer_cnpj)
         self._ensure_side_menu_open(page)
         if self._click_xpath(
@@ -2384,6 +2411,9 @@ class SigaContributorExtractor:
                 fallback_task="Localize e clique na área Downloads no menu lateral.",
             )
             page.wait_for_timeout(1_000)
+
+        # Reduz o numero de paginas a percorrer na varredura (ver PLANO_CORRECOES.md item 27).
+        self._select_max_downloads_page_size(page)
 
         targets = self._build_download_lookup_targets(pending_requests)
         matches = self._find_pending_download_matches(page, targets)
@@ -2532,6 +2562,8 @@ class SigaContributorExtractor:
             page.wait_for_timeout(delay_ms)
             page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
             page.wait_for_timeout(750)
+            # O reload da SPA reseta o paginador para o tamanho padrao; reaplica o maximo.
+            self._select_max_downloads_page_size(page)
 
         if latest_matches:
             LOGGER.warning(
@@ -2569,6 +2601,23 @@ class SigaContributorExtractor:
         page_number = 1
 
         while True:
+            # Log de progresso a cada pagina: sem isso, uma varredura de muitas linhas fica
+            # em silencio por minutos e e indistinguivel de um travamento real (ver
+            # PLANO_CORRECOES.md item 29 - motivado por um caso real onde o usuario encerrou
+            # o processo pensando que tinha travado).
+            LOGGER.info(
+                "Varrendo pagina %s da Central de Downloads (full_scan=%s, %s/%s solicitacoes localizadas ate agora)...",
+                page_number,
+                full_scan,
+                len(located_keys),
+                len(target_keys),
+            )
+            narrate(
+                "Procurando os arquivos na Central de Downloads (página %s, %s de %s já localizados)...",
+                page_number,
+                len(located_keys),
+                len(target_keys),
+            )
             self._scan_downloads_current_page_for_targets(
                 page,
                 targets,
@@ -2586,6 +2635,12 @@ class SigaContributorExtractor:
                 break
             page_number += 1
 
+        LOGGER.info(
+            "Varredura da Central de Downloads concluida: %s/%s solicitacoes localizadas em %s pagina(s).",
+            len(located_keys),
+            len(target_keys),
+            page_number,
+        )
         return matches, processing_counts
 
     def _scan_downloads_current_page_for_targets(
@@ -2609,7 +2664,10 @@ class SigaContributorExtractor:
             try:
                 if not row.is_visible():
                     continue
-                row_cells = self._row_cell_texts(row)
+                # Timeout curto por celula: numa varredura em lote (potencialmente dezenas de
+                # linhas), uma linha obsoleta apos um re-render nao pode custar o timeout
+                # padrao de 2s por celula, senao a espera silenciosa some minutos sem log.
+                row_cells = self._row_cell_texts(row, cell_timeout_ms=400)
             except Error:
                 continue
 
@@ -2742,6 +2800,7 @@ class SigaContributorExtractor:
                     target.request.document_tab,
                     "Erro: Não localizado na Central de Downloads",
                 )
+                narrate_warning("Não foi possível localizar o arquivo de %s na Central de Downloads.", target.request.tela_aba)
                 continue
             page_targets.setdefault(match.page_number, []).append(target)
 
@@ -2781,13 +2840,80 @@ class SigaContributorExtractor:
 
             if current_page == max_page:
                 break
-            if not self._go_to_next_downloads_page(page):
-                raise TimeoutError(
-                    "Nao foi possivel navegar ate a pagina esperada da Central de Downloads durante o lote."
+            if not self._advance_to_next_downloads_page_with_retry(page, current_page):
+                # A paginacao da Central de Downloads quebrou no meio do lote e a tentativa
+                # de recuperacao tambem falhou. Em vez de abortar tudo (perdendo os downloads
+                # ja concluidos ate aqui), marca os itens das paginas ainda nao alcancadas como
+                # nao localizados e encerra o lote de forma graciosa.
+                LOGGER.warning(
+                    "Nao foi possivel avancar da pagina %s para a proxima na Central de Downloads "
+                    "apos tentativa de recuperacao; marcando os itens restantes como nao localizados.",
+                    current_page,
                 )
+                self._mark_unreached_download_pages_as_unavailable(page_targets, current_page, detail_paths)
+                break
             current_page += 1
 
         return detail_paths
+
+    def _advance_to_next_downloads_page_with_retry(self, page: Page, current_page: int) -> bool:
+        """Tenta avancar para a proxima pagina; se falhar, recarrega e reavanca do zero uma vez.
+
+        A Central de Downloads pode ficar momentaneamente instavel (overlay preso, hiccup de
+        carregamento) no meio de um lote longo. Uma unica tentativa de recuperacao evita abortar
+        o restante do lote por uma falha pontual de paginacao.
+        """
+        if self._go_to_next_downloads_page(page):
+            return True
+
+        LOGGER.warning(
+            "Falha ao avancar da pagina %s na Central de Downloads; tentando recuperar com reload.",
+            current_page,
+        )
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
+            page.wait_for_timeout(1_000)
+        except Error:
+            return False
+
+        # O reload da SPA reseta o paginador para o tamanho padrao; reaplica o maximo antes
+        # de reavancar, senao o numero de cliques de "proxima pagina" abaixo fica incorreto.
+        self._select_max_downloads_page_size(page)
+
+        self._go_to_first_downloads_page(page)
+        for _ in range(current_page):
+            if not self._go_to_next_downloads_page(page):
+                return False
+        return True
+
+    def _mark_unreached_download_pages_as_unavailable(
+        self,
+        page_targets: dict[int, list[DownloadLookupTarget]],
+        current_page: int,
+        detail_paths: dict[str, Path],
+    ) -> None:
+        """Registra aviso e status de erro para itens cujas paginas nao puderam ser alcancadas."""
+        remaining_pages = sorted(page_number for page_number in page_targets if page_number > current_page)
+        for remaining_page in remaining_pages:
+            for target in page_targets[remaining_page]:
+                request_key = target.request.request_key
+                if request_key in detail_paths:
+                    continue
+                basename = self._build_download_output_basename(target.request.tela_aba)
+                detail_paths[request_key] = self._save_unavailable_download_notice(
+                    cgf=target.request.taxpayer_cnpj,
+                    month_reference=target.request.month_reference,
+                    basename=basename,
+                    document_tab=target.request.document_tab,
+                    tela_aba=target.request.tela_aba,
+                    taxpayer_folder_name=target.request.taxpayer_folder_name,
+                )
+                write_status_to_spreadsheet_cell(
+                    self.output_spreadsheet_path,
+                    target.request.row_number,
+                    target.request.document_tab,
+                    "Erro: Falha ao navegar na Central de Downloads",
+                )
 
     def _capture_download_for_match(
         self,
@@ -2823,6 +2949,7 @@ class SigaContributorExtractor:
                     match.page_number,
                     output_path,
                 )
+                narrate_success("Arquivo de %s baixado com sucesso.", target.request.tela_aba)
                 return output_path
             except TimeoutError as exc:
                 last_error = exc
@@ -2834,6 +2961,7 @@ class SigaContributorExtractor:
                         attempts,
                         self.settings.download_retry_delay_ms,
                     )
+                    narrate_warning("O download de %s não iniciou; tentando novamente...", target.request.tela_aba)
                     page.wait_for_timeout(self.settings.download_retry_delay_ms)
                     continue
 
@@ -3341,6 +3469,75 @@ class SigaContributorExtractor:
             page.wait_for_timeout(1_000)
             return
 
+    def _select_max_downloads_page_size(self, page: Page) -> bool:
+        """Seleciona o maior numero de linhas por pagina no paginador da Central de Downloads.
+
+        Reduz drasticamente o total de paginas a percorrer numa varredura (ex.: de 100 paginas
+        de 10 linhas para 10 paginas de 100), sem alterar o comportamento caso o seletor nao
+        esteja disponivel na tela (fallback silencioso, mantendo o tamanho de pagina padrao).
+        """
+        dropdown_candidates = (
+            page.locator("[aria-label='Rows per page']"),
+            page.locator(".p-paginator-rpp-options .p-dropdown-label"),
+            page.locator(".p-paginator-rpp-options"),
+        )
+        trigger = None
+        for locator in dropdown_candidates:
+            trigger = self._first_visible_enabled(locator)
+            if trigger is not None:
+                break
+
+        if trigger is None:
+            LOGGER.info(
+                "Seletor de linhas por pagina nao encontrado na Central de Downloads; mantendo o padrao."
+            )
+            return False
+
+        try:
+            trigger.click()
+            page.wait_for_timeout(300)
+
+            options = page.locator("li[role='option'], [role='listbox'] li")
+            option_count = options.count()
+
+            best_index = -1
+            best_value = -1
+            for index in range(option_count):
+                try:
+                    option_text = options.nth(index).inner_text(timeout=1_000)
+                except Error:
+                    continue
+                digits = re.sub(r"[^0-9]", "", option_text)
+                if not digits:
+                    continue
+                value = int(digits)
+                if value > best_value:
+                    best_value = value
+                    best_index = index
+
+            if best_index == -1:
+                LOGGER.warning(
+                    "Nao foi possivel identificar as opcoes de linhas por pagina da Central de Downloads; mantendo o padrao."
+                )
+                page.keyboard.press("Escape")
+                return False
+
+            options.nth(best_index).click()
+            # Espera mais generosa que a usada em outras interacoes de paginador: aumentar o
+            # tamanho da pagina pode multiplicar por 10x a quantidade de linhas renderizadas
+            # pelo Angular de uma vez, e a varredura que vem em seguida precisa encontrar o
+            # DOM ja estavel (ver PLANO_CORRECOES.md item 27 e correcao de selenium_compat.py).
+            page.wait_for_timeout(1_500)
+            LOGGER.info("Linhas por pagina da Central de Downloads ajustadas para %s.", best_value)
+            narrate("Ajustando a Central de Downloads para mostrar mais itens por página...")
+            return True
+        except Error:
+            LOGGER.warning(
+                "Falha ao tentar ajustar as linhas por pagina da Central de Downloads; mantendo o padrao.",
+                exc_info=True,
+            )
+            return False
+
     def _download_match_score(self, tela_aba_text: str, normalized_target: str, match_fragments: dict[str, str]) -> float:
         score = 0.0
         if match_fragments["tab"] and match_fragments["tab"] in tela_aba_text:
@@ -3357,7 +3554,16 @@ class SigaContributorExtractor:
             score += 0.25
         return score
 
-    def _row_cell_texts(self, row: Locator) -> list[str]:
+    def _row_cell_texts(self, row: Locator, cell_timeout_ms: int = 2_000) -> list[str]:
+        """Le o texto de cada celula da linha.
+
+        `cell_timeout_ms` controla quanto tempo esperar por cada celula individual antes de
+        desistir dela. Varreduras em lote (muitas linhas de uma vez, ex. apos aumentar o
+        tamanho de pagina no item 27) devem usar um valor bem menor que o padrao, pois uma
+        linha obsoleta/desalinhada apos um re-render grande do Angular pode fazer cada celula
+        dela gastar o timeout inteiro antes de cair no fallback, somando minutos de espera
+        silenciosa em uma tabela com muitas linhas (ver PLANO_CORRECOES.md item 29).
+        """
         cells = row.locator("td")
         try:
             cell_count = cells.count()
@@ -3367,7 +3573,7 @@ class SigaContributorExtractor:
         values: list[str] = []
         for index in range(cell_count):
             try:
-                values.append(self._normalize_spaces(cells.nth(index).inner_text(timeout=2_000)))
+                values.append(self._normalize_spaces(cells.nth(index).inner_text(timeout=cell_timeout_ms)))
             except Error:
                 values.append("")
         return values
@@ -3802,6 +4008,7 @@ class SigaContributorExtractor:
             target = self._first_visible_enabled(locator)
             if target is not None:
                 target.click()
+                narrate("Clicando em %s...", names[0])
                 return
 
         raise TimeoutError(f"Nao foi possivel clicar em: {', '.join(names)}.")
@@ -3811,6 +4018,7 @@ class SigaContributorExtractor:
         if target is None:
             return False
         LOGGER.info("Clicando em %s via XPath: %s", label, xpath)
+        narrate("Clicando em %s...", label)
         target.click(force=force)
         return True
 

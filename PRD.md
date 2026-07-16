@@ -7,7 +7,6 @@ O **SIGA Automação** é uma aplicação desktop para Windows destinada a autom
 O sistema oferece:
 
 - Interface gráfica para operação assistida.
-- Interface de linha de comando para automação e integrações.
 - Entrada de CNPJ por planilha XLSX ou por digitação manual na GUI.
 - Processamento de NF-e, NFC-e e CT-e.
 - Organização automática dos arquivos por CNPJ, mês e tipo de documento.
@@ -33,7 +32,7 @@ Este produto resolve esse problema ao:
 ## 4. Objetivos do Produto
 
 - Automatizar a extração fiscal no SIGA com o menor esforço operacional possível.
-- Permitir uso assistido por GUI e uso avançado por terminal.
+- Permitir uso assistido por GUI, sem exigir conhecimento técnico do operador.
 - Aceitar entrada por planilha ou por CNPJ manual.
 - Reduzir o tempo entre solicitação e download.
 - Garantir organização e rastreabilidade dos arquivos gerados.
@@ -83,12 +82,6 @@ Este produto resolve esse problema ao:
 - Seleciona mês, ano, pasta de saída e documentos.
 - Inicia o navegador e faz login.
 - Executa o processamento e acompanha o log na tela.
-
-### 6.2 CLI
-
-- O usuário informa parâmetros por terminal.
-- O sistema guia a escolha de mês, ano, planilha e documentos.
-- O processamento segue o mesmo backend da GUI.
 
 ## 7. Requisitos Funcionais
 
@@ -142,6 +135,7 @@ Este produto resolve esse problema ao:
 - Sincronização com banco de dados central.
 - Multiusuário em tempo real.
 - API pública para integração externa.
+- Modo de lote via terminal/linha de comando (descontinuado; a GUI é a única interface de extração suportada). O modo assistido via terminal (`--live-assist`) segue disponível apenas como ferramenta de depuração interna.
 
 ## 13. Riscos
 

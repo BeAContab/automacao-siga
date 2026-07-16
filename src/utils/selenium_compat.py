@@ -458,10 +458,16 @@ class Page:
         self._switch()
         root_element: WebDriver | WebElement = root or self.driver
         if selector.startswith("xpath="):
-            return root_element.find_elements(By.XPATH, selector.removeprefix("xpath="))
-        if selector.startswith("text="):
-            return self._find_by_text_selector(selector.removeprefix("text="), root=root)
-        return root_element.find_elements(By.CSS_SELECTOR, selector)
+            result = root_element.find_elements(By.XPATH, selector.removeprefix("xpath="))
+        elif selector.startswith("text="):
+            result = self._find_by_text_selector(selector.removeprefix("text="), root=root)
+        else:
+            result = root_element.find_elements(By.CSS_SELECTOR, selector)
+        # O Selenium pode devolver None (em vez de lista vazia) quando o elemento raiz esta
+        # no meio de uma re-renderizacao do DOM (comum em SPAs Angular como o SIGA). Sem essa
+        # normalizacao, o TypeError resultante escapa dos "except Error" espalhados pelo
+        # codigo, ja que TypeError nao e um WebDriverException.
+        return result if result is not None else []
 
     def _find_by_text_selector(self, raw_text: str, root: WebElement | None = None) -> list[WebElement]:
         if raw_text.startswith("/") and raw_text.endswith("/i"):
@@ -540,8 +546,8 @@ class Page:
 
     def _descendants(self, root: WebElement | None = None) -> list[WebElement]:
         if root is None:
-            return self.driver.find_elements(By.CSS_SELECTOR, "*")
-        return [root, *root.find_elements(By.CSS_SELECTOR, "*")]
+            return self.driver.find_elements(By.CSS_SELECTOR, "*") or []
+        return [root, *(root.find_elements(By.CSS_SELECTOR, "*") or [])]
 
 
 class BrowserContext:

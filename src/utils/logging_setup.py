@@ -27,8 +27,13 @@ def configure_logging(log_file: Path) -> None:
     error_file_handler.setLevel(logging.ERROR)
     error_file_handler.setFormatter(formatter)
 
+    # Nivel WARNING (nao INFO): o canal de narracao (src/utils/narration.py) passou a
+    # cobrir o fluxo informativo no console/terminal em linguagem simples. Deixar o log
+    # tecnico tambem em INFO no mesmo console duplicaria a poluicao que a narracao existe
+    # para eliminar; WARNING+ continua funcionando como rede de seguranca para falhas nao
+    # ainda narradas explicitamente.
     stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(logging.INFO)
+    stream_handler.setLevel(logging.WARNING)
     stream_handler.setFormatter(formatter)
 
     root_logger.addHandler(run_file_handler)
