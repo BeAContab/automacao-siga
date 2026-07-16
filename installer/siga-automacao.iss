@@ -1,5 +1,5 @@
 #define MyAppName "SIGA Automacao"
-#define MyAppVersion "1.4.2"
+#define MyAppVersion "1.7.2"
 #define MyAppExeName "siga-automacao-gui.exe"
 
 [Setup]
@@ -12,7 +12,7 @@ DefaultGroupName=SIGA Automacao
 AllowNoIcons=yes
 SetupIconFile=..\images\icons\siga-automacao.ico
 OutputDir=..\dist\installer
-OutputBaseFilename=SIGA-Automacao-Setup
+OutputBaseFilename=Setup {#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern

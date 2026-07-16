@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-07-16] — Versão 1.7.3
+
+### Alterado
+- **Governança do Instalador:** A regra de atualização obrigatória do instalador Inno Setup (`siga-automacao.iss`) juntamente com o lançamento de uma nova versão foi documentada no `CLAUDE.md` e em regras globais (`GEMINI.md`). Além de atualizar a variável `MyAppVersion`, o arquivo executável final gerado pelo instalador foi padronizado para usar o formato dinâmico `OutputBaseFilename=Setup {#MyAppVersion}`, gerando arquivos nomeados como `Setup <versão>.exe`. A versão atual no `.iss` foi sincronizada com a base (1.7.2/1.7.3).
+
 ## [2026-07-16] — Versão 1.7.2
 
 ### Melhorado

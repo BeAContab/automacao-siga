@@ -98,6 +98,7 @@ explícita.
 ## 4. Changelog e Versionamento
 
 Toda atualização de código deve ser registrada no CHANGELOG.md, seguindo versionamento semântico (Major.Minor.Patch), com escopo claro das mudanças.
+Além disso, **sempre** que lançar uma nova versão no CHANGELOG, o arquivo `installer/siga-automacao.iss` deve ser atualizado obrigatoriamente para conter a mesma versão (`#define MyAppVersion "<versão>"`) e o nome do executável gerado deve permanecer configurado como `OutputBaseFilename=Setup {#MyAppVersion}`.
 
 ## 5. Dados Sensíveis e i18n
 
