@@ -2644,9 +2644,10 @@ class SigaContributorExtractor:
                 located_keys,
                 cutoff_dt=cutoff_dt,
             )
-            # Todas as solicitacoes ja foram encontradas: nao ha motivo para paginar adiante
-            # (exceto quando full_scan exige ler tudo para resolver duplicatas).
-            if not full_scan and target_keys and located_keys >= target_keys:
+            # Todas as solicitacoes ja foram encontradas: nao ha motivo para paginar adiante.
+            # Como a Central de Downloads e ordenada do mais novo para o mais antigo, qualquer 
+            # item nas paginas subsequentes seria mais antigo do que os que ja encontramos.
+            if target_keys and located_keys >= target_keys:
                 break
             # Corte por timestamp: linha mais antiga que o inicio do lote foi encontrada;
             # nao ha arquivos do lote atual nas paginas seguintes (ordem DESC por data).

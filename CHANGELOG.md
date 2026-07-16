@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-07-16] — Versão 1.7.5
+
+### Corrigido
+- **Avanço Desnecessário de Páginas na Central de Downloads:** Corrigido o problema onde o robô continuava avançando pelas páginas da Central de Downloads na varredura final (`full_scan=True`) mesmo depois de já ter localizado todos os arquivos do lote. Como a tabela é ordenada da solicitação mais recente para a mais antiga, essa varredura excedente não gerava nenhum ganho e causava lentidão excessiva e expiração de sessão.
+
 ## [2026-07-16] — Versão 1.7.4
 
 ### Adicionado
