@@ -1,39 +1,43 @@
 # SIGA Automação
 
-O **SIGA Automação** é uma solução corporativa de alta performance projetada para otimizar e automatizar o processo de extração em lote de documentos fiscais diretamente do portal SIGA da Secretaria da Fazenda do Estado do Ceará (SEFAZ-CE).
+**Fechamento fiscal mensal em minutos, não em dias.**
 
-Desenvolvido para atender a demandas de alta volumetria, o sistema elimina as tarefas repetitivas de navegação manual, reduzindo drasticamente o tempo operacional de fechamento fiscal, mitigando erros humanos e garantindo a conformidade e rastreabilidade dos documentos obtidos.
+O **SIGA Automação** é a solução corporativa que elimina o trabalho manual e repetitivo de extrair documentos fiscais do portal SIGA da Secretaria da Fazenda do Estado do Ceará (SEFAZ-CE). Em vez de abrir contribuinte por contribuinte, aba por aba, o operador importa uma planilha de CNPJs, faz login uma única vez e a ferramenta assume toda a navegação — solicitando, localizando e baixando cada relatório automaticamente.
+
+Resultado: o que antes consumia horas de um colaborador clicando no portal passa a rodar sozinho, com log detalhado de cada etapa e organização automática dos arquivos por empresa.
 
 ---
 
-## Proposta de Valor
+## Por que o SIGA Automação
 
-No cenário tributário atual, a agilidade na coleta de dados fiscais é essencial. O **SIGA Automação** substitui horas de trabalho manual por um processo automatizado, inteligente e seguro. Com poucos cliques, a ferramenta gerencia o fluxo de requisição, monitoramento e download de documentos fiscais eletrônicos, permitindo que a equipe contábil concentre-se em atividades analíticas e de tomada de decisão.
+* **Tempo de volta para a operação:** um lote de dezenas de CNPJs, que levaria um dia inteiro de trabalho manual, roda em background enquanto a equipe cuida de análise e conferência.
+* **Menos erro humano:** a extração segue sempre o mesmo caminho, sem risco de esquecer um CNPJ, baixar o mês errado ou perder um relatório no meio do processo.
+* **Visibilidade total:** console de log em tempo real narra cada ação em português simples — o operador sabe exatamente o que está acontecendo a qualquer momento, sem precisar interpretar logs técnicos.
+* **Feito sob medida para escritórios de contabilidade:** organização de saída já no padrão que a equipe fiscal usa (`COD - EMPRESA - CNPJ`), pronta para conferência ou importação em outros sistemas.
 
 ## Principais Funcionalidades
 
-* **Extração Inteligente em Lote:** Processamento sequencial e automatizado de múltiplos contribuintes a partir de uma única lista de trabalho.
-* **Cobertura de Documentos:** Suporte completo para consulta e download de Notas Fiscais Eletrônicas (NF-e), Notas Fiscais de Consumidor Eletrônicas (NFC-e), Conhecimentos de Transporte Eletrônicos (CT-e), assim como relatórios especiais de **Malha Fiscal** (indícios de irregularidades) e **Débitos Fiscais**.
-* **Organização Estruturada:** Classificação e armazenamento automático dos arquivos baixados em pastas organizadas por código interno, nome da empresa e CNPJ (`COD - EMPRESA - CNPJ`), facilitando a posterior importação em sistemas ERP ou de auditoria.
-* **Interface Fluida e Assistida:** Painel gráfico refinado, estruturado sob diretrizes modernas de design, para facilitar a operação diária sem necessidade de conhecimentos técnicos de desenvolvimento.
-* **Resiliência e Recuperação de Erros:** Mecanismo automático para aguardar o término de carregamentos/travamentos do portal e detecção inteligente de CNPJs sem cadastro ativo, evitando travamentos em lote e garantindo que o processamento continue de forma fluida.
-* **Rastreabilidade e Auditoria:** Console de log dinâmico com identificação visual por níveis (sucesso, alertas, falhas de conexão ou empresas não localizadas), garantindo total visibilidade sobre cada execução do lote.
-* **Flexibilidade de Entrada:** Permite importar dados de forma rápida utilizando planilhas eletrônicas padronizadas ou inserindo as informações diretamente na interface.
+* **Extração inteligente em lote:** processa múltiplos contribuintes de forma sequencial a partir de uma única planilha de trabalho, sem intervenção manual entre um CNPJ e outro.
+* **Cobertura completa de documentos fiscais:** Notas Fiscais Eletrônicas (NF-e), Notas Fiscais de Consumidor Eletrônicas (NFC-e), Conhecimentos de Transporte Eletrônicos (CT-e), além dos relatórios especiais de **Malha Fiscal** (indícios de irregularidades) e **Débitos Fiscais**.
+* **Importação flexível:** planilha Excel por arrastar-e-soltar direto na interface, ou preenchimento manual dos dados quando necessário.
+* **Login seguro e assistido:** o navegador é controlado pela automação, mas o login continua sendo feito manualmente pelo operador — inclusive com certificado digital A1 — sem que credenciais passem pela ferramenta.
+* **Organização automática da saída:** cada arquivo baixado é classificado em pastas por código interno, nome da empresa e CNPJ, prontas para conferência ou envio.
+* **Console de log em tempo real:** cada etapa da automação é narrada em linguagem simples, com destaque visual para sucessos, alertas e falhas — sem necessidade de conhecimento técnico para acompanhar a execução.
+* **Resiliência a instabilidades do portal:** retentativas automáticas diante de lentidão, sobrecarga ou indisponibilidade momentânea do SIGA, e reconhecimento automático de CNPJs sem cadastro ativo, para que um problema pontual não interrompa o lote inteiro.
+* **Central de Ajuda integrada:** manual de instruções acessível direto pela interface, sem depender de suporte técnico para dúvidas do dia a dia.
 
 ## Público-Alvo
 
-* **Escritórios de Contabilidade e Assessoria:** Que lidam com centenas de clientes e necessitam de processos padronizados de fechamento fiscal mensal.
-* **Departamentos Fiscais Corporativos:** Que demandam exatidão e velocidade na auditoria interna de entradas e saídas.
-* **Equipes de Controladoria e Backoffice:** Que buscam reduzir a sobrecarga administrativa e eliminar erros de digitação e consulta manual.
+* **Escritórios de Contabilidade e Assessoria:** que atendem dezenas ou centenas de clientes e precisam de um processo padronizado de fechamento fiscal mensal.
+* **Departamentos Fiscais Corporativos:** que precisam de exatidão e agilidade na auditoria interna de entradas e saídas.
+* **Equipes de Controladoria e Backoffice:** que buscam reduzir a sobrecarga operacional e eliminar erros de digitação e consulta manual repetitiva.
 
-## Visão Geral do Fluxo de Operação
+## Como Funciona
 
-O fluxo de trabalho foi projetado para ser intuitivo e direto:
-
-1. **Definição do Escopo:** O operador importa uma planilha com a relação de CNPJs ou digita os dados de interesse diretamente no painel.
-2. **Seleção de Período:** Define-se o mês, o ano e quais tipos de documentos fiscais eletrônicos serão consultados.
-3. **Autenticação:** O navegador seguro e integrado é inicializado para que o operador realize o login de forma protegida (usando suas credenciais de acesso ou certificado digital).
-4. **Execução:** A automação assume a navegação a partir desse ponto, navegando pelos menus internos do portal SIGA, realizando as solicitações de detalhamento e baixando os arquivos diretamente para o diretório de destino selecionado.
+1. **Defina o escopo:** importe a planilha com os CNPJs (arrastando o arquivo para a interface) ou digite os dados diretamente no painel.
+2. **Selecione o período e os documentos:** escolha mês, ano e quais tipos de documento fiscal deseja consultar.
+3. **Faça login uma única vez:** o navegador integrado abre o portal SIGA para que você entre com suas credenciais ou certificado digital.
+4. **Acompanhe a execução:** a partir daí, a automação navega pelo portal, solicita os relatórios, aguarda o processamento e baixa cada arquivo — tudo narrado em tempo real no console da interface.
 
 ---
 
