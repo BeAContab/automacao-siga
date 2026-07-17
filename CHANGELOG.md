@@ -1,5 +1,23 @@
 # Changelog
 
+## [2026-07-17] — Versão 1.7.8
+
+### Melhorado
+- **Localização da linha de download também otimizada:** A análise dos logs de execução mostrou que, após a Versão 1.7.7 acelerar a fase de espera/localização (de ~90 minutos para ~2 segundos numa varredura de 12 arquivos), o gargalo restante era `_find_download_row_for_match_on_current_page` — chamada uma vez por arquivo dentro de `_capture_download_for_match`, ainda escaneando a página inteira linha a linha via Selenium (sem o timeout reduzido por célula) só para reencontrar a linha antes do clique de download. Ela passa a reaproveitar a mesma leitura em lote via JavaScript (`_iter_downloads_table_rows`) já usada no loop de espera, resolvendo um `Locator` real apenas para a linha vencedora ao final.
+
+## [2026-07-17] — Versão 1.7.7
+
+### Melhorado
+- **Loop de espera da Central de Downloads mais rápido:** Três otimizações no ciclo de espera pelo processamento dos relatórios (`_find_pending_download_matches` em `src/extraction/siga_extractor.py`):
+  1. A leitura das linhas da tabela passa a ser feita em uma única chamada JavaScript por página (`_read_downloads_table_rows_js`/`_iter_downloads_table_rows`), no lugar de um round-trip Selenium por linha/célula (`.is_visible()`, `.inner_text()`), com fallback automático para o método antigo caso o `evaluate` falhe.
+  2. Solicitações já confirmadas (match preferido) deixam de ser reprocuradas nos ciclos de retry seguintes, reduzindo o número de páginas percorridas a cada reload enquanto o restante ainda está em processamento no SIGA.
+  3. O índice da opção "maior valor" no dropdown de linhas por página é cacheado após a primeira descoberta, evitando reler o texto de todas as opções a cada reload em `_select_max_downloads_page_size`.
+
+## [2026-07-17] — Versão 1.7.6
+
+### Adicionado
+- **Simulação de atividade na Central de Downloads:** Durante os ciclos de espera pelo processamento dos relatórios na Central de Downloads (`_find_pending_download_matches` em `src/extraction/siga_extractor.py`), o robô agora simula uma pequena interação do usuário (Page Down seguido de Page Up) antes de cada nova varredura. Isso evita que a sessão do SIGA seja encerrada por inatividade quando o robô fica muito tempo parado nessa tela aguardando os arquivos ficarem prontos.
+
 ## [2026-07-16] — Versão 1.7.5
 
 ### Corrigido

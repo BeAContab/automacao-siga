@@ -5,9 +5,11 @@ from __future__ import annotations
 import logging
 import re
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Iterator
 
 from openpyxl import Workbook
 
@@ -139,6 +141,9 @@ class SigaContributorExtractor:
         self.allow_manual_login_prompt = allow_manual_login_prompt
         self.page_inspector = SigaPageInspector(settings)
         self.output_spreadsheet_path = output_spreadsheet_path
+        # Cache do indice da opcao "maior valor" no dropdown de linhas por pagina da Central de
+        # Downloads, para evitar reler todas as opcoes a cada reload (ver _select_max_downloads_page_size).
+        self._downloads_page_size_option_index: int | None = None
 
     def run(self, cnpj: str) -> ExtractionResult:
         """Executa a extração completa para um único contribuinte."""
@@ -2531,27 +2536,40 @@ class SigaContributorExtractor:
     ) -> dict[str, DownloadRowMatch]:
         """Varre todas as paginas e escolhe o melhor match por solicitacao."""
         deadline = time.time() + (self.settings.download_wait_timeout_ms / 1000)
-        latest_matches: dict[str, DownloadRowMatch] = {}
         target_keys = {target.request.request_key for target in targets}
+        # Acumula os matches ja confirmados (preferidos) entre ciclos: uma vez resolvida, uma
+        # solicitacao nao precisa ser reprocurada nos ciclos de espera seguintes, entao os ciclos
+        # seguintes varrem menos alvos (e param de paginar mais cedo) enquanto o restante ainda
+        # esta em processamento no SIGA.
+        resolved_matches: dict[str, DownloadRowMatch] = {}
+        latest_matches: dict[str, DownloadRowMatch] = {}
+        all_settled = False
 
         while time.time() < deadline:
-            # Varredura intermediaria: pode parar cedo assim que todas as solicitacoes forem
-            # avistadas, pois aqui so precisamos saber se algo ainda esta em processamento.
-            latest_matches, processing_counts = self._scan_downloads_table_once(page, targets)
-            waiting_keys = self._download_keys_still_processing(targets, latest_matches, processing_counts)
+            pending_targets = [
+                target for target in targets
+                if target.request.request_key not in resolved_matches
+            ]
+            if not pending_targets:
+                all_settled = True
+                break
 
+            # Varredura intermediaria: pode parar cedo assim que todas as solicitacoes pendentes
+            # forem avistadas, pois aqui so precisamos saber se algo ainda esta em processamento.
+            cycle_matches, processing_counts = self._scan_downloads_table_once(page, pending_targets)
+            for request_key, match in cycle_matches.items():
+                if match.preferred:
+                    resolved_matches[request_key] = match
+            latest_matches = {**resolved_matches, **cycle_matches}
+
+            waiting_keys = [
+                key
+                for key in self._download_keys_still_processing(pending_targets, cycle_matches, processing_counts)
+                if key not in resolved_matches
+            ]
             if not waiting_keys:
-                # Antes de retornar, faz uma varredura completa (sem parada antecipada) para
-                # garantir a resolucao de duplicatas em paginas posteriores, independentemente
-                # da ordenacao da Central de Downloads.
-                latest_matches, _ = self._scan_downloads_table_once(page, targets, full_scan=True)
-                missing_keys = sorted(target_keys - set(latest_matches.keys()))
-                if missing_keys:
-                    LOGGER.warning(
-                        "Downloads nao localizados apos a varredura completa: %s",
-                        ", ".join(self._pending_request_labels(targets, missing_keys)),
-                    )
-                return latest_matches
+                all_settled = True
+                break
 
             delay_ms = 1_500 if len(waiting_keys) <= 2 else 2_000
             LOGGER.info(
@@ -2559,17 +2577,40 @@ class SigaContributorExtractor:
                 ", ".join(self._pending_request_labels(targets, waiting_keys)),
                 delay_ms,
             )
+            self._nudge_session_activity(page)
             page.wait_for_timeout(delay_ms)
             page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
             page.wait_for_timeout(750)
             # O reload da SPA reseta o paginador para o tamanho padrao; reaplica o maximo.
             self._select_max_downloads_page_size(page)
 
-        if latest_matches:
+        if all_settled:
+            # Antes de retornar, faz uma varredura completa (sem parada antecipada) com todos os
+            # alvos originais, para garantir a resolucao de duplicatas em paginas posteriores,
+            # independentemente da ordenacao da Central de Downloads.
+            latest_matches, _ = self._scan_downloads_table_once(page, targets, full_scan=True)
+            missing_keys = sorted(target_keys - set(latest_matches.keys()))
+            if missing_keys:
+                LOGGER.warning(
+                    "Downloads nao localizados apos a varredura completa: %s",
+                    ", ".join(self._pending_request_labels(targets, missing_keys)),
+                )
+        elif latest_matches:
             LOGGER.warning(
                 "A Central de Downloads expirou antes de concluir todas as linhas pendentes; usando os matches encontrados ate agora."
             )
+
         return latest_matches
+
+    def _nudge_session_activity(self, page: Page) -> None:
+        """Simula uma pequena interacao do usuario (Page Down/Page Up) para evitar que a sessao
+        do SIGA seja encerrada por inatividade durante as esperas prolongadas na Central de
+        Downloads (o reload por si so e trafego de rede, mas pode nao contar como interacao para
+        o detector de inatividade client-side do portal)."""
+        with suppress(Error):
+            page.keyboard.press("PageDown")
+            page.wait_for_timeout(150)
+            page.keyboard.press("PageUp")
 
     def _scan_downloads_table_once(
         self,
@@ -2671,6 +2712,82 @@ class SigaContributorExtractor:
         )
         return matches, processing_counts
 
+    def _iter_downloads_table_rows(self, page: Page) -> Iterator[tuple[int, list[str]]]:
+        """Itera as linhas visiveis da tabela atual da Central de Downloads como (indice, celulas).
+
+        Tenta uma leitura em lote via JavaScript (uma unica chamada, sem round-trip Selenium por
+        linha/celula); recorre a leitura linha a linha via Selenium se o `evaluate` falhar,
+        preservando o comportamento original como rede de seguranca (ver
+        `_read_downloads_table_rows_js`).
+        """
+        js_rows = self._read_downloads_table_rows_js(page)
+        if js_rows is not None:
+            for index, row_cells in enumerate(js_rows, start=1):
+                if row_cells is None:
+                    continue
+                yield index, row_cells
+            return
+
+        rows = page.locator("tr")
+        try:
+            row_count = rows.count()
+        except Error:
+            row_count = 0
+
+        for index in range(1, row_count):
+            row = rows.nth(index)
+            try:
+                if not row.is_visible():
+                    continue
+                # Timeout curto por celula: numa varredura em lote (potencialmente dezenas de
+                # linhas), uma linha obsoleta apos um re-render nao pode custar o timeout
+                # padrao de 2s por celula, senao a espera silenciosa some minutos sem log.
+                row_cells = self._row_cell_texts(row, cell_timeout_ms=400)
+            except Error:
+                continue
+            yield index, row_cells
+
+    def _read_downloads_table_rows_js(self, page: Page) -> list[list[str] | None] | None:
+        """Le todas as linhas da tabela atual em uma unica chamada JS (uma unica ida ao browser),
+        no lugar de um round-trip Selenium por linha/celula (`.is_visible()`, `.inner_text()`).
+
+        Retorna uma lista alinhada com as linhas a partir do indice 1 (pula o cabecalho, igual ao
+        loop original), com `None` no lugar de linhas nao visiveis. Retorna `None` (nao uma lista
+        vazia) se o `evaluate` falhar, sinalizando ao chamador para usar o fallback linha a linha.
+        """
+        script = r"""
+        () => {
+            const isVisible = (el) => {
+                if (!el || !el.isConnected) return false;
+                const style = window.getComputedStyle(el);
+                if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+                    return false;
+                }
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            };
+            const rows = Array.from(document.querySelectorAll('tr'));
+            const result = [];
+            for (let i = 1; i < rows.length; i++) {
+                const row = rows[i];
+                if (!isVisible(row)) {
+                    result.push(null);
+                    continue;
+                }
+                const cells = Array.from(row.querySelectorAll('td'));
+                result.push(cells.map((cell) => (cell.innerText || cell.textContent || '').replace(/\s+/g, ' ').trim()));
+            }
+            return result;
+        }
+        """
+        try:
+            result = page.evaluate(script)
+        except Error:
+            return None
+        if not isinstance(result, list):
+            return None
+        return result
+
     def _scan_downloads_current_page_for_targets(
         self,
         page: Page,
@@ -2689,24 +2806,8 @@ class SigaContributorExtractor:
         e a varredura pode ser interrompida.
         """
         past_cutoff = False
-        rows = page.locator("tr")
-        try:
-            row_count = rows.count()
-        except Error:
-            row_count = 0
 
-        for index in range(1, row_count):
-            row = rows.nth(index)
-            try:
-                if not row.is_visible():
-                    continue
-                # Timeout curto por celula: numa varredura em lote (potencialmente dezenas de
-                # linhas), uma linha obsoleta apos um re-render nao pode custar o timeout
-                # padrao de 2s por celula, senao a espera silenciosa some minutos sem log.
-                row_cells = self._row_cell_texts(row, cell_timeout_ms=400)
-            except Error:
-                continue
-
+        for index, row_cells in self._iter_downloads_table_rows(page):
             row_text = self._normalize_download_target(" ".join(row_cells))
             status_text = self._row_status_text(row_cells)
             requested_at = self._row_request_datetime(row_cells)
@@ -3032,22 +3133,11 @@ class SigaContributorExtractor:
         target: DownloadLookupTarget,
         match: DownloadRowMatch,
     ) -> Locator | None:
-        rows = page.locator("tr")
-        try:
-            row_count = rows.count()
-        except Error:
-            row_count = 0
-
-        candidates: list[tuple[Locator, tuple[int, int, float, datetime, str]]] = []
-        for index in range(1, row_count):
-            row = rows.nth(index)
-            try:
-                if not row.is_visible():
-                    continue
-                row_cells = self._row_cell_texts(row)
-            except Error:
-                continue
-
+        # Usa a mesma leitura em lote via JS do loop de espera (ver _iter_downloads_table_rows):
+        # apenas o indice da melhor linha e resolvido para um Locator real ao final, evitando um
+        # round-trip Selenium por linha/celula so para reencontrar a linha antes do clique.
+        candidates: list[tuple[int, tuple[int, int, float, datetime, str]]] = []
+        for index, row_cells in self._iter_downloads_table_rows(page):
             if not self._row_matches_download_target(
                 row_cells,
                 target.normalized_target,
@@ -3080,7 +3170,7 @@ class SigaContributorExtractor:
             )
             candidates.append(
                 (
-                    row,
+                    index,
                     (
                         exact_match,
                         preferred,
@@ -3095,7 +3185,8 @@ class SigaContributorExtractor:
             return None
 
         candidates.sort(key=lambda item: item[1], reverse=True)
-        return candidates[0][0]
+        best_index = candidates[0][0]
+        return page.locator("tr").nth(best_index)
 
     def _click_download_action(self, row: Locator, page: Page | None = None, tela_aba: str | None = None) -> None:
         candidates = (
@@ -3557,6 +3648,16 @@ class SigaContributorExtractor:
             options = page.locator("li[role='option'], [role='listbox'] li")
             option_count = options.count()
 
+            # Com o indice ja descoberto numa chamada anterior (mesma execucao do extrator),
+            # evita reler o texto de todas as opcoes a cada reload: a lista de opcoes do
+            # paginador nao muda entre reloads da mesma tela de Downloads.
+            cached_index = self._downloads_page_size_option_index
+            if cached_index is not None and cached_index < option_count:
+                options.nth(cached_index).click()
+                page.wait_for_timeout(1_500)
+                narrate("Ajustando a Central de Downloads para mostrar mais itens por página...")
+                return True
+
             best_index = -1
             best_value = -1
             for index in range(option_count):
@@ -3585,6 +3686,7 @@ class SigaContributorExtractor:
             # pelo Angular de uma vez, e a varredura que vem em seguida precisa encontrar o
             # DOM ja estavel (ver PLANO_CORRECOES.md item 27 e correcao de selenium_compat.py).
             page.wait_for_timeout(1_500)
+            self._downloads_page_size_option_index = best_index
             LOGGER.info("Linhas por pagina da Central de Downloads ajustadas para %s.", best_value)
             narrate("Ajustando a Central de Downloads para mostrar mais itens por página...")
             return True
