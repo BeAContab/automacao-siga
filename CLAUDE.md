@@ -4,7 +4,7 @@ Este arquivo fornece orientações ao Claude Code (claude.ai/code) para trabalha
 
 ## Visão geral do projeto
 
-O SIGA Automação é uma ferramenta desktop para Windows (Python + Selenium) que automatiza a extração em lote de documentos fiscais (NF-e, NFC-e, CT-e, Malha Fiscal, Débitos Fiscais) do portal SIGA da SEFAZ-CE (Secretaria da Fazenda do Estado do Ceará). A ferramenta controla um navegador real (Chrome/Edge) via CDP, permite que o usuário faça login manualmente (inclusive com certificado digital) e então percorre o portal por CNPJ, solicitando e baixando os relatórios, organizando a saída em pastas `COD - EMPRESA - CNPJ`. **A GUI em Tkinter é a única interface de extração suportada** (o antigo modo de lote via terminal foi descontinuado), distribuída como executável `.exe` via PyInstaller e instalador Inno Setup. Consulte [README.md](README.md) e [PRD.md](PRD.md) para a descrição completa do produto.
+O SIGA Automação é uma ferramenta desktop para Windows (Python + Selenium) que automatiza a extração em lote de documentos fiscais (NF-e, NFC-e, CT-e, Malha Fiscal, Débitos Fiscais) do portal SIGA da SEFAZ-CE (Secretaria da Fazenda do Estado do Ceará). A ferramenta controla um navegador real (Chrome/Edge) via CDP, permite que o usuário faça login manualmente (inclusive com certificado digital) e então percorre o portal por CNPJ, solicitando e baixando os relatórios, organizando a saída em pastas `COD - EMPRESA - CNPJ`. **A GUI em Tkinter é a única interface de extração suportada** (o antigo modo de lote via terminal foi descontinuado), distribuída como executável `.exe` via PyInstaller e instalador Inno Setup. Consulte [README.md](README.md) e [pré-lixo/PRD.md](pré-lixo/PRD.md) para a descrição completa do produto.
 
 ## Comandos
 
@@ -24,17 +24,17 @@ python main.py [--spreadsheet path.xlsx] [--month Junho] [--year 2026]
 
 Flags úteis de `main.py` (ver `build_parser()` em [src/main.py](src/main.py)) — servem para pré-preencher a GUI ou ajustar o ambiente do navegador, não para rodar um modo alternativo de extração: `--spreadsheet`/`--month`/`--year` (pré-preenchem a GUI), `--headless`, `--browser-channel chrome|msedge`, `--connect-browser-url`, `--disable-attach`, `--reset-browser-profile`, `--force-restart-browser`, `--system-browser-profile` / `--isolated-browser-profile`, `--chrome-profile-directory`, `--skip-certificate-policy`, `--clear-certificate-policy`, `--manual-login-timeout`, `--live-assist` / `--live-command` (ações assistidas de navegador passo a passo para depuração, ver `src/live_assist.py` — não é um modo de extração para o usuário final).
 
-Não há suíte de testes automatizados (sem configuração de pytest/unittest). A validação manual/ao vivo é feita em `testes/run_test_live.py`, um script autônomo que abre um navegador real contra uma planilha real `testes/teste.xlsx` e grava log em `testes/live_test_log.txt`:
+Não há suíte de testes automatizados (sem configuração de pytest/unittest). A validação manual/ao vivo é feita em `pré-lixo/testes/run_test_live.py`, um script autônomo que abre um navegador real contra uma planilha real `testes/teste.xlsx` e grava log em `testes/live_test_log.txt`:
 ```
-python testes/run_test_live.py
+python pré-lixo/testes/run_test_live.py
 ```
 Isso exige login real e acesso de rede ao SIGA — não trate como um teste seguro para CI.
 
 Gerar o executável Windows (PyInstaller):
 ```
-pyinstaller siga-automacao-gui.spec   # build GUI sem console -> dist/siga-automacao-gui (empacota images/logo, images/icons)
+pyinstaller pré-lixo/siga-automacao-gui.spec   # build GUI sem console -> dist/siga-automacao-gui (empacota images/logo, images/icons)
 ```
-O instalador é gerado separadamente com o Inno Setup (ver `installer/`).
+O instalador é gerado separadamente com o Inno Setup (ver `pré-lixo/installer/`).
 
 ## Arquitetura
 
@@ -48,7 +48,7 @@ Pipeline principal, na ordem de execução:
 3. **Entrada de dados** — [src/extraction/spreadsheet.py](src/extraction/spreadsheet.py) lê linhas de CNPJ de um XLSX (`load_cnpjs_from_xlsx`) e grava o status de cada linha em tempo real numa cópia `_resultados.xlsx` (`write_status_to_spreadsheet_cell`), de modo que o arquivo de entrada original nunca é alterado.
 4. **Extração** — [src/extraction/siga_extractor.py](src/extraction/siga_extractor.py) (`SigaContributorExtractor`) é o módulo maior e mais importante (~3900 linhas): abre cada contribuinte por CNPJ, navega pelas abas NF-e/NFC-e/CT-e/Malha Fiscal/Débitos Fiscais, solicita os detalhamentos dos relatórios, controla `PendingDetailRequest`s e depois varre a "Central de Downloads" do SIGA para casar e baixar os arquivos resultantes (lógica de correspondência aproximada via `DownloadLookupTarget`/`DownloadRowMatch`, já que a lista da central de downloads não mapeia 1:1 com as solicitações). Lança `TaxpayerNotFoundError` quando um CNPJ não tem cadastro ativo, para que o loop de lote pule e continue em vez de abortar.
 5. **Auxiliares de estrutura de página** — [src/utils/siga_page.py](src/utils/siga_page.py) (`SigaPageInspector`) e [src/utils/text.py](src/utils/text.py) (`slugify`, `strip_accents`) sustentam a correspondência robusta contra a interface Angular/PrimeNG do SIGA, que é propensa a overlays de carregamento e a divergências de acentuação/caixa nos títulos.
-6. **GUI** — [src/gui.py](src/gui.py) (~1200 linhas) é uma interface desktop em Tkinter/ttk estilizada conforme [design/DESIGN.md](design/DESIGN.md) (tokens de cor, tipografia e espaçamento em front matter YAML + diretrizes em prosa — verde floresta `#006e25` como cor primária, sidebar azul-marinho escuro, fontes Inter/JetBrains Mono, escala de espaçamento de 8px). Ela é a única interface de extração do produto: aciona diretamente as classes de backend (`SigaContributorExtractor`, `SigaLoginFlow`), adicionando um console de log em tempo real, importação de planilha por arrastar-e-soltar, checkboxes por documento e um botão "Ajuda" que abre `manual_instrucoes.html`.
+6. **GUI** — [src/gui.py](src/gui.py) (~1200 linhas) é uma interface desktop em Tkinter/ttk estilizada conforme [pré-lixo/design/DESIGN.md](pré-lixo/design/DESIGN.md) (tokens de cor, tipografia e espaçamento em front matter YAML + diretrizes em prosa — verde floresta `#006e25` como cor primária, sidebar azul-marinho escuro, fontes Inter/JetBrains Mono, escala de espaçamento de 8px). Ela é a única interface de extração do produto: aciona diretamente as classes de backend (`SigaContributorExtractor`, `SigaLoginFlow`), adicionando um console de log em tempo real, importação de planilha por arrastar-e-soltar, checkboxes por documento e um botão "Ajuda" que abre `manual_instrucoes.html`.
 7. **Modo assistido (live-assist)** — [src/live_assist.py](src/live_assist.py) expõe comandos de navegador passo a passo (`click-text`, `fill-selector`, `download-table`, `request-positive-details`, etc.) acionados via `--live-command`, usados em sessões de depuração assistida/manual sobre o navegador já aberto — é uma ferramenta de depuração interna, não um modo de extração para o usuário final.
 
 Os lotes são processados um mês por vez (`SigaContributorExtractor.run_batch_from_spreadsheet_in_context` itera sobre `month_references`) e, dentro de cada mês, uma linha da planilha (CNPJ) por vez; os downloads de todo o lote são varridos na Central de Downloads ao final de cada passagem de contribuinte/mês, em vez de um a um, por questão de performance (ver `brain/2026-06-12-downloads-globais-no-final.md`).
@@ -63,6 +63,7 @@ O logging técnico é centralizado por [src/utils/logging_setup.py](src/utils/lo
 - `brain/` contém notas de trabalho datadas, ignoradas pelo git, documentando decisões de implementação passadas (um arquivo por mudança, ex.: `brain/2026-06-12-busca-cnpj-sem-paginacao.md`) — útil como contexto para investigar *por que* algum trecho de lógica de extração/correspondência está do jeito que está, mas não é algo que precise continuar sendo atualizado.
 - O histórico voltado ao usuário/versão fica em [CHANGELOG.md](CHANGELOG.md), agrupado em entradas de versão datadas com seções `### Adicionado` / `### Alterado` / `### Corrigido` / `### Removido` em português — siga esse formato quando for solicitado a registrar uma mudança.
 - Como o frontend do SIGA é uma SPA Angular/PrimeNG propensa a mudanças de layout, o código de extração privilegia seletores resilientes e com fallback (correspondência por texto/label, remoção de acentos, loops de retry) em vez de seletores fixos frágeis — mantenha esse estilo em vez de introduzir seletores CSS de tiro único ao alterar `siga_extractor.py` ou `siga_page.py`.
+- `pré-lixo/` reúne arquivos rastreados que não são necessários para a aplicação rodar (documentação de planejamento, artefatos de design, specs de build/instalador e o script de teste manual `run_test_live.py`) — nada em `src/` ou `main.py` importa ou lê arquivos dessa pasta. Continua versionado no git; é apenas uma reorganização de estrutura, não um `.gitignore`.
 
 # Agent Profile: Assistente de Desenvolvimento Sênior
 
@@ -98,7 +99,7 @@ explícita.
 ## 4. Changelog e Versionamento
 
 Toda atualização de código deve ser registrada no CHANGELOG.md, seguindo versionamento semântico (Major.Minor.Patch), com escopo claro das mudanças.
-Além disso, **sempre** que lançar uma nova versão no CHANGELOG, o arquivo `installer/siga-automacao.iss` deve ser atualizado obrigatoriamente para conter a mesma versão (`#define MyAppVersion "<versão>"`) e o nome do executável gerado deve permanecer configurado como `OutputBaseFilename=Setup {#MyAppVersion}`.
+Além disso, **sempre** que lançar uma nova versão no CHANGELOG, o arquivo `pré-lixo/installer/siga-automacao.iss` deve ser atualizado obrigatoriamente para conter a mesma versão (`#define MyAppVersion "<versão>"`) e o nome do executável gerado deve permanecer configurado como `OutputBaseFilename=Setup {#MyAppVersion}`.
 
 ## 5. Dados Sensíveis e i18n
 

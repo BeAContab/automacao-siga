@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-07-23] — Versão 1.7.9
+
+### Alterado
+- **Reorganização de arquivos não essenciais em `pré-lixo/`:** Documentação de planejamento (`PRD.md`, `PLANO_CORRECOES.md`), artefatos de design (`design/`), specs de build/instalador (`siga-automacao-gui.spec`, `installer/siga-automacao.iss`), o script de teste manual (`testes/run_test_live.py`) e o `.env.example` foram movidos para a pasta `pré-lixo/`, mantendo o histórico do git via `git mv`. Nenhum desses arquivos é lido pelo código em `src/` ou por `main.py`; os caminhos relativos internos ao `siga-automacao.iss` foram ajustados para o novo nível de aninhamento. `README.md`, `CHANGELOG.md`, `LICENSE`, `requirements.txt` e `.gitignore` permanecem na raiz por exigência de estrutura do projeto.
+
 ## [2026-07-17] — Versão 1.7.8
 
 ### Melhorado

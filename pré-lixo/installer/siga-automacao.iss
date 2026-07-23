@@ -1,5 +1,5 @@
 #define MyAppName "SIGA Automacao"
-#define MyAppVersion "1.7.8"
+#define MyAppVersion "1.7.9"
 #define MyAppExeName "siga-automacao-gui.exe"
 
 [Setup]
@@ -10,8 +10,8 @@ AppVerName={#MyAppName} {#MyAppVersion}
 DefaultDirName={localappdata}\Programs\SIGA Automacao
 DefaultGroupName=SIGA Automacao
 AllowNoIcons=yes
-SetupIconFile=..\images\icons\siga-automacao.ico
-OutputDir=..\dist\installer
+SetupIconFile=..\..\images\icons\siga-automacao.ico
+OutputDir=..\..\dist\installer
 OutputBaseFilename=Setup {#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
@@ -24,10 +24,10 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
 
 [Files]
-Source: "..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\images\icons\siga-automacao.ico"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\images\icons\siga-automacao.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{userdesktop}\SIGA Automacao"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{app}\siga-automacao.ico"; IconIndex: 0
