@@ -1,14 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+
+# O spec foi movido para pré-lixo/, um nível abaixo da raiz do projeto onde
+# main.py e images/ realmente estão; PyInstaller resolve caminhos relativos
+# em relação a SPECPATH (a pasta do .spec), entao subimos um nível aqui.
+PROJECT_ROOT = os.path.abspath(os.path.join(SPECPATH, os.pardir))
 
 a = Analysis(
-    ['main.py'],
+    [os.path.join(PROJECT_ROOT, 'main.py')],
     pathex=[],
     binaries=[],
     datas=[
-        ('images/logo/logo.png', 'images/logo'),
-        ('images/icons/siga-automacao.ico', 'images/icons'),
-        ('images/icons/siga-automacao-32x32.png', 'images/icons'),
+        (os.path.join(PROJECT_ROOT, 'images', 'logo', 'logo.png'), 'images/logo'),
+        (os.path.join(PROJECT_ROOT, 'images', 'icons', 'siga-automacao.ico'), 'images/icons'),
+        (os.path.join(PROJECT_ROOT, 'images', 'icons', 'siga-automacao-32x32.png'), 'images/icons'),
     ],
     hiddenimports=[
         'selenium.webdriver.common.action_chains',
@@ -43,7 +49,7 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
-    icon='images/icons/siga-automacao.ico',
+    icon=os.path.join(PROJECT_ROOT, 'images', 'icons', 'siga-automacao.ico'),
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

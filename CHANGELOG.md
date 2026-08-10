@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-08-10] — Versão 1.7.11
+
+### Corrigido
+- **Build do PyInstaller quebrado após a reorganização em `pré-lixo/`:** `siga-automacao-gui.spec` usava caminhos relativos (`main.py`, `images/...`) que o PyInstaller resolve em relação à pasta do próprio `.spec` (`SPECPATH`), não à raiz do projeto — algo que passou despercebido na v1.7.9 porque o build não havia sido testado após a mudança. Como o `.spec` ficou um nível mais fundo dentro de `pré-lixo/`, o build falhava com `script 'pré-lixo\main.py' not found`. Corrigido calculando a raiz do projeto via `os.path.join(SPECPATH, os.pardir)` e usando-a em `Analysis()` e no `icon` do `EXE()`.
+
 ## [2026-08-10] — Versão 1.7.10
 
 ### Corrigido

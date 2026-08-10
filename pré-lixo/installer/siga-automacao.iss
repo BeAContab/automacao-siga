@@ -1,5 +1,5 @@
 #define MyAppName "SIGA Automacao"
-#define MyAppVersion "1.7.10"
+#define MyAppVersion "1.7.11"
 #define MyAppExeName "siga-automacao-gui.exe"
 
 [Setup]
