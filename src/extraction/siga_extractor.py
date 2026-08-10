@@ -897,7 +897,9 @@ class SigaContributorExtractor:
     def _wait_for_taxpayer_search_result(self, page: Page, document_value: str) -> None:
         """Espera a tabela responder à busca até surgir uma linha correspondente."""
         target_digits = self._normalize_numeric_document(document_value)
-        deadline = time.time() + max(30, self.settings.timeout_ms / 1000)
+        # Teto elevado para tolerar SIGA/rede mais lentos em outras máquinas: um teto curto
+        # já produziu falso "contribuinte não encontrado" quando o resultado só demorou a chegar.
+        deadline = time.time() + max(90, self.settings.timeout_ms / 1000)
         script = """
         (targetDigits) => {
             const digits = (value) => String(value || "").replace(/\\D/g, "");
@@ -963,7 +965,10 @@ class SigaContributorExtractor:
                 if state.get("noResult"):
                     if empty_result_seen_at is None:
                         empty_result_seen_at = time.time()
-                    if time.time() - empty_result_seen_at >= 3:
+                    # Debounce elevado de 3s para 10s: em máquinas com rede/SIGA mais lentos,
+                    # a tabela pode ficar momentaneamente sem linhas e sem skeleton visível
+                    # antes do resultado real chegar, o que gerava falso "não encontrado".
+                    if time.time() - empty_result_seen_at >= 10:
                         self._save_debug_snapshot(page, f"taxpayer-search-empty-{document_value}")
                         raise TaxpayerNotFoundError(
                             f"Nenhum contribuinte foi encontrado para {self._format_cnpj(document_value)}."

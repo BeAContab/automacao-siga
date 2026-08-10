@@ -88,9 +88,17 @@ class SigaPageInspector:
         }
 
     def save_debug_artifacts(self, page: Page, name: str) -> tuple[Path, Path]:
-        """Salva screenshot e HTML quando a página parece estar em estado inválido."""
-        screenshot_path = self.settings.log_dir / f"{name}.png"
-        html_path = self.settings.log_dir / f"{name}.html"
+        """Salva screenshot e HTML quando a página parece estar em estado inválido.
+
+        Os artefatos ficam em uma subpasta "diagnostico" dentro de `settings.output_dir`
+        (que a GUI mantém sincronizado com a pasta da planilha selecionada) em vez da pasta
+        interna `logs/` do app, para que o operador encontre a evidência junto da planilha
+        ao investigar um caso como "contribuinte não encontrado" em outra máquina.
+        """
+        debug_dir = self.settings.output_dir / "diagnostico"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        screenshot_path = debug_dir / f"{name}.png"
+        html_path = debug_dir / f"{name}.html"
         page.screenshot(path=str(screenshot_path), full_page=True)
         html_path.write_text(page.content(), encoding="utf-8")
         LOGGER.info("Captura de depuracao salva em %s e %s", screenshot_path, html_path)

@@ -1,5 +1,13 @@
 # Changelog
 
+## [2026-08-10] — Versão 1.7.10
+
+### Corrigido
+- **Falso "Contribuinte não encontrado" em máquinas com rede/SIGA mais lentos:** `_wait_for_taxpayer_search_result` em `src/extraction/siga_extractor.py` podia declarar um contribuinte como não encontrado antes do resultado real da busca chegar, quando a tabela ficava momentaneamente sem linhas e sem o indicador de carregamento (`skeleton`) visível — janela essa curta demais (3s) em ambientes de rede mais lentos. O debounce foi elevado para 10s e o teto geral de espera da busca, de `max(30, timeout_ms/1000)` para `max(90, timeout_ms/1000)` segundos.
+
+### Alterado
+- **Artefatos de diagnóstico salvos junto da planilha:** `SigaPageInspector.save_debug_artifacts` (`src/utils/siga_page.py`), usado para capturar screenshot/HTML sempre que a automação encontra um estado problemático (ex.: contribuinte não encontrado, página em branco), passa a salvar em uma subpasta `diagnostico/` dentro de `settings.output_dir` — que a GUI mantém sincronizado com a pasta da planilha selecionada — em vez da pasta interna `logs/` do aplicativo. Isso facilita localizar a evidência de um problema relatado em outra máquina.
+
 ## [2026-07-23] — Versão 1.7.9
 
 ### Alterado
