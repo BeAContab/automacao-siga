@@ -3,8 +3,7 @@ from __future__ import annotations
 """Ponto de entrada da automação do SIGA.
 
 Este módulo coordena a leitura dos argumentos e a abertura da interface gráfica
-(a GUI é o único modo de extração suportado; o modo assistido via terminal
-continua disponível separadamente para depuração, ver src/live_assist.py).
+(a GUI é o único modo de extração suportado).
 """
 
 import argparse
@@ -16,18 +15,17 @@ from contextlib import suppress
 from dotenv import load_dotenv
 
 from src.config import Settings
-from src.live_assist import LiveAssistSession
 from src.utils.certificate_policy import (
     ClientCertificate,
     clear_auto_certificate_selection,
     configure_auto_certificate_selection,
 )
 from src.utils.logging_setup import configure_logging
-from src.utils.narration import configure_narration, narrate, narrate_error, narrate_success
+from src.utils.narration import configure_narration, narrate, narrate_error
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Define os argumentos aceitos ao abrir a GUI (ou o modo assistido de depuração)."""
+    """Define os argumentos aceitos ao abrir a GUI."""
     parser = argparse.ArgumentParser(
         description="SIGA automation (GUI mode)."
     )
@@ -97,28 +95,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=300,
         help="Seconds to wait for the authenticated SIGA page after manual login confirmation.",
-    )
-    parser.add_argument(
-        "--live-assist",
-        action="store_true",
-        help="Open SIGA for manual login and keep the browser session ready for assisted commands.",
-    )
-    parser.add_argument(
-        "--live-command",
-        help=(
-            "Execute a live assisted browser command. Supported values: click-text, click-selector, "
-            "click-label, fill-selector, fill-label, press, wait-text, click-coordinates, "
-            "screenshot, download-table, open-month-if-positive, "
-            "request-positive-details, close-browser, show-url, list-pages."
-        ),
-    )
-    parser.add_argument(
-        "--target",
-        help="Target used by the live command, such as text, selector, label, coordinates or key.",
-    )
-    parser.add_argument(
-        "--value",
-        help="Optional value used by live fill commands.",
     )
     parser.add_argument(
         "--spreadsheet",
@@ -213,12 +189,13 @@ def main() -> int:
         use_system_browser_profile=args.system_browser_profile and not args.isolated_browser_profile,
         chrome_profile_directory=args.chrome_profile_directory,
         configure_certificate_policy=not args.skip_certificate_policy,
+        # nfce_cpf/nfce_senha (modo NFC-e) NÃO vêm daqui: são digitados na própria GUI
+        # e ficam só em memória pelo tempo da execução — nunca persistidos em .env/disco.
     )
     configure_logging(settings.log_dir / "run.log")
     # A GUI nao tem um console util para o operador ler; a narracao ali chega pelo
-    # console interno da GUI (ver SigaAutomationGUI.__init__), nao stdout. Só o modo
-    # assistido via terminal (--live-assist/--live-command) roda num console de verdade.
-    configure_narration(settings.log_dir, console=bool(args.live_assist or args.live_command))
+    # console interno da GUI (ver SigaAutomationGUI.__init__), nao stdout.
+    configure_narration(settings.log_dir, console=False)
 
     # Este modo apenas limpa a política de certificado e encerra.
     if args.clear_certificate_policy:
@@ -248,23 +225,6 @@ def main() -> int:
             elif certificate_policy.reg_file_path:
                 print("Não foi possível gravar a política de certificado automaticamente.")
                 print(f"Arquivo .reg gerado para aplicação manual: {certificate_policy.reg_file_path}")
-
-        # O modo assistido reaproveita a infraestrutura de navegador, mas deixa a ação manual guiada.
-        if args.live_assist or args.live_command:
-            session = LiveAssistSession(settings)
-            if args.live_assist:
-                result = session.start()
-                narrate_success("Sessão assistida pronta.")
-                narrate("Página atual: %s", result.page_title)
-                narrate("URL atual: %s", result.final_url)
-                narrate("Envie o próximo passo no chat e eu executo conectando no mesmo navegador.")
-                return 0
-
-            result = session.execute_command(args.live_command, target=args.target, value=args.value)
-            narrate(result.description)
-            narrate("Página atual: %s", result.page_title)
-            narrate("URL atual: %s", result.current_url)
-            return 0
 
         # A GUI é o único modo de extração suportado.
         return run_gui_mode(settings, args.spreadsheet, args.month[0] if args.month else None, args.year)

@@ -3,4 +3,5 @@ openpyxl==3.1.5
 python-dotenv==1.1.1
 pyinstaller==6.20.0
 fpdf2==2.8.2
+undetected-chromedriver==3.5.5
 

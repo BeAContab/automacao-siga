@@ -46,6 +46,39 @@ class Settings:
     remote_debugging_port: int = 9222
     browser_start_timeout_ms: int = 15_000
 
+    # --- Modo NFC-e (item 8): portagem de importação/NFCE/codigo-fonte/xml nfce.py ---
+    nfce_login_url: str = "https://servicos.sefaz.ce.gov.br/internet/acessoseguro/servicosenha/logarusuario/login.asp"
+    nfce_empresas_url: str = "https://servicos.sefaz.ce.gov.br/internet/acessoSeguro/EMPRESASDOCPF/CWEB2010.ASP?SSE=104&Destino=MFe%2FRedirJavaMFe%2Easp"
+    nfce_logout_url: str = "https://servicos.sefaz.ce.gov.br/internet/acessoSeguro/ServicoSenha/EncerrarSessao/cweb2005.asp"
+    # Credenciais nunca hardcoded nem persistidas: a GUI as preenche em runtime a partir
+    # do que o usuário digita na tela (src/gui.py, nfce_cpf_var/nfce_senha_var), só em
+    # memória pelo tempo da execução — nunca gravadas em .env, planilha ou log.
+    nfce_cpf: str | None = None
+    nfce_senha: str | None = None
+    # Sem default de rede (ex.: Y:\...) — selecionável pelo usuário, como qualquer planilha.
+    nfce_base_spreadsheet_path: Path | None = None
+    # Pasta com uma planilha de chaves de 44 dígitos por empresa (nome do arquivo
+    # contendo o CNPJ), usada para resolver quais chaves buscar por empresa.
+    nfce_keys_folder_path: Path | None = None
+    nfce_session_renewal_seconds: int = 480
+    nfce_session_renewal_check_every_n_keys: int = 40
+    nfce_batch_max_keys: int = 300
+    nfce_session_recovery_wait_seconds: int = 240
+
+    # --- Modo NF-e (Meu DANFE): portagem de importação/NFE 2/automacao-meu-danfe/main.py ---
+    # Site público de terceiros (consulta por chave de acesso, sem login/credenciais).
+    nf_meudanfe_url: str = "https://meudanfe.com.br/"
+    # Caminho opcional do chrome.exe; None deixa o undetected_chromedriver localizar sozinho.
+    nf_meudanfe_chrome_path: Path | None = None
+    # Pasta com as planilhas .xlsx contendo a coluna "Chave NF-e" (ex.: a própria pasta de
+    # saída do modo SIGA, já que o detalhamento de NF-e do SIGA tem essa mesma coluna).
+    nf_meudanfe_input_folder: Path | None = None
+    # 1 a 4 instâncias de Chrome em paralelo (undetected_chromedriver, uma por worker);
+    # limitado a 4 mesmo que o usuário configure mais, para reduzir risco de bloqueio anti-bot.
+    nf_meudanfe_max_workers: int = 1
+    nf_meudanfe_captcha_timeout_seconds: int = 180
+    nf_meudanfe_download_timeout_seconds: int = 45
+
     def ensure_runtime_dirs(self) -> None:
         """Garante que os diretórios de runtime existam antes da execução começar."""
         self.browser_profile_dir.mkdir(parents=True, exist_ok=True)

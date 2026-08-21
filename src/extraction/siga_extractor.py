@@ -77,6 +77,7 @@ class PendingDetailRequest:
     month_reference: str
     taxpayer_folder_name: str
     row_number: int
+    output_basename: str | None = None
 
 
 @dataclass(slots=True)
@@ -664,6 +665,7 @@ class SigaContributorExtractor:
         taxpayer_document: str,
         taxpayer_folder_name: str,
         row_number: int = 0,
+        output_basename: str | None = None,
     ) -> PendingDetailRequest:
         """Cria uma solicitacao com chave unica para nao misturar downloads de CNPJs diferentes."""
         request_key = "|".join(
@@ -686,6 +688,7 @@ class SigaContributorExtractor:
             month_reference=month_reference,
             taxpayer_folder_name=taxpayer_folder_name,
             row_number=row_number,
+            output_basename=output_basename,
         )
 
     def _normalize_selected_tabs(self, selected_tabs: list[str] | None) -> set[str]:
@@ -1257,6 +1260,7 @@ class SigaContributorExtractor:
     def _open_fiscal_information(self, page: Page) -> None:
         """Entra na área de informações fiscais antes de escolher a aba de documento."""
         LOGGER.info("Abrindo Informações Fiscais")
+        narrate("Abrindo a área de Informações Fiscais...")
         self._ensure_side_menu_open(page)
         if self._click_xpath(
             page,
@@ -1813,8 +1817,19 @@ class SigaContributorExtractor:
         raise TimeoutError(f"Nao foi possivel localizar o mes de referencia {month_reference}.")
 
     def _wait_for_detail_xlsx_button_ready(self, page: Page) -> Locator:
-        """Espera o splitbutton de detalhamento renderizar e ficar clicavel antes do clique."""
+        """Espera o splitbutton de detalhamento renderizar e ficar clicavel antes do clique.
+
+        Quando o resumo ("1. Indicadores por Mês") e o detalhamento ("2. Detalhamento ...")
+        estão ambos na tela — o caso normal, já que o resumo é baixado antes do detalhamento
+        no mesmo fluxo —, os dois têm um botão "Baixar Tabela (XLSX)" idêntico. O botão do
+        detalhamento é sempre o ÚLTIMO em ordem de DOM (a seção "2." vem depois da "1.");
+        pegar o primeiro candidato pronto clicava sempre no resumo, nunca no detalhamento
+        (confirmado ao vivo em 20/08/2026, CNPJ 19.412.918/0001-76 — nenhum arquivo de
+        detalhamento nunca era gerado para esse CNPJ, e o "não localizado" na Central de
+        Downloads era, na verdade, um relatório que nunca chegou a ser solicitado de verdade).
+        """
         LOGGER.info("Aguardando o botão de detalhamento Baixar Tabela (XLSX) ficar pronto")
+        narrate("Aguardando o botão de detalhamento ficar disponível...")
         deadline = time.time() + 35
         candidates = (
             page.locator(
@@ -1823,6 +1838,30 @@ class SigaContributorExtractor:
             page.locator("xpath=//button[contains(@class,'p-splitbutton-defaultbutton')]"),
             page.get_by_role("button", name=re.compile(r"Baixar Tabela\s*\(XLSX\)", re.IGNORECASE)),
         )
+
+        def last_ready_candidate() -> tuple[Locator | None, Error | None]:
+            """Retorna o último candidato visível/habilitado da primeira estratégia que achar
+            algo — as três estratégias são alternativas redundantes, não complementares."""
+            error: Error | None = None
+            for locator in candidates:
+                try:
+                    count = locator.count()
+                except Error as exc:
+                    error = exc
+                    continue
+
+                found: Locator | None = None
+                for index in range(count):
+                    candidate = locator.nth(index)
+                    try:
+                        if candidate.is_visible() and candidate.is_enabled():
+                            found = candidate
+                    except Error as exc:
+                        error = exc
+                        continue
+                if found is not None:
+                    return found, error
+            return None, error
 
         last_error: Error | None = None
         last_status: str | None = None
@@ -1833,38 +1872,16 @@ class SigaContributorExtractor:
                 LOGGER.info("Estado do botão de detalhamento: %s", status_text)
                 last_status = status_text
             if status.get("ready"):
-                for locator in candidates:
-                    try:
-                        count = locator.count()
-                    except Error as exc:
-                        last_error = exc
-                        continue
+                candidate, error = last_ready_candidate()
+                last_error = error or last_error
+                if candidate is not None:
+                    LOGGER.info("Botão Baixar Tabela (XLSX) pronto para clique")
+                    return candidate
 
-                    for index in range(count):
-                        candidate = locator.nth(index)
-                        try:
-                            if candidate.is_visible() and candidate.is_enabled():
-                                LOGGER.info("Botão Baixar Tabela (XLSX) pronto para clique")
-                                return candidate
-                        except Error as exc:
-                            last_error = exc
-                            continue
-
-            for locator in candidates:
-                try:
-                    count = locator.count()
-                except Error as exc:
-                    last_error = exc
-                    continue
-
-                for index in range(count):
-                    candidate = locator.nth(index)
-                    try:
-                        if candidate.is_visible() and candidate.is_enabled():
-                            return candidate
-                    except Error as exc:
-                        last_error = exc
-                        continue
+            candidate, error = last_ready_candidate()
+            last_error = error or last_error
+            if candidate is not None:
+                return candidate
 
             page.wait_for_timeout(500)
 
@@ -1942,6 +1959,7 @@ class SigaContributorExtractor:
 
     def _select_positive_reports(self, page: Page) -> list[str]:
         LOGGER.info("Selecionando relatórios com QTD maior que zero")
+        narrate("Selecionando os relatórios com movimento (quantidade maior que zero)...")
         reports = ("Interna", "Interestadual", "Externa")
         metrics = self._collect_indicator_metrics(page, reports)
         selected_reports: list[str] = []
@@ -2234,10 +2252,73 @@ class SigaContributorExtractor:
         basename: str,
         document_tab: str,
     ) -> Path:
-        return self._capture_direct_download(page, cgf, month_reference, taxpayer_folder_name, basename, document_tab)
+        # O botão "Baixar Tabela" do resumo é assíncrono, igual a Malha Fiscal e Débitos
+        # Fiscais: o clique só enfileira a solicitação na Central de Downloads ("Downloads"),
+        # nunca dispara um download real no navegador. Confirmado ao vivo em 20/08/2026
+        # (CNPJ 04.419.796/0001-72, aba NF-e): o clique mostra o mesmo toast "A solicitação
+        # de download foi realizada com sucesso" do Malha Fiscal, e a solicitação aparece
+        # como "Concluído" na Central de Downloads em segundos — sem nenhum evento de
+        # download real do navegador. Por isso não faz sentido esperar por
+        # page.expect_download(): isso só desperdiçava minutos por perfil (2 tentativas de
+        # 90s) até cair no único caminho que de fato funciona.
+        self._click_summary_download_button(page)
+        if not self._wait_for_download_request_toast(page):
+            LOGGER.warning(
+                "Nao recebi a confirmacao de solicitacao de download para %s; "
+                "seguindo para a Central de Downloads mesmo assim.",
+                basename,
+            )
+        # A Central de Downloads rotula a solicitação do resumo como "Informações Fiscais -
+        # {aba} - Indicadores - {ano}" — sem Emissor/Destinatário/Tomador no TELA/ABA (isso só
+        # aparece em FILTROS APLICADOS/"Visão", uma coluna separada). Confirmado ao vivo em
+        # 20/08/2026 (CNPJ 04.419.796/0001-72, NF-e/Emissor). Usar o nome interno do arquivo
+        # (ex. "resumo-emissor") como tela_aba, como antes, nunca batia com a linha real —
+        # toda solicitação de resumo falhava silenciosamente e caía no aviso "não localizado".
+        # `output_basename` mantém o nome de arquivo final curto de sempre, já que ele não
+        # precisa (nem deve) ser o texto usado para localizar a linha na Central.
+        reference_year = self._resolve_selected_year_from_page(page)
+        tela_aba = f"Informacoes Fiscais - {document_tab} - Indicadores - {reference_year}"
+        requested_after = datetime.now() - timedelta(seconds=30)
+        request = self._build_pending_request(
+            cgf=cgf,
+            month_reference=month_reference,
+            document_tab=document_tab,
+            profile_name="unknown",
+            summary_path=Path("."),
+            report_name=basename,
+            tela_aba=tela_aba,
+            requested_after=requested_after,
+            taxpayer_document=self._current_taxpayer_document(page),
+            taxpayer_folder_name=taxpayer_folder_name,
+            output_basename=basename,
+        )
+        detail_paths = self._download_pending_detail_requests(page, [request])
+        return detail_paths[request.request_key]
+
+    def _wait_for_download_request_toast(self, page: Page, timeout_seconds: int = 30) -> bool:
+        """Aguarda o toast de confirmação assíncrona que a Central de Downloads do SIGA
+        usa para todo relatório em lote (Malha Fiscal, Débitos Fiscais e os resumos de
+        NF-e/NFC-e/CT-e): "A solicitação de download foi realizada com sucesso"."""
+        import time as _time
+
+        toast_messages = (
+            "solicitacao de download foi realizada",
+            "solicitacao de download ja foi realizada",
+        )
+        deadline = _time.time() + timeout_seconds
+        while _time.time() < deadline:
+            try:
+                body_text = strip_accents(page.locator("body").inner_text(timeout=3_000)).lower()
+                if any(msg in body_text for msg in toast_messages):
+                    return True
+            except Exception:  # noqa: BLE001
+                pass
+            page.wait_for_timeout(500)
+        return False
 
     def _click_download_table_button(self, page: Page) -> None:
         LOGGER.info("Clicando em Baixar Tabela")
+        narrate("Clicando em Baixar Tabela...")
         self._click_text_action(
             page,
             names=("Baixar Tabela",),
@@ -2250,6 +2331,7 @@ class SigaContributorExtractor:
         target = self._find_download_button(page, expected_index=0)
         if target is not None:
             LOGGER.info("Clicando no botão de download do resumo")
+            narrate("Clicando no botão de download do resumo...")
             target.click()
             page.wait_for_timeout(750)
             return
@@ -2306,6 +2388,7 @@ class SigaContributorExtractor:
             const buttons = [...document.querySelectorAll(
                 "button.p-element.p-splitbutton-defaultbutton.p-button.p-component.ng-star-inserted, button.p-splitbutton-defaultbutton"
             )];
+            let lastReady = null;
             for (const button of buttons) {
                 const text = normalize(
                     button.innerText || button.textContent || button.getAttribute("aria-label") || button.getAttribute("title")
@@ -2321,10 +2404,21 @@ class SigaContributorExtractor:
                     && button.getAttribute("aria-disabled") !== "true";
 
                 if (text.includes("baixar tabela") && text.includes("xlsx") && ready) {
-                    button.scrollIntoView({block: "center", inline: "center"});
-                    button.click();
-                    return true;
+                    // Quando o resumo ("1. Indicadores por Mês") e o detalhamento
+                    // ("2. Detalhamento ...") estão ambos na tela, os dois têm um botão
+                    // "Baixar Tabela (XLSX)" idêntico. O do detalhamento é sempre o ÚLTIMO em
+                    // ordem de DOM (a seção "2." vem depois da "1."); pegar o primeiro clicava
+                    // sempre no resumo, nunca no detalhamento (confirmado ao vivo em
+                    // 20/08/2026, CNPJ 19.412.918/0001-76 — nenhum arquivo de detalhamento
+                    // nunca era gerado, e o "não localizado" na Central de Downloads era, na
+                    // verdade, um relatório que nunca chegou a ser solicitado de verdade).
+                    lastReady = button;
                 }
+            }
+            if (lastReady) {
+                lastReady.scrollIntoView({block: "center", inline: "center"});
+                lastReady.click();
+                return true;
             }
             return false;
         }
@@ -2333,67 +2427,6 @@ class SigaContributorExtractor:
             return bool(page.evaluate(script))
         except Error:
             return False
-
-    def _capture_direct_download(
-        self,
-        page: Page,
-        cgf: str,
-        month_reference: str,
-        taxpayer_folder_name: str,
-        basename: str,
-        document_tab: str,
-    ) -> Path:
-        attempts = max(1, self.settings.download_retry_count)
-        last_error: TimeoutError | None = None
-
-        # O download direto recebe uma segunda chance antes de cair para a Central de Downloads.
-        for attempt in range(1, attempts + 1):
-            try:
-                with page.expect_download(timeout=self.settings.download_wait_timeout_ms) as download_info:
-                    self._click_summary_download_button(page)
-                download = download_info.value
-                return self._save_download(download, taxpayer_folder_name, month_reference, basename, document_tab)
-            except TimeoutError as exc:
-                last_error = exc
-                if attempt < attempts:
-                    LOGGER.warning(
-                        "O download direto para %s nao iniciou na tentativa %s/%s; tentando novamente em %s ms.",
-                        basename,
-                        attempt,
-                        attempts,
-                        self.settings.download_retry_delay_ms,
-                    )
-                    page.wait_for_timeout(self.settings.download_retry_delay_ms)
-                    continue
-
-        LOGGER.info("O download direto nao iniciou apos %s tentativa(s) para %s", attempts, basename)
-        if last_error is not None:
-            LOGGER.debug("Ultimo erro do download direto para %s: %s", basename, last_error)
-        return self._download_from_download_center(page, cgf, month_reference, taxpayer_folder_name, basename, document_tab)
-
-    def _download_from_download_center(
-        self,
-        page: Page,
-        cgf: str,
-        month_reference: str,
-        taxpayer_folder_name: str,
-        basename: str,
-        document_tab: str,
-    ) -> Path:
-        request = self._build_pending_request(
-            cgf=cgf,
-            month_reference=month_reference,
-            document_tab=document_tab,
-            profile_name="unknown",
-            summary_path=Path("."),
-            report_name=basename,
-            tela_aba=basename,
-            requested_after=datetime.min,
-            taxpayer_document=self._current_taxpayer_document(page),
-            taxpayer_folder_name=taxpayer_folder_name,
-        )
-        detail_paths = self._download_pending_detail_requests(page, [request])
-        return detail_paths[request.request_key]
 
     def _download_pending_detail_requests(
         self,
@@ -2547,7 +2580,15 @@ class SigaContributorExtractor:
         # seguintes varrem menos alvos (e param de paginar mais cedo) enquanto o restante ainda
         # esta em processamento no SIGA.
         resolved_matches: dict[str, DownloadRowMatch] = {}
-        latest_matches: dict[str, DownloadRowMatch] = {}
+        # Acumula o MELHOR match ja visto em QUALQUER ciclo, mesmo os nao "preferidos" -- o SIGA
+        # reaproveita a mesma linha, com o timestamp ORIGINAL, ao reabrir um relatorio ja gerado
+        # no mesmo dia (confirmado ao vivo para Malha Fiscal/Debitos Fiscais: `requested_at` fica
+        # muito anterior ao clique desta execucao, entao `preferred` nunca fica True). Sem esse
+        # acumulo, um item corretamente encontrado num ciclo intermediario "sumia" do resultado
+        # final se um ciclo seguinte, por instabilidade da varredura (reload + re-selecao do
+        # tamanho de pagina), nao o visse de novo -- o resultado final so olhava para a ultima
+        # varredura, descartando o melhor resultado ja confirmado.
+        best_matches_ever: dict[str, DownloadRowMatch] = {}
         all_settled = False
 
         while time.time() < deadline:
@@ -2563,9 +2604,9 @@ class SigaContributorExtractor:
             # forem avistadas, pois aqui so precisamos saber se algo ainda esta em processamento.
             cycle_matches, processing_counts = self._scan_downloads_table_once(page, pending_targets)
             for request_key, match in cycle_matches.items():
+                self._store_best_download_match(best_matches_ever, match)
                 if match.preferred:
                     resolved_matches[request_key] = match
-            latest_matches = {**resolved_matches, **cycle_matches}
 
             waiting_keys = [
                 key
@@ -2592,20 +2633,25 @@ class SigaContributorExtractor:
         if all_settled:
             # Antes de retornar, faz uma varredura completa (sem parada antecipada) com todos os
             # alvos originais, para garantir a resolucao de duplicatas em paginas posteriores,
-            # independentemente da ordenacao da Central de Downloads.
-            latest_matches, _ = self._scan_downloads_table_once(page, targets, full_scan=True)
-            missing_keys = sorted(target_keys - set(latest_matches.keys()))
+            # independentemente da ordenacao da Central de Downloads. O resultado se junta ao
+            # melhor match ja visto em ciclos anteriores (nao substitui): se esta varredura final
+            # nao reencontrar algo que um ciclo anterior ja tinha achado com confianca, o match
+            # anterior sobrevive em vez de ser perdido.
+            final_scan_matches, _ = self._scan_downloads_table_once(page, targets, full_scan=True)
+            for match in final_scan_matches.values():
+                self._store_best_download_match(best_matches_ever, match)
+            missing_keys = sorted(target_keys - set(best_matches_ever.keys()))
             if missing_keys:
                 LOGGER.warning(
                     "Downloads nao localizados apos a varredura completa: %s",
                     ", ".join(self._pending_request_labels(targets, missing_keys)),
                 )
-        elif latest_matches:
+        elif best_matches_ever:
             LOGGER.warning(
                 "A Central de Downloads expirou antes de concluir todas as linhas pendentes; usando os matches encontrados ate agora."
             )
 
-        return latest_matches
+        return best_matches_ever
 
     def _nudge_session_activity(self, page: Page) -> None:
         """Simula uma pequena interacao do usuario (Page Down/Page Up) para evitar que a sessao
@@ -2910,14 +2956,25 @@ class SigaContributorExtractor:
         matches: dict[str, DownloadRowMatch],
         processing_counts: dict[str, int],
     ) -> list[str]:
-        """Se houver linha mais nova em processamento, evitamos cair cedo no fallback antigo."""
+        """Se houver linha mais nova em processamento, evitamos cair cedo no fallback antigo.
+
+        Tambem esperamos por uma solicitacao que ainda nao apareceu como NENHUMA linha na
+        Central de Downloads. Relatorios de detalhamento pesados (centenas de notas) podem
+        levar minutos so para o SIGA inserir a linha, nao so para conclui-la — a ausencia de
+        status "processando" nao significa que a solicitacao nunca vai aparecer, so que ela
+        ainda esta numa fila anterior a virar linha visivel. Sem isso, uma solicitacao feita
+        segundos antes da varredura final do lote (ex.: o ultimo CNPJ processado) e tratada
+        como "nao localizada" so porque nunca chegou a ser vista em nenhum estado, quando na
+        verdade só precisava de mais alguns ciclos de espera dentro do mesmo timeout ja
+        configurado (`download_wait_timeout_ms`).
+        """
         waiting_keys: list[str] = []
         for target in targets:
             request_key = target.request.request_key
-            if processing_counts.get(request_key, 0) <= 0:
-                continue
             current_match = matches.get(request_key)
-            if current_match is None or not current_match.preferred:
+            if current_match is not None and current_match.preferred:
+                continue
+            if processing_counts.get(request_key, 0) > 0 or current_match is None:
                 waiting_keys.append(request_key)
         return sorted(waiting_keys)
 
@@ -2933,7 +2990,7 @@ class SigaContributorExtractor:
 
         for target in targets:
             request_key = target.request.request_key
-            basename = self._build_download_output_basename(target.request.tela_aba)
+            basename = self._download_output_basename(target.request)
             match = matches.get(request_key)
             if match is None:
                 detail_paths[request_key] = self._save_unavailable_download_notice(
@@ -3062,7 +3119,7 @@ class SigaContributorExtractor:
                 request_key = target.request.request_key
                 if request_key in detail_paths:
                     continue
-                basename = self._build_download_output_basename(target.request.tela_aba)
+                basename = self._download_output_basename(target.request)
                 detail_paths[request_key] = self._save_unavailable_download_notice(
                     cgf=target.request.taxpayer_cnpj,
                     month_reference=target.request.month_reference,
@@ -3094,7 +3151,7 @@ class SigaContributorExtractor:
                     f"Nao foi possivel reencontrar a linha '{target.request.tela_aba}' na pagina {match.page_number}."
                 )
 
-            basename = self._build_download_output_basename(target.request.tela_aba)
+            basename = self._download_output_basename(target.request)
             try:
                 with page.expect_download(timeout=self.settings.download_wait_timeout_ms) as download_info:
                     self._click_download_action(row, page=page, tela_aba=target.request.tela_aba)
@@ -3333,6 +3390,15 @@ class SigaContributorExtractor:
         if self._normalize_download_target(tela_aba).endswith(" - autorizadas"):
             basename = basename[: -len(" - Autorizadas")]
         return basename
+
+    def _download_output_basename(self, request: PendingDetailRequest) -> str:
+        """Nome final do arquivo: usa `output_basename` quando o texto de busca na Central
+        de Downloads (`tela_aba`) precisa ser mais descritivo do que o nome de arquivo
+        desejado (ex.: o resumo usa "Informacoes Fiscais - NF-e - Indicadores - 2026" para
+        casar com a linha real, mas o arquivo continua se chamando "resumo-emissor")."""
+        if request.output_basename:
+            return request.output_basename
+        return self._build_download_output_basename(request.tela_aba)
 
     def _find_visible_download_row_on_current_page(
         self,
@@ -3764,14 +3830,20 @@ class SigaContributorExtractor:
 
         Para abas especiais (malha fiscal, debitos fiscais) os requisitos de
         "informacoes fiscais" e "detalhamento" são ignorados, pois elas possuem
-        títulos próprios na Central de Downloads.
+        títulos próprios na Central de Downloads. O resumo ("Indicadores") também não tem
+        "detalhamento" no título (só a versão detalhada tem), então exige "indicadores" no
+        lugar em vez de dispensar toda validação.
         """
         special_tabs = ("malha fiscal", "malha-fiscal", "debitos fiscais", "debitos-fiscais")
         is_special_tab = match_fragments.get("tab") in special_tabs or any(
             s in row_text_ascii for s in ("malha fiscal", "malha-fiscal", "debitos fiscais", "debitos-fiscais")
         )
+        is_indicadores = bool(match_fragments.get("indicadores"))
 
-        if not is_special_tab:
+        if is_indicadores:
+            if "indicadores" not in row_text_ascii:
+                return False
+        elif not is_special_tab:
             # Validações estritas apenas para abas do fluxo padrão
             if "informacoes fiscais" not in row_text_ascii:
                 return False
@@ -3866,12 +3938,23 @@ class SigaContributorExtractor:
             if detail_match.lastindex and detail_match.group(3):
                 detail = detail_match.group(3).strip()
 
+        # O resumo ("Baixar Tabela" fora do detalhamento) não tem "Detalhamento X de YYYY"
+        # no título — só "Indicadores - YYYY" — então precisa do próprio ano extraído aqui.
+        indicadores = ""
+        if "indicadores" in target_clean:
+            indicadores = "indicadores"
+            if not year:
+                indicadores_year_match = re.search(r"indicadores\D*(\d{4})", normalized_target, re.IGNORECASE)
+                if indicadores_year_match:
+                    year = indicadores_year_match.group(1)
+
         return {
             "tab": tab,
             "view": view,
             "month": month,
             "year": year,
             "detail": detail,
+            "indicadores": indicadores,
         }
 
     def _taxpayer_base_key(self, taxpayer_document: str) -> str:
