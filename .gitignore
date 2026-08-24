@@ -1,10 +1,16 @@
 # Other
 teste-navegador
 .venv/
+# Dependências de build da interface (Tailwind). Só de build: o app carrega o CSS/JS
+# já compilado em src/web_dist/, que É versionado.
+web/node_modules/
 __pycache__/
 *.py[cod]
 build/
 dist/
+# Saídas alternativas do PyInstaller usadas para validar o spec sem sobrescrever dist/
+build-webui/
+dist-webui/
 .browser-profile/
 browser-debug-profile/
 chrome-live-profile/

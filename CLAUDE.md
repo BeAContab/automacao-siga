@@ -4,7 +4,7 @@ Este arquivo fornece orientações ao Claude Code (claude.ai/code) para trabalha
 
 ## Visão geral do projeto
 
-O SIGA Automação é uma ferramenta desktop para Windows (Python + Selenium) que automatiza a extração em lote de documentos fiscais (NF-e, NFC-e, CT-e, Malha Fiscal, Débitos Fiscais) do portal SIGA da SEFAZ-CE (Secretaria da Fazenda do Estado do Ceará). A ferramenta controla um navegador real (Chrome/Edge) via CDP, permite que o usuário faça login manualmente (inclusive com certificado digital) e então percorre o portal por CNPJ, solicitando e baixando os relatórios, organizando a saída em pastas `COD - EMPRESA - CNPJ`. **A GUI em Tkinter é a única interface de extração suportada** (o antigo modo de lote via terminal foi descontinuado). Consulte [README.md](README.md) para a descrição completa do produto. **Nota:** os specs de empacotamento (`.spec` do PyInstaller e `.iss` do Inno Setup) e o PRD foram removidos do repositório (pasta `pré-lixo/` inteira apagada) — hoje não há caminho pronto para gerar `.exe`/instalador; se for necessário empacotar de novo, esses arquivos precisam ser recriados do zero (ver histórico do git antes da remoção para referência de como eram estruturados).
+O SIGA Automação é uma ferramenta desktop para Windows (Python + Selenium) que automatiza a extração em lote de documentos fiscais (NF-e, NFC-e, CT-e, Malha Fiscal, Débitos Fiscais) do portal SIGA da SEFAZ-CE (Secretaria da Fazenda do Estado do Ceará). A ferramenta controla um navegador real (Chrome/Edge) via CDP, permite que o usuário faça login manualmente (inclusive com certificado digital) e então percorre o portal por CNPJ, solicitando e baixando os relatórios, organizando a saída em pastas `COD - EMPRESA - CNPJ`. **A GUI é a única interface de extração suportada** (o antigo modo de lote via terminal foi descontinuado) e, desde a v2.0.0, é uma interface **pywebview** (HTML/CSS/JS renderizado pelo WebView2 do Edge) — a antiga GUI Tkinter (`src/gui.py`) foi removida. Consulte [README.md](README.md) para a descrição completa do produto. **Nota:** o `.spec` do PyInstaller foi recriado na v2.0.0 (`siga-automacao.spec`); o `.iss` do Inno Setup continua ausente (removido junto com `pré-lixo/`), então há caminho para gerar `.exe`, mas não para gerar instalador.
 
 ## Comandos
 
@@ -15,18 +15,34 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Executar a GUI Tkinter (ponto de entrada único):
+Compilar a interface (só é necessário na primeira vez ou ao alterar `web/`):
+```
+cd web && npm install && cd ..
+python web/build.py
+```
+`web/build.py` compila o Tailwind e copia HTML/JS/fontes para `src/web_dist/`, que é a **única** pasta lida em tempo de execução. Node é dependência apenas de build; o app e o `.exe` nunca precisam dele. Durante o desenvolvimento da interface, `python web/build.py --watch` recompila o CSS a cada alteração.
+
+Executar a GUI (ponto de entrada único):
 ```
 python main.py
 # Também aceita prefill de dados via flags:
 python main.py [--spreadsheet path.xlsx] [--month Junho] [--year 2026]
+# DevTools do WebView2 (F12) para depurar a interface:
+python main.py --webui-debug
 ```
 
-Flags úteis de `main.py` (ver `build_parser()` em [src/main.py](src/main.py)) — servem para pré-preencher a GUI ou ajustar o ambiente do navegador, não para rodar um modo alternativo de extração: `--spreadsheet`/`--month`/`--year` (pré-preenchem a GUI), `--headless`, `--browser-channel chrome|msedge`, `--connect-browser-url`, `--disable-attach`, `--reset-browser-profile`, `--force-restart-browser`, `--system-browser-profile` / `--isolated-browser-profile`, `--chrome-profile-directory`, `--skip-certificate-policy`, `--clear-certificate-policy`, `--manual-login-timeout`.
+Flags úteis de `main.py` (ver `build_parser()` em [src/main.py](src/main.py)) — servem para pré-preencher a GUI ou ajustar o ambiente do navegador, não para rodar um modo alternativo de extração: `--spreadsheet`/`--month`/`--year` (pré-preenchem a GUI), `--webui-debug`, `--headless`, `--browser-channel chrome|msedge`, `--connect-browser-url`, `--disable-attach`, `--reset-browser-profile`, `--force-restart-browser`, `--system-browser-profile` / `--isolated-browser-profile`, `--chrome-profile-directory`, `--skip-certificate-policy`, `--clear-certificate-policy`, `--manual-login-timeout`.
 
-Não há suíte de testes automatizados (sem configuração de pytest/unittest) nem script de validação manual/ao vivo — `pré-lixo/testes/run_test_live.py` foi removido junto com o resto de `pré-lixo/`. Validação hoje é manual: rodar `python main.py` e exercitar a GUI diretamente.
+Não há suíte de testes automatizados (sem configuração de pytest/unittest). Validação hoje é manual: rodar `python main.py` e exercitar a GUI diretamente. Erros de JavaScript da interface caem em `logs/run.log` (via `Api.report_client_error`), então não é preciso abrir o DevTools para descobrir que algo quebrou na camada de apresentação.
 
-Não há build de executável/instalador configurado no momento — `siga-automacao-gui.spec` (PyInstaller) e `installer/siga-automacao.iss` (Inno Setup) foram removidos junto com `pré-lixo/`. Para gerar `.exe`/instalador de novo, é preciso recriar esses arquivos (ver commits anteriores à remoção para referência).
+Gerar o executável (`siga-automacao.spec`, recriado na v2.0.0):
+```
+python web/build.py
+pyinstaller siga-automacao.spec
+```
+A ordem importa: o spec empacota `src/web_dist/` como está, então a interface precisa ter sido compilada antes. Não há mais `.iss` do Inno Setup — o instalador continua sem caminho pronto (removido junto com `pré-lixo/`).
+
+Requisito de runtime da interface: **Microsoft Edge WebView2 Runtime**, que acompanha o Windows 11 e o Windows 10 atualizado. Em máquina sem ele, o app não abre a janela e mostra uma mensagem explicativa em português (ver `_report_startup_failure` em [src/webui/app.py](src/webui/app.py)) em vez de um erro cru.
 
 ## Arquitetura
 

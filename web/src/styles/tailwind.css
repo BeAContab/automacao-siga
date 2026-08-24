@@ -1,0 +1,164 @@
+/*
+ * Folha de estilo de entrada do SIGA Automacao.
+ *
+ * Compilada por `npm run build:css` (web/package.json) para src/web_dist/styles.css,
+ * que e o unico CSS que o app carrega em tempo de execucao. Nada aqui depende de CDN:
+ * as fontes ficam vendorizadas em web/src/styles/fonts/ (ver fonts.css), para o app
+ * funcionar identico numa maquina sem internet.
+ */
+
+/* Fontes vendorizadas (Inter, JetBrains Mono, Material Symbols Outlined). */
+@import './fonts.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /*
+   * Nivel 0 do sistema de elevacao (ver design/accounting_automation_suite/DESIGN.md):
+   * o fundo da aplicacao e cinza, e as superficies/cards e que sao brancos.
+   */
+  body {
+    background-color: #f4f6f7;
+  }
+
+  /*
+   * O atributo [hidden] precisa vencer as classes de display do Tailwind.
+   * A regra padrao do navegador ([hidden]{display:none}) tem a mesma especificidade
+   * que .flex/.grid/.block, entao um elemento com class="flex" + hidden continuaria
+   * visivel. Como a troca de modo e a troca de abas dependem inteiramente de [hidden],
+   * isso deixaria as tres telas empilhadas na mesma pagina.
+   */
+  [hidden] {
+    display: none !important;
+  }
+
+  /* Icones Material Symbols - regra que normalmente vem junto do CSS do Google. */
+  .material-symbols-outlined {
+    font-family: 'Material Symbols Outlined';
+    font-weight: normal;
+    font-style: normal;
+    font-size: 24px;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    display: inline-block;
+    white-space: nowrap;
+    word-wrap: normal;
+    direction: ltr;
+    -webkit-font-feature-settings: 'liga';
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+
+  /*
+   * Desktop app, nao pagina web: o usuario nunca deve conseguir selecionar texto de
+   * chrome/labels por acidente ao clicar. Campos de texto e o console (onde copiar o
+   * log e util) reabilitam a selecao logo abaixo.
+   */
+  body {
+    user-select: none;
+    cursor: default;
+  }
+
+  input,
+  textarea,
+  select,
+  .selectable {
+    user-select: text;
+  }
+}
+
+@layer components {
+  /* --- Cards e superficies (nivel 1: branco + borda de 1px, sem sombra) --- */
+  .siga-card {
+    background-color: #ffffff;
+    border: 1px solid #dde3e5;
+  }
+
+  /* --- Tabelas: cabecalho petroleo, linhas zebradas --- */
+  .siga-table-header {
+    background-color: #3c5464;
+    color: #ffffff;
+  }
+
+  .table-zebra tbody tr:nth-child(even) {
+    background-color: #f9fafa;
+  }
+
+  .table-zebra tbody tr:nth-child(odd) {
+    background-color: #ffffff;
+  }
+
+  /* --- Campos de formulario: borda slate, foco petroleo com glow interno --- */
+  .siga-form-field {
+    border: 1px solid #84949c;
+  }
+
+  .siga-form-field:focus {
+    border-color: #3c5464;
+    outline: none;
+    box-shadow: inset 0 0 0 1px #3c5464;
+  }
+
+  .siga-form-field:disabled {
+    background-color: #f2f4f5;
+    color: #84949c;
+    cursor: not-allowed;
+  }
+
+  /* --- Item ativo da navegacao lateral (nivel 2: tint ambar suave) --- */
+  .siga-nav-active {
+    background-color: #fcf3e1;
+  }
+
+  /* --- Barra de rolagem do console (tema escuro) --- */
+  .terminal-scroll::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .terminal-scroll::-webkit-scrollbar-track {
+    background: #1c2c34;
+  }
+
+  .terminal-scroll::-webkit-scrollbar-thumb {
+    background: #3c5464;
+    border-radius: 4px;
+  }
+
+  /* --- Barra de rolagem das areas claras --- */
+  .light-scroll::-webkit-scrollbar {
+    width: 10px;
+  }
+
+  .light-scroll::-webkit-scrollbar-track {
+    background: #f2f4f5;
+  }
+
+  .light-scroll::-webkit-scrollbar-thumb {
+    background: #cdd5d8;
+    border-radius: 5px;
+  }
+
+  .light-scroll::-webkit-scrollbar-thumb:hover {
+    background: #84949c;
+  }
+
+  /*
+   * Botao desabilitado: um unico tratamento para todos os botoes do app, porque a UI
+   * desabilita controles em bloco durante uma execucao (equivalente ao antigo
+   * _set_controls_state da GUI Tkinter).
+   */
+  button:disabled,
+  button[disabled] {
+    opacity: 0.45;
+    cursor: not-allowed;
+    filter: grayscale(0.4);
+  }
+
+  button:disabled:hover,
+  button[disabled]:hover {
+    filter: grayscale(0.4);
+  }
+}

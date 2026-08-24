@@ -9,7 +9,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from openpyxl import Workbook
 
@@ -39,8 +39,8 @@ class ExtractionResult:
 class FiscalDownloadResult:
     document_tab: str
     profile_name: str
-    summary_path: Path
-    detail_path: Path
+    summary_path: Path | None
+    detail_path: Path | None
     selected_report_name: str
     month_reference: str
     downloaded_at: datetime | None = None
@@ -68,7 +68,7 @@ class PendingDetailRequest:
     request_key: str
     document_tab: str
     profile_name: str
-    summary_path: Path
+    summary_path: Path | None
     report_name: str
     tela_aba: str
     requested_after: datetime
@@ -78,6 +78,14 @@ class PendingDetailRequest:
     taxpayer_folder_name: str
     row_number: int
     output_basename: str | None = None
+    # True quando esta solicitação é o próprio resumo (Indicadores) de uma aba, não um
+    # detalhamento — usado para excluí-la da montagem de FiscalDownloadResult (ela não
+    # tem uma linha de resultado própria, só alimenta summary_request_key de outras).
+    is_summary_request: bool = False
+    # Preenchido nos detalhamentos: chave do PendingDetailRequest do resumo irmão, para
+    # resolver o Path real do resumo depois que a varredura em lote da Central de
+    # Downloads terminar (o resumo não é mais baixado na hora — ver _request_summary_download).
+    summary_request_key: str | None = None
 
 
 @dataclass(slots=True)
@@ -201,8 +209,16 @@ class SigaContributorExtractor:
         selected_tabs: list[str] | None = None,
         selected_tabs_by_cnpj: dict[str, list[str]] | None = None,
         selected_tabs_by_row_number: dict[int, list[str]] | None = None,
+        on_row_processed: Callable[[int, int], None] | None = None,
     ) -> list[BatchExtractionResult]:
-        """Reaproveita um contexto já autenticado para processar vários documentos em sequência."""
+        """Reaproveita um contexto já autenticado para processar vários documentos em sequência.
+
+        `on_row_processed`, se informado, é chamado com `(linhas_concluidas, total_linhas)`
+        toda vez que uma linha da planilha é definitivamente resolvida (encontrada e
+        processada, não encontrada, ou erro após esgotar as retentativas) — não conta
+        reenfileiramentos por falha temporária. Serve para alimentar uma barra de
+        progresso em tempo real; sem callback o comportamento não muda em nada.
+        """
         try:
             return self._run_batch_from_spreadsheet_in_context(
                 context,
@@ -212,6 +228,7 @@ class SigaContributorExtractor:
                 selected_tabs,
                 selected_tabs_by_cnpj,
                 selected_tabs_by_row_number,
+                on_row_processed,
             )
         finally:
             # Libera o workbook de status mantido em memória durante o lote (ver spreadsheet.py).
@@ -226,11 +243,21 @@ class SigaContributorExtractor:
         selected_tabs: list[str] | None = None,
         selected_tabs_by_cnpj: dict[str, list[str]] | None = None,
         selected_tabs_by_row_number: dict[int, list[str]] | None = None,
+        on_row_processed: Callable[[int, int], None] | None = None,
     ) -> list[BatchExtractionResult]:
         normalized_month = month_reference.strip()
         if not normalized_month:
             raise ValueError("Informe o mes de referencia antes de iniciar a extracao.")
         normalized_year = self._normalize_reference_year(reference_year)
+
+        total_rows = len(spreadsheet_rows)
+        processed_rows = 0
+
+        def mark_row_processed() -> None:
+            nonlocal processed_rows
+            processed_rows += 1
+            if on_row_processed is not None:
+                on_row_processed(processed_rows, total_rows)
 
         results: list[BatchExtractionResult] = []
         pending_requests_by_row_number: dict[int, list[PendingDetailRequest]] = {}
@@ -301,6 +328,7 @@ class SigaContributorExtractor:
                 )
                 pending_requests_by_row_number[spreadsheet_row.row_number] = []
                 not_found_row_numbers.add(spreadsheet_row.row_number)
+                mark_row_processed()
                 continue
             except Exception as exc:  # noqa: BLE001
                 # Se for um erro temporário (como TimeoutError, erro de conexão ou página em branco)
@@ -349,6 +377,7 @@ class SigaContributorExtractor:
                 )
                 pending_requests_by_row_number[spreadsheet_row.row_number] = []
                 not_found_row_numbers.add(spreadsheet_row.row_number)
+                mark_row_processed()
                 continue
 
             # A Central de Downloads so fica acessivel dentro de um contribuinte valido.
@@ -373,6 +402,7 @@ class SigaContributorExtractor:
 
             pending_requests_by_row_number[spreadsheet_row.row_number] = pending_requests
             all_pending_requests.extend(pending_requests)
+            mark_row_processed()
 
         detail_paths: dict[str, Path] = {}
         if all_pending_requests:
@@ -396,8 +426,17 @@ class SigaContributorExtractor:
             fiscal_results = []
             
             for request in pending_requests:
+                # O resumo em si não vira uma linha de resultado — ele só existia nesta
+                # lista para entrar na mesma varredura em lote; o Path resolvido dele é
+                # lido abaixo via summary_request_key, ao montar o resultado do detalhamento.
+                if request.is_summary_request:
+                    continue
+
                 detail_path = detail_paths.get(request.request_key)
-                
+                summary_path = request.summary_path
+                if request.summary_request_key:
+                    summary_path = detail_paths.get(request.summary_request_key)
+
                 downloaded_at = None
                 if detail_path is not None:
                     path_str = str(detail_path)
@@ -408,7 +447,7 @@ class SigaContributorExtractor:
                     FiscalDownloadResult(
                         document_tab=request.document_tab,
                         profile_name=request.profile_name,
-                        summary_path=request.summary_path,
+                        summary_path=summary_path,
                         detail_path=detail_path,
                         selected_report_name=request.report_name,
                         month_reference=normalized_month,
@@ -658,7 +697,7 @@ class SigaContributorExtractor:
         month_reference: str,
         document_tab: str,
         profile_name: str,
-        summary_path: Path,
+        summary_path: Path | None,
         report_name: str,
         tela_aba: str,
         requested_after: datetime,
@@ -666,12 +705,24 @@ class SigaContributorExtractor:
         taxpayer_folder_name: str,
         row_number: int = 0,
         output_basename: str | None = None,
+        is_summary_request: bool = False,
+        summary_request_key: str | None = None,
     ) -> PendingDetailRequest:
-        """Cria uma solicitacao com chave unica para nao misturar downloads de CNPJs diferentes."""
+        """Cria uma solicitacao com chave unica para nao misturar downloads de CNPJs diferentes.
+
+        Inclui `profile_name` porque o resumo (Indicadores) de Emissor e Destinatário/
+        Tomador da mesma aba usa o texto idêntico na Central de Downloads ("Informações
+        Fiscais - {aba} - Indicadores - {ano}", sem o nome do perfil) — sem essa chave
+        diferenciando os dois, o segundo resumo enfileirado sobrescrevia o Path do
+        primeiro assim que os dois passaram a ser resolvidos na mesma varredura em lote
+        (ver `_request_summary_download`). `tela_aba` sozinho não bastava para isso,
+        justamente porque nesse caso ele é igual para os dois perfis.
+        """
         request_key = "|".join(
             (
                 self._normalize_numeric_document(cgf),
                 slugify(month_reference),
+                slugify(profile_name),
                 self._sanitize_filename(tela_aba),
             )
         )
@@ -689,6 +740,8 @@ class SigaContributorExtractor:
             taxpayer_folder_name=taxpayer_folder_name,
             row_number=row_number,
             output_basename=output_basename,
+            is_summary_request=is_summary_request,
+            summary_request_key=summary_request_key,
         )
 
     def _normalize_selected_tabs(self, selected_tabs: list[str] | None) -> set[str]:
@@ -745,7 +798,17 @@ class SigaContributorExtractor:
             self._open_fiscal_information(page)
         self._open_document_tab(page, tab_config)
 
-        summary_paths: dict[str, Path] = {}
+        # Os resumos (Indicadores) não são mais baixados na hora: cada um vira uma
+        # PendingDetailRequest própria (is_summary_request=True) que entra na mesma
+        # varredura final da Central de Downloads que já é feita para Malha
+        # Fiscal/Débitos Fiscais/detalhamentos. Antes, cada resumo abria a Central de
+        # Downloads individualmente (uma viagem por resumo, ~13s cada) antes mesmo de
+        # terminar de solicitar o resto do CNPJ — além do desperdício de tempo, isso
+        # inseria linhas novas na Central entre a solicitação e a varredura em lote de
+        # um detalhamento mais antigo, empurrando-o para trás do corte por timestamp
+        # (`cutoff_dt` em `_find_pending_download_matches`) e fazendo o lote inteiro
+        # estourar o timeout sem localizá-lo. Ver análise em 24/08/2026.
+        summary_requests: dict[str, PendingDetailRequest] = {}
         eligible_profiles: list[FiscalProfileConfig] = []
 
         for profile in tab_config.profiles:
@@ -759,17 +822,20 @@ class SigaContributorExtractor:
                 )
                 continue
 
-            summary_paths[profile.label] = self._download_current_table(
+            summary_requests[profile.label] = self._request_summary_download(
                 page,
                 cgf,
                 month_reference,
                 taxpayer_folder_name,
                 profile.summary_basename,
                 tab_config.tab_slug,
+                profile.label,
             )
             eligible_profiles.append(profile)
 
-        pending_requests: list[PendingDetailRequest] = []
+        # Só os detalhamentos entram nesta lista — o "Sem movimento" abaixo precisa
+        # continuar refletindo apenas o mês selecionado, não o resumo anual.
+        detail_requests: list[PendingDetailRequest] = []
         for profile in eligible_profiles:
             # Só pedimos detalhamento se o mês escolhido tiver movimento suficiente.
             self._open_named_section(page, profile.label)
@@ -791,7 +857,7 @@ class SigaContributorExtractor:
                 continue
 
             if tab_config.detail_mode == "reports":
-                pending_requests.extend(
+                detail_requests.extend(
                     self._request_report_details_for_profile(
                         page,
                         cgf,
@@ -799,7 +865,7 @@ class SigaContributorExtractor:
                         profile,
                         month_reference,
                         reference_year,
-                        summary_paths[profile.label],
+                        summary_requests[profile.label].request_key,
                         taxpayer_folder_name,
                         row_number,
                     )
@@ -815,13 +881,14 @@ class SigaContributorExtractor:
             )
             requested_after = datetime.now() - timedelta(seconds=30)
             self._request_detail_download(page)
-            pending_requests.append(
+            detail_requests.append(
                 self._build_pending_request(
                     cgf=cgf,
                     month_reference=month_reference,
                     document_tab=tab_config.tab_slug,
                     profile_name=profile.label,
-                    summary_path=summary_paths[profile.label],
+                    summary_path=None,
+                    summary_request_key=summary_requests[profile.label].request_key,
                     report_name=tab_config.detail_label or "Detalhamento",
                     tela_aba=tela_aba,
                     requested_after=requested_after,
@@ -830,14 +897,16 @@ class SigaContributorExtractor:
                     row_number=row_number,
                 )
             )
-        if not pending_requests:
+        if not detail_requests:
             write_status_to_spreadsheet_cell(
                 self.output_spreadsheet_path,
                 row_number,
                 tab_config.tab_name,
                 "Sem movimento",
             )
-        return pending_requests
+        # Resumos + detalhamentos seguem juntos para a mesma varredura final da Central
+        # de Downloads (ver comentário acima, antes do loop de resumos).
+        return list(summary_requests.values()) + detail_requests
 
     def _ensure_authenticated(self, page: Page, context: BrowserContext) -> Page:
         """Garante que a sessão esteja autenticada antes de mexer na interface do SIGA."""
@@ -1319,21 +1388,17 @@ class SigaContributorExtractor:
         page.wait_for_timeout(1_500)
 
         # --- Clicar em Baixar todos os indícios (XLSX) ---
-        baixar_clicked = self._click_xpath(
+        self._click_with_retry(
             page,
-            "xpath=//button[contains(normalize-space(.),'Baixar todos os ind') or contains(@title,'Baixar todos os ind')]",
-            "Botão Baixar todos os indícios XLSX",
+            xpath="xpath=//button[contains(normalize-space(.),'Baixar todos os ind') or contains(@title,'Baixar todos os ind')]",
+            label="Botão Baixar todos os indícios XLSX",
+            fallback_names=("Baixar todos os indicios",),
+            artifact_name="malha-fiscal-baixar-indicios",
+            fallback_task=(
+                "Em 'Indícios de irregularidades', localize o botão "
+                "'Baixar todos os indícios (XLSX)' e clique nele."
+            ),
         )
-        if not baixar_clicked:
-            self._click_text_action(
-                page,
-                names=("Baixar todos os indicios",),
-                artifact_name="malha-fiscal-baixar-indicios",
-                fallback_task=(
-                    "Em 'Indícios de irregularidades', localize o botão "
-                    "'Baixar todos os indícios (XLSX)' e clique nele."
-                ),
-            )
 
         # --- Aguardar a mensagem de confirmação do toast ---
         LOGGER.info("Aguardando confirmação de solicitação de download de Malha Fiscal")
@@ -1411,20 +1476,16 @@ class SigaContributorExtractor:
         page.wait_for_timeout(1_500)
 
         # --- Clicar no botão de download (XLSX) ---
-        baixar_clicked = self._click_xpath(
+        self._click_with_retry(
             page,
-            "xpath=//button[contains(normalize-space(.),'Baixar') and (contains(normalize-space(.),'XLSX') or contains(normalize-space(.),'Excel') or contains(@title,'Baixar'))]",
-            "Botão download Débitos Fiscais XLSX",
+            xpath="xpath=//button[contains(normalize-space(.),'Baixar') and (contains(normalize-space(.),'XLSX') or contains(normalize-space(.),'Excel') or contains(@title,'Baixar'))]",
+            label="Botão download Débitos Fiscais XLSX",
+            fallback_names=("Baixar XLSX", "Baixar Excel", "Download"),
+            artifact_name="debitos-fiscais-baixar",
+            fallback_task=(
+                "Na tela de Débitos Fiscais, localize o botão para baixar em XLSX ou Excel e clique nele."
+            ),
         )
-        if not baixar_clicked:
-            self._click_text_action(
-                page,
-                names=("Baixar XLSX", "Baixar Excel", "Download"),
-                artifact_name="debitos-fiscais-baixar",
-                fallback_task=(
-                    "Na tela de Débitos Fiscais, localize o botão para baixar em XLSX ou Excel e clique nele."
-                ),
-            )
 
         # --- Aguardar a mensagem de confirmação do toast ---
         LOGGER.info("Aguardando confirmação de solicitação de download de Débitos Fiscais")
@@ -2010,7 +2071,7 @@ class SigaContributorExtractor:
         profile: FiscalProfileConfig,
         month_reference: str,
         reference_year: str,
-        summary_path: Path,
+        summary_request_key: str | None,
         taxpayer_folder_name: str,
         row_number: int = 0,
     ) -> list[PendingDetailRequest]:
@@ -2043,7 +2104,8 @@ class SigaContributorExtractor:
                     month_reference=month_reference,
                     document_tab=tab_config.tab_slug,
                     profile_name=profile.label,
-                    summary_path=summary_path,
+                    summary_path=None,
+                    summary_request_key=summary_request_key,
                     report_name=report_name,
                     tela_aba=tela_aba,
                     requested_after=requested_after,
@@ -2243,7 +2305,7 @@ class SigaContributorExtractor:
 
         raise TimeoutError(f"Nao foi possivel clicar no detalhamento {report_name}.")
 
-    def _download_current_table(
+    def _request_summary_download(
         self,
         page: Page,
         cgf: str,
@@ -2251,7 +2313,8 @@ class SigaContributorExtractor:
         taxpayer_folder_name: str,
         basename: str,
         document_tab: str,
-    ) -> Path:
+        profile_name: str,
+    ) -> PendingDetailRequest:
         # O botão "Baixar Tabela" do resumo é assíncrono, igual a Malha Fiscal e Débitos
         # Fiscais: o clique só enfileira a solicitação na Central de Downloads ("Downloads"),
         # nunca dispara um download real no navegador. Confirmado ao vivo em 20/08/2026
@@ -2261,11 +2324,22 @@ class SigaContributorExtractor:
         # download real do navegador. Por isso não faz sentido esperar por
         # page.expect_download(): isso só desperdiçava minutos por perfil (2 tentativas de
         # 90s) até cair no único caminho que de fato funciona.
+        #
+        # O resgate em si NÃO acontece mais aqui: antes esta função abria a Central de
+        # Downloads na hora, uma viagem por resumo (~13s cada, 30+ viagens num lote de 5
+        # CNPJs). Além do tempo perdido, isso inseria linhas novas na Central entre a
+        # solicitação e a varredura em lote de um detalhamento mais antigo ainda
+        # pendente, empurrando-o para trás do corte por timestamp
+        # (`cutoff_dt` em `_find_pending_download_matches`) e fazendo esse detalhamento
+        # nunca ser encontrado (visto ao vivo em 21/08/2026: NF-e/Emissor "Interna" do
+        # CNPJ 19412918000176 expirou depois de 12min tentando, virou aviso de "não
+        # localizado"). Agora só devolvemos a solicitação pendente — quem chama decide
+        # quando ela entra na varredura final (junto com os detalhamentos).
         self._click_summary_download_button(page)
         if not self._wait_for_download_request_toast(page):
             LOGGER.warning(
                 "Nao recebi a confirmacao de solicitacao de download para %s; "
-                "seguindo para a Central de Downloads mesmo assim.",
+                "seguindo mesmo assim (sera resolvido na varredura final da Central de Downloads).",
                 basename,
             )
         # A Central de Downloads rotula a solicitação do resumo como "Informações Fiscais -
@@ -2279,21 +2353,23 @@ class SigaContributorExtractor:
         reference_year = self._resolve_selected_year_from_page(page)
         tela_aba = f"Informacoes Fiscais - {document_tab} - Indicadores - {reference_year}"
         requested_after = datetime.now() - timedelta(seconds=30)
-        request = self._build_pending_request(
+        return self._build_pending_request(
             cgf=cgf,
             month_reference=month_reference,
             document_tab=document_tab,
-            profile_name="unknown",
-            summary_path=Path("."),
+            # profile_name entra na request_key (ver _build_pending_request) — sem isso,
+            # o resumo de Emissor e o de Destinatario/Tomador da mesma aba colidiriam
+            # (tela_aba identico) assim que os dois estivessem na mesma varredura em lote.
+            profile_name=profile_name,
+            summary_path=None,
             report_name=basename,
             tela_aba=tela_aba,
             requested_after=requested_after,
             taxpayer_document=self._current_taxpayer_document(page),
             taxpayer_folder_name=taxpayer_folder_name,
             output_basename=basename,
+            is_summary_request=True,
         )
-        detail_paths = self._download_pending_detail_requests(page, [request])
-        return detail_paths[request.request_key]
 
     def _wait_for_download_request_toast(self, page: Page, timeout_seconds: int = 30) -> bool:
         """Aguarda o toast de confirmação assíncrona que a Central de Downloads do SIGA
@@ -4268,6 +4344,47 @@ class SigaContributorExtractor:
         narrate("Clicando em %s...", label)
         target.click(force=force)
         return True
+
+    def _click_with_retry(
+        self,
+        page: Page,
+        xpath: str,
+        label: str,
+        fallback_names: tuple[str, ...],
+        artifact_name: str,
+        fallback_task: str,
+        timeout_seconds: float = 20,
+    ) -> None:
+        """Tenta clicar (XPath, com fallback por texto) em loop até funcionar ou o tempo
+        esgotar, em vez de checar uma única vez.
+
+        `_click_xpath`/`_click_text_action` fazem só uma checagem imediata do DOM — ótimo
+        quando o elemento já está pronto, mas o SIGA é uma SPA Angular/PrimeNG que pode
+        levar mais que o `wait_for_timeout` fixo de quem chama para renderizar um botão
+        depois de trocar de tela. Confirmado ao vivo em 24/08/2026 (CNPJs
+        00.384.193/0001-21 e 19.412.918/0004-19, botão "Baixar todos os indícios" de
+        Malha Fiscal): o botão existia e era clicável poucos segundos depois, mas a
+        checagem única já tinha desistido e levantado TimeoutError. Mesma classe de
+        problema que `_wait_for_detail_xlsx_button_ready` já resolve para o botão de
+        detalhamento — aqui generalizado para qualquer botão de ação pós-navegação.
+        """
+        deadline = time.time() + timeout_seconds
+        while True:
+            if self._click_xpath(page, xpath, label):
+                return
+            try:
+                self._click_text_action(
+                    page,
+                    names=fallback_names,
+                    artifact_name=artifact_name,
+                    fallback_task=fallback_task,
+                )
+                return
+            except TimeoutError:
+                pass
+            if time.time() >= deadline:
+                raise TimeoutError(f"Nao foi possivel clicar em: {', '.join(fallback_names)}.")
+            page.wait_for_timeout(500)
 
     def _ensure_side_menu_open(self, page: Page) -> bool:
         """Expande o menu lateral quando ele estiver recolhido, evitando bloqueio de navegação.

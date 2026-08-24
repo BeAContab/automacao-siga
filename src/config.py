@@ -79,6 +79,11 @@ class Settings:
     nf_meudanfe_captcha_timeout_seconds: int = 180
     nf_meudanfe_download_timeout_seconds: int = 45
 
+    # --- Interface (pywebview) ---
+    # Habilita o DevTools do WebView2 (F12) na janela da interface. Só para
+    # desenvolvimento — ativado por `--webui-debug` em `src/main.py`.
+    webui_debug: bool = False
+
     def ensure_runtime_dirs(self) -> None:
         """Garante que os diretórios de runtime existam antes da execução começar."""
         self.browser_profile_dir.mkdir(parents=True, exist_ok=True)

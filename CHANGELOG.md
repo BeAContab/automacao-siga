@@ -1,5 +1,43 @@
 # Changelog
 
+## [2026-08-24] — Versão 2.0.3
+
+### Corrigido
+- **"Falha ao solicitar Malha Fiscal"/"Débitos Fiscais" mesmo com o botão de download presente e clicável na tela** — investigado ao vivo (CNPJs 00.384.193/0001-21 e 19.412.918/0004-19, ambos no log `testes/log.txt`): o botão existia, estava visível e habilitado, e o clique via o mesmo XPath do código funcionava quando testado manualmente segundos depois. Causa raiz confirmada como bug de código, não do site: `_request_malha_fiscal`/`_request_debitos_fiscais` (`src/extraction/siga_extractor.py`) esperavam só 1,5s fixo após trocar de tela e então tentavam clicar **uma única vez, sem retry** (`_click_xpath`/`_click_text_action` fazem uma checagem imediata só) — se o SIGA (SPA Angular/PrimeNG) demorasse um pouco mais que isso pra renderizar, a checagem única falhava e o código desistia na hora, mesmo o botão aparecendo pouco depois. Mesma classe de falso-negativo que `_wait_for_detail_xlsx_button_ready` já resolvia para o botão de detalhamento, nunca aplicada aqui.
+  - Novo `_click_with_retry`, genérico: tenta em loop (XPath, com fallback por texto) por até 20s antes de desistir, em vez de checar uma vez só. Usado agora pelos dois botões de ação de Malha Fiscal e Débitos Fiscais.
+  - Testado ao vivo contra os 2 CNPJs que falhavam no log: os dois agora completam `_request_malha_fiscal` com sucesso.
+
+## [2026-08-24] — Versão 2.0.2
+
+### Corrigido
+- **Barra de "Progresso da Operação" do modo SIGA não se movia durante a execução** — ficava parada em 0% e só ia para 100% no final (comportamento herdado da própria GUI Tkinter anterior, que também nunca teve progresso incremental real). `SigaContributorExtractor.run_batch_from_spreadsheet_in_context` (`src/extraction/siga_extractor.py`) ganhou um parâmetro opcional `on_row_processed`, chamado com `(linhas_concluidas, total_linhas)` a cada empresa definitivamente resolvida (achada, não achada, ou erro após esgotar as retentativas) — reenfileiramentos por falha temporária não contam. `src/webui/api.py` usa isso para atualizar a barra em tempo real, reservando os últimos ~10% para a varredura final única da Central de Downloads (que não tem granularidade por CNPJ). Retrocompatível: sem o callback, nada muda.
+
+## [2026-08-24] — Versão 2.0.1
+
+### Corrigido
+- **Download do resumo (Indicadores) de NF-e/NFC-e/CT-e abria a Central de Downloads individualmente, uma vez por resumo, antes mesmo de terminar de solicitar o resto do CNPJ** — diferente de Malha Fiscal/Débitos Fiscais/detalhamentos, que já ficavam enfileirados para uma única varredura no final do lote (`brain/2026-06-12-downloads-globais-no-final.md`). Descoberto ao analisar `saida/log.txt`: **30 viagens individuais** à Central de Downloads num lote de 5 CNPJs (~13s cada, 6,5 minutos desperdiçados), e pelo menos um detalhamento genuinamente perdido (`Informacoes Fiscais - NF-e - Emissor - Detalhamento Julho de 2026 - Interna` do CNPJ 19412918000176: o resumo intercalado inseria linhas novas na Central entre a solicitação do detalhamento e a varredura em lote dele, empurrando-o para trás do corte por timestamp — `cutoff_dt` em `_find_pending_download_matches` — até estourar o timeout de 12 minutos). `_download_current_table` (`src/extraction/siga_extractor.py`) foi renomeada para `_request_summary_download` e não busca mais o arquivo na hora: devolve a `PendingDetailRequest` do resumo, que entra na mesma lista enfileirada e é resolvida na única varredura final do lote junto com os detalhamentos.
+  - `PendingDetailRequest` ganhou `is_summary_request: bool` (exclui o próprio resumo da montagem de `FiscalDownloadResult` — ele só serve de metadado) e `summary_request_key: str | None` (resolve o `Path` real do resumo depois da varredura em lote, já que ele deixou de ser buscado sincronamente).
+  - **Bug pego em teste ao vivo durante a implementação, antes de qualquer commit:** a Central de Downloads mostra o texto idêntico ("Informações Fiscais - {aba} - Indicadores - {ano}") para o resumo de Emissor e o de Destinatário/Tomador da mesma aba — sem Emissor/Destinatário no rótulo. Como os dois passaram a coexistir na mesma varredura em lote, a chave interna (`request_key`, antes derivada só de CNPJ+mês+texto) colidia e o segundo resumo sobrescrevia o `Path` do primeiro. Corrigido incluindo `profile_name` na `request_key` (`_build_pending_request`).
+
+## [2026-08-21] — Versão 2.0.0
+
+### Alterado
+- **Interface migrada de Tkinter para pywebview** (mudança de versão maior: a camada de apresentação foi inteiramente reescrita). A janela agora renderiza HTML/CSS/JS pelo WebView2 do Edge, partindo dos mockups gerados no Stitch (`design/`), em vez de widgets `ttk` montados à mão. **O backend de extração não mudou em nada**: `SigaContributorExtractor`, `NfceBatchExtractor`, `MeudanfeBatchExtractor`, `SigaLoginFlow` e `BrowserSession` continuam exatamente como estavam — só a camada de interface foi trocada.
+  - Novo pacote `src/webui/`: `app.py` (janela e ciclo de vida), `api.py` (métodos expostos ao JavaScript via `js_api`), `bridge.py` (canal Python → JS), `assets.py` (resolução de caminhos em dev e empacotado) e `windows_integration.py` (AppUserModelID).
+  - Nova pasta `web/` com a fonte da interface (HTML, JS e Tailwind) e `web/build.py`, que compila tudo para `src/web_dist/` — a única pasta lida em tempo de execução. **Node é dependência apenas de build**; o `.exe` empacota o CSS/JS já compilado.
+  - **Nada depende de CDN nem de internet para a interface abrir**: o Tailwind é compilado localmente e as fontes (Inter, JetBrains Mono, Material Symbols) ficam vendorizadas em `src/web_dist/fonts/`.
+  - Os dois canais de tempo real (console de log e tabela de resultados NF-e) deixaram de usar fila + polling (`root.after`), necessários só por causa da regra do Tkinter de atualizar widgets apenas na thread principal. O `window.run_js` do pywebview é seguro a partir de qualquer thread, então as threads de trabalho empurram os eventos direto. Um buffer de replay cobre a janela entre abrir a aplicação e o JavaScript registrar as funções do contrato, para nenhuma mensagem se perder.
+  - Os ~20 `messagebox` viraram modais em HTML (o pywebview não tem equivalente nativo para avisos), e a confirmação ao fechar com execução em andamento passou a usar o diálogo nativo `create_confirmation_dialog`, com o encerramento gracioso preservado (`shutdown_debug_browser` + espera pela thread de trabalho) e proteção contra reentrância.
+  - Novo `--webui-debug` em `main.py`, que abre o DevTools do WebView2 (F12) para desenvolvimento.
+  - Erros de JavaScript agora são registrados em `logs/run.log` (`Api.report_client_error`) — antes uma falha na interface só apareceria no DevTools, que o operador não abre.
+  - Nova dependência: `pywebview==6.2.1` (`requirements.txt`).
+
+### Adicionado
+- **`siga-automacao.spec` (PyInstaller) recriado**, cobrindo o novo bundle da interface (`src/web_dist/`) e os imports dinâmicos de backend do pywebview. O spec havia sido removido numa limpeza anterior e não existia mais no repositório.
+
+### Removido
+- **`src/gui.py`** (2194 linhas, a GUI Tkinter) — substituída pela interface em `src/webui/` + `web/`. Continua recuperável pelo histórico do git (`git show HEAD:src/gui.py`).
+
 ## [2026-08-21] — Versão 1.10.0
 
 ### Adicionado

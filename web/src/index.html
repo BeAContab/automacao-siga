@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<!--
+  Casco unico do SIGA Automacao.
+
+  O cabecalho, a navegacao lateral, o painel de execucao e o rodape sao compartilhados
+  pelos tres modos; so a area de trabalho central (<section data-screen="...">) troca.
+  Isso reproduz a decisao ja tomada na versao Tkinter: cada modo tem um painel que faz
+  sentido para a sua funcao, dentro de um casco reconhecivel e igual.
+
+  O CSS e carregado de styles.css (Tailwind compilado localmente, com as fontes
+  vendorizadas) - nada aqui depende de CDN nem de internet em tempo de execucao.
+-->
+<title>SIGA Automação</title>
+<link href="styles.css" rel="stylesheet">
+</head>
+<body class="antialiased text-on-surface font-body-md overflow-hidden">
+
+<!-- ============================ CABECALHO ============================ -->
+<header class="bg-surface-container-highest border-b border-outline-variant/30 flex justify-between items-center w-full px-lg h-14 shrink-0 z-50 fixed top-0 left-0 right-0">
+  <div class="flex items-center gap-sm">
+    <img alt="" src="logo.png" class="h-8 w-auto" id="brand-logo">
+    <div class="flex flex-col">
+      <div class="text-label-bold font-label-bold uppercase tracking-wider text-on-surface">Barreira &amp; Associados</div>
+      <div class="text-[10px] font-body-sm text-on-surface-variant">Assessoria Contábil</div>
+    </div>
+  </div>
+  <div class="flex items-center gap-md">
+    <span class="text-body-sm font-body-sm text-on-surface-variant bg-surface-container px-2 py-1 rounded" id="app-version">v—</span>
+  </div>
+</header>
+
+<!-- ======================= NAVEGACAO DE MODOS ======================== -->
+<nav class="bg-surface-container-low border-r border-outline-variant/40 flex flex-col w-sidebar-width fixed left-0 top-14 bottom-7 z-40">
+  <div class="px-md pt-md pb-sm">
+    <span class="text-[10px] font-label-bold uppercase tracking-widest text-siga-slate">Modo de operação</span>
+  </div>
+  <div class="flex-1 overflow-y-auto light-scroll pb-sm" id="mode-nav">
+    <!-- data-mode e lido por main.js para trocar a area de trabalho -->
+    <button class="nav-item w-full text-left px-md py-sm flex items-center gap-md transition-all border-l-4 border-transparent hover:bg-surface-container-high" data-mode="siga" type="button">
+      <span class="material-symbols-outlined text-[20px]">analytics</span>
+      <span class="text-label-bold font-label-bold">Extração SIGA</span>
+    </button>
+    <button class="nav-item w-full text-left px-md py-sm flex items-center gap-md transition-all border-l-4 border-transparent hover:bg-surface-container-high" data-mode="nfce" type="button">
+      <span class="material-symbols-outlined text-[20px]">receipt_long</span>
+      <span class="text-label-bold font-label-bold">Extração NFC-e</span>
+      <span class="ml-auto bg-siga-slate/20 text-siga-slate px-1 rounded text-[8px] font-bold uppercase tracking-widest">EM TESTES</span>
+    </button>
+    <button class="nav-item w-full text-left px-md py-sm flex items-center gap-md transition-all border-l-4 border-transparent hover:bg-surface-container-high" data-mode="nfe" type="button">
+      <span class="material-symbols-outlined text-[20px]">description</span>
+      <span class="text-label-bold font-label-bold">Extração NF-e</span>
+    </button>
+  </div>
+  <!-- Descricao do modo ativo: orienta antes de o usuario clicar em qualquer coisa. -->
+  <div class="border-t border-outline-variant/20 p-md">
+    <p class="text-body-sm font-body-sm text-on-surface-variant leading-snug" id="mode-description"></p>
+  </div>
+</nav>
+
+<!-- ====================== AREA DE TRABALHO ========================== -->
+<main class="fixed left-sidebar-width right-execution-panel-width top-14 bottom-7 overflow-y-auto light-scroll p-lg" id="workspace">
+
+  <!-- ---------------------------- SIGA ---------------------------- -->
+  <section data-screen="siga" class="flex flex-col gap-md">
+    <div class="flex justify-between items-center">
+      <h1 class="text-headline-lg font-headline-lg text-on-surface">Controle de Empresas</h1>
+      <span class="bg-tertiary-container/30 text-on-tertiary-container text-body-sm font-body-sm px-3 py-1 rounded-full border border-tertiary-container/50" data-count-chip="siga">Total carregadas: 0</span>
+    </div>
+
+    <!-- Entrada de dados: planilha ou CNPJs digitados -->
+    <div class="siga-card rounded-lg flex flex-col">
+      <div class="flex border-b border-outline-variant/30" data-tabs="siga">
+        <button class="input-tab px-md py-sm text-label-bold font-label-bold border-b-2 border-transparent" data-tab="import" type="button">Importar Planilha</button>
+        <button class="input-tab px-md py-sm text-label-bold font-label-bold border-b-2 border-transparent" data-tab="manual" type="button">Entrada Manual</button>
+      </div>
+
+      <div class="p-md flex flex-col gap-md" data-tab-panel="siga-import">
+        <p class="text-body-sm font-body-sm text-on-surface-variant">Selecione uma planilha XLSX para carregar as empresas.</p>
+        <div class="flex gap-sm">
+          <input class="flex-1 siga-form-field rounded px-sm py-2 text-body-md font-body-md bg-white" id="siga-spreadsheet" placeholder="Selecione o arquivo .xlsx" readonly type="text">
+          <button class="bg-surface-container-high hover:bg-surface-variant border border-outline-variant/50 px-md rounded text-label-bold font-label-bold flex items-center gap-xs transition-colors" data-action="pick-siga-spreadsheet" type="button">
+            <span class="material-symbols-outlined text-[18px]">folder_open</span> Abrir
+          </button>
+          <button class="bg-siga-petrol text-white px-md rounded text-label-bold font-label-bold hover:brightness-110 transition-all" data-action="load-siga-spreadsheet" type="button">Carregar</button>
+        </div>
+      </div>
+
+      <div class="p-md flex flex-col gap-md" data-tab-panel="siga-manual" hidden>
+        <p class="text-body-sm font-body-sm text-on-surface-variant">Cole um CNPJ por linha, ou vários separados por vírgula, ponto e vírgula ou espaço.</p>
+        <textarea class="siga-form-field rounded px-sm py-2 text-body-md font-console-text bg-white h-24 resize-none" id="siga-manual-cnpjs" spellcheck="false"></textarea>
+        <div class="flex gap-sm">
+          <button class="flex-1 bg-siga-petrol text-white py-sm rounded text-label-bold font-label-bold hover:brightness-110 transition-all" data-action="load-manual" type="button">Carregar CNPJs manuais</button>
+          <button class="flex-1 bg-white border border-error/40 text-error py-sm rounded text-label-bold font-label-bold hover:bg-error-container/40 transition-colors" data-action="clear-manual" type="button">Limpar campo</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Parametros do lote -->
+    <div class="siga-card rounded-lg p-md flex flex-col gap-md">
+      <h2 class="text-label-bold font-label-bold text-secondary uppercase tracking-wider">Parâmetros do lote</h2>
+      <div class="grid grid-cols-3 gap-md">
+        <label class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Mês de referência</span>
+          <select class="siga-form-field rounded px-sm py-2 text-body-md font-body-md bg-white" id="siga-month"></select>
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Ano</span>
+          <input class="siga-form-field rounded px-sm py-2 text-body-md font-body-md bg-white" id="siga-year" inputmode="numeric" maxlength="4" type="text">
+        </label>
+        <div class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Pasta de saída</span>
+          <div class="flex">
+            <input class="flex-1 siga-form-field rounded-l px-sm py-2 text-body-md font-body-md bg-white min-w-0" id="siga-output-dir" readonly type="text">
+            <button class="bg-surface-container-high hover:bg-surface-variant border border-l-0 border-outline-variant/50 rounded-r px-3 transition-colors" data-action="pick-siga-output" type="button">
+              <span class="material-symbols-outlined text-[18px] align-middle">folder_open</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Grade de empresas -->
+    <div class="siga-card rounded-lg flex flex-col overflow-hidden">
+      <div class="px-md py-sm border-b border-outline-variant/30 flex items-center gap-md flex-wrap">
+        <span class="text-body-sm font-body-sm text-on-surface-variant" data-source-label="siga">Nenhuma planilha carregada ainda.</span>
+        <div class="ml-auto flex items-center gap-sm">
+          <button class="text-label-bold font-label-bold text-siga-petrol hover:underline" data-action="select-all-docs" type="button">Marcar tudo</button>
+          <span class="text-outline-variant">|</span>
+          <button class="text-label-bold font-label-bold text-siga-petrol hover:underline" data-action="clear-all-docs" type="button">Desmarcar tudo</button>
+        </div>
+      </div>
+      <div class="overflow-x-auto max-h-[420px] overflow-y-auto light-scroll">
+        <table class="w-full text-left border-collapse table-zebra">
+          <thead class="siga-table-header text-label-bold font-label-bold sticky top-0 z-10">
+            <tr>
+              <th class="py-2 px-sm font-semibold w-16 whitespace-nowrap">COD</th>
+              <th class="py-2 px-sm font-semibold">EMPRESA</th>
+              <!-- data-doc-col permite marcar/desmarcar a coluna inteira -->
+              <th class="py-2 px-1 font-semibold text-center w-16 whitespace-nowrap"><button class="hover:underline" data-doc-col="nfe" title="Marcar/desmarcar a coluna" type="button">NF-e</button></th>
+              <th class="py-2 px-1 font-semibold text-center w-16 whitespace-nowrap"><button class="hover:underline" data-doc-col="nfce" title="Marcar/desmarcar a coluna" type="button">NFC-e</button></th>
+              <th class="py-2 px-1 font-semibold text-center w-16 whitespace-nowrap"><button class="hover:underline" data-doc-col="cte" title="Marcar/desmarcar a coluna" type="button">CT-e</button></th>
+              <th class="py-2 px-1 font-semibold text-center w-16 whitespace-nowrap"><button class="hover:underline" data-doc-col="malha" title="Marcar/desmarcar a coluna" type="button">Malha</button></th>
+              <th class="py-2 px-1 font-semibold text-center w-20 whitespace-nowrap"><button class="hover:underline" data-doc-col="debitos" title="Marcar/desmarcar a coluna" type="button">Débitos</button></th>
+            </tr>
+          </thead>
+          <tbody class="text-body-md font-body-md text-on-surface" data-grid-body="siga"></tbody>
+        </table>
+      </div>
+      <div class="p-md bg-surface border-t border-outline-variant/30 flex justify-between items-center">
+        <button class="text-label-bold font-label-bold text-siga-slate hover:text-error transition-colors flex items-center gap-xs" data-action="clear-rows" type="button">
+          <span class="material-symbols-outlined text-[16px]">delete</span> Limpar Lista
+        </button>
+        <button class="bg-siga-petrol text-white px-md py-sm rounded text-label-bold font-label-bold hover:brightness-110 transition-all" data-action="validate-rows" type="button">Validar Empresas</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------------------------- NFC-e --------------------------- -->
+  <section data-screen="nfce" class="flex flex-col gap-md" hidden>
+    <div class="flex justify-between items-center">
+      <h1 class="text-headline-lg font-headline-lg text-on-surface">Controle de Empresas</h1>
+      <span class="bg-tertiary-container/30 text-on-tertiary-container text-body-sm font-body-sm px-3 py-1 rounded-full border border-tertiary-container/50" data-count-chip="nfce">Total carregadas: 0</span>
+    </div>
+
+    <div class="siga-card rounded-lg flex flex-col">
+      <div class="flex border-b border-outline-variant/30" data-tabs="nfce">
+        <button class="input-tab px-md py-sm text-label-bold font-label-bold border-b-2 border-transparent" data-tab="import" type="button">Importar Planilha</button>
+        <button class="input-tab px-md py-sm text-label-bold font-label-bold border-b-2 border-transparent" data-tab="manual" type="button">Entrada Manual</button>
+      </div>
+
+      <div class="p-md flex flex-col gap-md" data-tab-panel="nfce-import">
+        <p class="text-body-sm font-body-sm text-on-surface-variant">Selecione uma planilha XLSX para carregar as empresas.</p>
+        <div class="flex gap-sm">
+          <input class="flex-1 siga-form-field rounded px-sm py-2 text-body-md font-body-md bg-white" id="nfce-spreadsheet" placeholder="Selecione o arquivo .xlsx" readonly type="text">
+          <button class="bg-surface-container-high hover:bg-surface-variant border border-outline-variant/50 px-md rounded text-label-bold font-label-bold flex items-center gap-xs transition-colors" data-action="pick-nfce-spreadsheet" type="button">
+            <span class="material-symbols-outlined text-[18px]">folder_open</span> Abrir
+          </button>
+          <button class="bg-siga-petrol text-white px-md rounded text-label-bold font-label-bold hover:brightness-110 transition-all" data-action="load-nfce-spreadsheet" type="button">Carregar</button>
+        </div>
+      </div>
+
+      <div class="p-md flex flex-col gap-md" data-tab-panel="nfce-manual" hidden>
+        <p class="text-body-sm font-body-sm text-on-surface-variant">Cole um CNPJ por linha, ou vários separados por vírgula, ponto e vírgula ou espaço.</p>
+        <textarea class="siga-form-field rounded px-sm py-2 text-body-md font-console-text bg-white h-24 resize-none" id="nfce-manual-cnpjs" spellcheck="false"></textarea>
+        <div class="flex gap-sm">
+          <button class="flex-1 bg-siga-petrol text-white py-sm rounded text-label-bold font-label-bold hover:brightness-110 transition-all" data-action="load-manual" type="button">Carregar CNPJs manuais</button>
+          <button class="flex-1 bg-white border border-error/40 text-error py-sm rounded text-label-bold font-label-bold hover:bg-error-container/40 transition-colors" data-action="clear-manual" type="button">Limpar campo</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Parametros: ARQUIVOS e AUTENTICACAO lado a lado (mesmo agrupamento do mockup) -->
+    <div class="siga-card rounded-lg p-md grid grid-cols-2 gap-lg">
+      <div class="flex flex-col gap-sm">
+        <h2 class="text-label-bold font-label-bold text-secondary uppercase tracking-wider">Arquivos</h2>
+        <label class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Planilha-base IE/CNPJ</span>
+          <div class="flex">
+            <input class="flex-1 siga-form-field rounded-l px-sm py-2 text-body-sm bg-white min-w-0" id="nfce-base-spreadsheet" readonly type="text">
+            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfce-base" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
+          </div>
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Pasta de chaves (44 dígitos)</span>
+          <div class="flex">
+            <input class="flex-1 siga-form-field rounded-l px-sm py-2 text-body-sm bg-white min-w-0" id="nfce-keys-folder" readonly type="text">
+            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfce-keys" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
+          </div>
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Pasta de saída dos XMLs</span>
+          <div class="flex">
+            <input class="flex-1 siga-form-field rounded-l px-sm py-2 text-body-sm bg-white min-w-0" id="nfce-output-dir" readonly type="text">
+            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfce-output" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
+          </div>
+        </label>
+      </div>
+      <div class="flex flex-col gap-sm">
+        <h2 class="text-label-bold font-label-bold text-secondary uppercase tracking-wider">Autenticação</h2>
+        <label class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">CPF do contador</span>
+          <input class="siga-form-field rounded px-sm py-2 text-body-sm bg-white" id="nfce-cpf" placeholder="000.000.000-00" type="text">
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Senha</span>
+          <input class="siga-form-field rounded px-sm py-2 text-body-sm bg-white" id="nfce-senha" placeholder="••••••••" type="password">
+        </label>
+        <p class="text-[10px] text-on-surface-variant mt-1 flex items-start gap-1 leading-snug">
+          <span class="material-symbols-outlined text-[12px] mt-px">info</span>
+          Usados apenas nesta execução; nunca são gravados em disco (nem em .env, planilha ou log).
+        </p>
+      </div>
+    </div>
+
+    <!-- Grade de empresas: sem escolha por tipo de documento, so "Incluir" -->
+    <div class="siga-card rounded-lg flex flex-col overflow-hidden">
+      <div class="px-md py-sm border-b border-outline-variant/30 flex items-center gap-md flex-wrap">
+        <span class="text-body-sm font-body-sm text-on-surface-variant" data-source-label="nfce">Nenhuma planilha carregada ainda.</span>
+        <div class="ml-auto flex items-center gap-sm">
+          <button class="text-label-bold font-label-bold text-siga-petrol hover:underline" data-action="select-all-incluir" type="button">Marcar tudo</button>
+          <span class="text-outline-variant">|</span>
+          <button class="text-label-bold font-label-bold text-siga-petrol hover:underline" data-action="clear-all-incluir" type="button">Desmarcar tudo</button>
+        </div>
+      </div>
+      <div class="overflow-x-auto max-h-[420px] overflow-y-auto light-scroll">
+        <table class="w-full text-left border-collapse table-zebra">
+          <thead class="siga-table-header text-label-bold font-label-bold sticky top-0 z-10">
+            <tr>
+              <th class="py-2 px-md font-semibold w-20 text-center">COD</th>
+              <th class="py-2 px-md font-semibold">EMPRESA</th>
+              <th class="py-2 px-md font-semibold w-24 text-center">Incluir</th>
+            </tr>
+          </thead>
+          <tbody class="text-body-md font-body-md text-on-surface" data-grid-body="nfce"></tbody>
+        </table>
+      </div>
+      <div class="p-md bg-surface border-t border-outline-variant/30 flex justify-between items-center">
+        <button class="text-label-bold font-label-bold text-siga-slate hover:text-error transition-colors flex items-center gap-xs" data-action="clear-rows" type="button">
+          <span class="material-symbols-outlined text-[16px]">delete</span> Limpar Lista
+        </button>
+        <button class="bg-siga-petrol text-white px-md py-sm rounded text-label-bold font-label-bold hover:brightness-110 transition-all" data-action="validate-rows" type="button">Validar Empresas</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ----------------------------- NF-e --------------------------- -->
+  <section data-screen="nfe" class="flex flex-col gap-md" hidden>
+    <div class="flex justify-between items-center">
+      <h1 class="text-headline-lg font-headline-lg text-on-surface">Resultados por Planilha</h1>
+      <span class="bg-secondary-container text-on-secondary-container px-3 py-1 rounded-full text-label-bold font-label-bold" id="nfe-summary">0 de 0 planilha(s) concluída(s)</span>
+    </div>
+    <p class="text-body-md font-body-md text-on-surface-variant -mt-1">Cada linha é uma planilha da pasta de entrada; os valores são atualizados conforme os Chromes em paralelo terminam cada chave.</p>
+
+    <!-- Parametros do modo NF-e -->
+    <div class="siga-card rounded-lg p-md flex flex-col gap-md">
+      <h2 class="text-label-bold font-label-bold text-secondary uppercase tracking-wider">Parâmetros de extração</h2>
+      <div class="grid grid-cols-3 gap-md">
+        <div class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Pasta com planilhas NF-e</span>
+          <div class="flex">
+            <input class="flex-1 siga-form-field rounded-l px-sm py-2 text-body-md font-body-md bg-white min-w-0" id="nfe-input-folder" placeholder="Saída do modo SIGA" readonly title="Pasta com planilhas .xlsx que tenham a coluna &quot;Chave NF-e&quot; — tipicamente a própria pasta de saída do modo SIGA." type="text">
+            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfe-input" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
+          </div>
+        </div>
+        <div class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Chrome.exe <span class="text-siga-slate">(opcional)</span></span>
+          <div class="flex">
+            <input class="flex-1 siga-form-field rounded-l px-sm py-2 text-body-md font-body-md bg-white min-w-0" id="nfe-chrome-path" placeholder="Caminho personalizado" readonly type="text">
+            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfe-chrome" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
+          </div>
+        </div>
+        <label class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Chromes em paralelo</span>
+          <div class="flex items-center gap-sm">
+            <input class="siga-form-field rounded px-sm py-2 text-body-md font-body-md bg-white w-20 text-center" id="nfe-max-workers" max="4" min="1" type="number" value="1">
+            <span class="text-body-sm font-body-sm text-on-surface-variant">de 1 a 4 instâncias</span>
+          </div>
+        </label>
+      </div>
+      <p class="text-[11px] text-on-surface-variant flex items-start gap-1 leading-snug">
+        <span class="material-symbols-outlined text-[13px] mt-px">info</span>
+        Este modo faz consulta pública por chave de acesso e abre os próprios navegadores — não depende de login nem do botão "Iniciar Navegador".
+      </p>
+    </div>
+
+    <!-- Tabela de resultados ao vivo -->
+    <div class="siga-card rounded-lg overflow-hidden">
+      <div class="overflow-x-auto">
+        <!-- table-fixed: sem isso o nome da planilha (que pode ser bem longo) empurra
+             as demais colunas para fora e obriga o usuario a rolar horizontalmente. -->
+        <table class="w-full text-left border-collapse table-fixed table-zebra text-body-md font-body-md">
+          <thead class="siga-table-header text-label-bold font-label-bold">
+            <tr>
+              <th class="p-sm py-2 font-semibold">PLANILHA</th>
+              <th class="p-sm py-2 font-semibold text-center w-20 whitespace-nowrap">CHAVES</th>
+              <th class="p-sm py-2 font-semibold text-center w-24 whitespace-nowrap">BAIXADAS</th>
+              <th class="p-sm py-2 font-semibold text-center w-20 whitespace-nowrap">PULADAS</th>
+              <th class="p-sm py-2 font-semibold text-center w-20 whitespace-nowrap">FALHAS</th>
+              <th class="p-sm py-2 font-semibold w-48 whitespace-nowrap">STATUS</th>
+            </tr>
+          </thead>
+          <tbody class="text-on-surface" id="nfe-results-body"></tbody>
+        </table>
+      </div>
+      <!-- Estado vazio: sempre orienta o proximo passo, nunca fica em branco. -->
+      <div class="p-lg text-center text-body-md font-body-md text-on-surface-variant flex flex-col items-center gap-sm" id="nfe-empty-state">
+        <span class="material-symbols-outlined text-[32px] text-siga-slate">table_rows</span>
+        Nenhuma planilha processada ainda — selecione a pasta e clique em Executar.
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ======================= PAINEL DE EXECUCAO ======================= -->
+<aside class="bg-surface-container-low border-l border-outline-variant/40 flex flex-col w-execution-panel-width fixed right-0 top-14 bottom-7 z-40 p-md">
+  <div class="mb-md">
+    <h2 class="text-headline-md font-headline-md font-bold text-secondary uppercase tracking-wide">Execução</h2>
+    <p class="text-body-sm font-body-sm text-on-surface-variant">Monitoramento em tempo real</p>
+  </div>
+
+  <div class="flex flex-col gap-sm mb-md">
+    <!-- Escondido no modo NF-e (ele nao usa BrowserSession) - ver main.js -->
+    <button class="w-full bg-white border border-siga-slate text-siga-petrol text-label-bold font-label-bold py-sm rounded hover:bg-surface transition-colors flex items-center justify-center gap-xs" data-action="start-browser" id="btn-start-browser" type="button">
+      <span class="material-symbols-outlined text-[18px]">open_in_browser</span> Iniciar Navegador
+    </button>
+    <button class="w-full bg-siga-gold text-siga-gold-text text-label-bold font-label-bold py-md rounded-lg shadow-sm hover:brightness-105 active:brightness-95 transition-all flex items-center justify-center gap-xs uppercase tracking-wider" data-action="execute" id="btn-execute" type="button">
+      <span class="material-symbols-outlined">play_arrow</span> <span id="btn-execute-label">Extração SIGA</span>
+    </button>
+  </div>
+
+  <!-- Console de execucao -->
+  <div class="flex-1 flex flex-col bg-siga-terminal border border-outline-variant/30 overflow-hidden shadow-inner mb-md min-h-0">
+    <div class="bg-siga-petrol text-white px-md py-xs text-label-bold font-label-bold flex justify-between items-center uppercase tracking-widest text-[10px] shrink-0">
+      <span>Console de execução</span>
+      <button class="hover:text-siga-gold transition-colors flex items-center" data-action="copy-log" title="Copiar log" type="button">
+        <span class="material-symbols-outlined text-[14px]">content_copy</span>
+      </button>
+    </div>
+    <div class="p-sm flex-1 overflow-y-auto terminal-scroll text-console-text font-console-text selectable leading-relaxed" id="console-log"></div>
+  </div>
+
+  <!-- Progresso -->
+  <div class="shrink-0">
+    <div class="flex justify-between items-end mb-xs">
+      <span class="text-label-bold font-label-bold text-siga-slate uppercase tracking-wider text-[10px]">Progresso da operação</span>
+      <span class="text-label-bold font-label-bold text-on-surface" id="progress-label">0%</span>
+    </div>
+    <div class="w-full h-2 bg-[#DDE3E5] rounded-full overflow-hidden">
+      <div class="h-full bg-siga-gold w-0 transition-all duration-300" id="progress-bar"></div>
+    </div>
+  </div>
+</aside>
+
+<!-- ============================ RODAPE ============================= -->
+<footer class="bg-surface-container-highest border-t border-outline-variant/30 fixed bottom-0 left-0 right-0 h-7 flex items-center justify-between px-lg z-50">
+  <span class="text-[11px] font-body-sm text-on-surface-variant truncate" id="status-text">Carregue uma planilha XLSX ou informe CNPJs manualmente para iniciar.</span>
+  <span class="text-[11px] font-body-sm text-siga-slate shrink-0 ml-md">Barreira &amp; Associados — Assessoria Contábil</span>
+</footer>
+
+<!-- ===================== MODAL (avisos/confirmacoes) ================ -->
+<!-- Substitui os messagebox.* do Tkinter; pywebview nao tem equivalente nativo. -->
+<div class="fixed inset-0 z-[100] hidden items-center justify-center bg-black/40 backdrop-blur-[2px]" id="modal-overlay">
+  <div class="siga-card rounded-lg shadow-xl w-[440px] max-w-[90vw] overflow-hidden" role="alertdialog" aria-modal="true">
+    <div class="flex items-start gap-md p-lg">
+      <span class="material-symbols-outlined text-[28px] shrink-0" id="modal-icon">info</span>
+      <div class="flex flex-col gap-xs min-w-0">
+        <h3 class="text-headline-md font-headline-md text-on-surface" id="modal-title">SIGA Automação</h3>
+        <p class="text-body-md font-body-md text-on-surface-variant whitespace-pre-line break-words selectable" id="modal-message"></p>
+      </div>
+    </div>
+    <div class="bg-surface border-t border-outline-variant/30 px-lg py-md flex justify-end gap-sm">
+      <button class="px-md py-sm rounded text-label-bold font-label-bold border border-outline-variant/60 bg-white hover:bg-surface-container transition-colors hidden" id="modal-cancel" type="button">Cancelar</button>
+      <button class="px-md py-sm rounded text-label-bold font-label-bold bg-siga-petrol text-white hover:brightness-110 transition-all" id="modal-ok" type="button">OK</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/state.js"></script>
+<script src="js/modals.js"></script>
+<script src="js/api-bridge.js"></script>
+<script src="js/render.js"></script>
+<script src="js/screens.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

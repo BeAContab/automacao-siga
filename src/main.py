@@ -110,6 +110,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Reference year used to prefill the GUI.",
     )
+    parser.add_argument(
+        "--webui-debug",
+        action="store_true",
+        help="Enable the WebView2 developer tools (F12) in the GUI window.",
+    )
     return parser
 
 
@@ -160,8 +165,8 @@ def run_gui_mode(
     month: str | None = None,
     year: int | None = None,
 ) -> int:
-    """Abre a interface gráfica baseada em Tkinter e preserva valores iniciais vindos da linha de comando."""
-    from src.gui import launch_gui
+    """Abre a interface gráfica (pywebview) preservando valores iniciais vindos da linha de comando."""
+    from src.webui import launch_gui
 
     initial_year = str(year) if year is not None else None
     return launch_gui(
@@ -189,12 +194,13 @@ def main() -> int:
         use_system_browser_profile=args.system_browser_profile and not args.isolated_browser_profile,
         chrome_profile_directory=args.chrome_profile_directory,
         configure_certificate_policy=not args.skip_certificate_policy,
+        webui_debug=args.webui_debug,
         # nfce_cpf/nfce_senha (modo NFC-e) NÃO vêm daqui: são digitados na própria GUI
         # e ficam só em memória pelo tempo da execução — nunca persistidos em .env/disco.
     )
     configure_logging(settings.log_dir / "run.log")
     # A GUI nao tem um console util para o operador ler; a narracao ali chega pelo
-    # console interno da GUI (ver SigaAutomationGUI.__init__), nao stdout.
+    # console interno da GUI (ver src/webui/app.py), nao stdout.
     configure_narration(settings.log_dir, console=False)
 
     # Este modo apenas limpa a política de certificado e encerra.

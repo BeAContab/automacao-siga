@@ -4,4 +4,8 @@ python-dotenv==1.1.1
 pyinstaller==6.20.0
 fpdf2==2.8.2
 undetected-chromedriver==3.5.5
+# Interface gráfica (HTML/CSS/JS renderizado pelo WebView2 do Edge, que já acompanha o
+# Windows 10 atualizado e o Windows 11). O CSS/JS é compilado à parte, com Node, e vive
+# em src/web_dist/ — Node é dependência só de build, nunca de execução (ver web/build.py).
+pywebview==6.2.1
 

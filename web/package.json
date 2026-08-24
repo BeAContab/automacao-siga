@@ -1,0 +1,14 @@
+{
+  "name": "siga-automacao-ui",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Camada de interface (HTML/CSS/JS) do SIGA Automacao, renderizada por pywebview. O Tailwind e compilado localmente para src/web_dist/ - o app nunca baixa CSS de CDN em tempo de execucao.",
+  "scripts": {
+    "build:css": "tailwindcss -i ./src/styles/tailwind.css -o ../src/web_dist/styles.css --minify",
+    "watch:css": "tailwindcss -i ./src/styles/tailwind.css -o ../src/web_dist/styles.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/forms": "0.5.10",
+    "tailwindcss": "3.4.17"
+  }
+}
