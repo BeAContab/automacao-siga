@@ -64,9 +64,10 @@
     // Dados
     loadSpreadsheet: (path) => call('load_spreadsheet', path),
     loadManualCnpjs: (text) => call('load_manual_cnpjs', text),
+    loadNfceCompanies: (payload) => call('load_nfce_companies', payload),
 
     // Execucao
-    startBrowser: () => call('start_browser'),
+    startBrowser: (mode) => call('start_browser', mode),
     startSiga: (payload) => call('start_siga_extraction', payload),
     startNfce: (payload) => call('start_nfce_extraction', payload),
     startNfe: (payload) => call('start_nfe_extraction', payload),

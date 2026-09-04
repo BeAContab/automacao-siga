@@ -92,7 +92,7 @@
     }
     const selection = S.collectNfceSelection();
     if (!selection.length) {
-      await Modal.alert('Carregue pelo menos uma empresa (planilha ou entrada manual) antes de executar.', 'warning');
+      await Modal.alert('Clique em "Login / Carregar Empresas" e selecione ao menos uma empresa antes de executar.', 'warning');
       return false;
     }
 

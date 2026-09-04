@@ -87,8 +87,13 @@ def resolve_browser_executable(settings: Settings) -> Path:
     )
 
 
-def launch_debug_browser(settings: Settings) -> subprocess.Popen[str] | None:
-    """Sobe ou reaproveita um navegador com depuração remota ativa."""
+def launch_debug_browser(settings: Settings, initial_url: str | None = None) -> subprocess.Popen[str] | None:
+    """Sobe ou reaproveita um navegador com depuração remota ativa.
+
+    `initial_url` é a página aberta na aba inicial (padrão: `settings.siga_url`, para o
+    login manual do modo SIGA). O modo NFC-e passa `settings.nfce_login_url`, já que o
+    login ali é automático e não faz sentido abrir a tela do SIGA.
+    """
     executable = resolve_browser_executable(settings)
     connect_url = get_connect_browser_url(settings)
     port = settings.remote_debugging_port
@@ -101,22 +106,28 @@ def launch_debug_browser(settings: Settings) -> subprocess.Popen[str] | None:
         return None
 
     try:
-        return _start_debug_browser_process(settings, executable, port)
+        return _start_debug_browser_process(settings, executable, port, initial_url)
     except BrowserLauncherError:
         LOGGER.warning(
             "O CDP nao ficou disponivel na primeira tentativa; reiniciando o navegador e tentando novamente."
         )
         terminate_browser_processes(settings)
-        return _start_debug_browser_process(settings, executable, port)
+        return _start_debug_browser_process(settings, executable, port, initial_url)
 
 
-def _start_debug_browser_process(settings: Settings, executable: Path, port: int) -> subprocess.Popen[str]:
+def _start_debug_browser_process(
+    settings: Settings, executable: Path, port: int, initial_url: str | None = None
+) -> subprocess.Popen[str]:
     """Inicia o navegador com perfil controlado pela automação."""
     settings.browser_debug_profile_dir.mkdir(parents=True, exist_ok=True)
     command = [
         str(executable),
         f"--remote-debugging-port={port}",
         "--start-maximized",
+        # O modo NFC-e abre cada empresa via `window.open()` disparado por script (não
+        # por um clique real do usuário), e o Chrome bloqueia esse tipo de pop-up por
+        # padrão — sem isso, a aba da empresa nunca chega a abrir.
+        "--disable-popup-blocking",
     ]
     # Quando o login depende do certificado do usuário, o perfil do sistema pode ser necessário.
     if settings.use_system_browser_profile:
@@ -125,7 +136,7 @@ def _start_debug_browser_process(settings: Settings, executable: Path, port: int
             command.append(f"--profile-directory={settings.chrome_profile_directory}")
     else:
         command.append(f"--user-data-dir={settings.browser_debug_profile_dir}")
-    command.append(settings.siga_url)
+    command.append(initial_url or settings.siga_url)
     LOGGER.info("Abrindo o navegador com depuracao remota: %s", executable)
     process = subprocess.Popen(command)
     get_debug_browser_pid_path(settings).write_text(str(process.pid), encoding="ascii")

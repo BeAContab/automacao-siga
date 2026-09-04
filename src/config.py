@@ -31,7 +31,13 @@ class Settings:
     certificate_dir: Path = DEFAULT_CERTIFICATE_DIR
     output_dir: Path = DEFAULT_OUTPUT_DIR
     download_poll_interval_ms: int = 1_000
+    # Timeout do download do navegador em si (expect_download), apos o clique no botao —
+    # o arquivo XLSX ja pronto na Central de Downloads carrega rapido, entao 90s sobra.
     download_wait_timeout_ms: int = 90_000
+    # Timeout de espera pelo SIGA GERAR o relatorio na Central de Downloads (processando ->
+    # concluido) antes do clique — bem mais lento e variavel que o download em si; casos reais
+    # chegaram a levar ate 12 minutos (ver comentario em _find_pending_download_matches).
+    download_generation_timeout_ms: int = 240_000
     download_retry_count: int = 2
     download_retry_delay_ms: int = 2_000
     click_certificate_option: bool = False

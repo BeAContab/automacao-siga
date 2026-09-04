@@ -10,6 +10,7 @@
  *   window.sigaUpsertNfeResult({...})             - upsert de uma planilha na tabela NF-e
  *   window.sigaOnBrowserStarted()                 - navegador de depuracao abriu
  *   window.sigaOnBrowserFailed({message})         - falha ao abrir o navegador
+ *   window.sigaOnNfceCompaniesLoaded({rows})      - empresas do portal carregadas (modo NFC-e)
  *   window.sigaOnExecutionFinished({status})      - fim da execucao (sucesso ou falha)
  *   window.sigaSetProgress(percent)               - barra de progresso
  *   window.sigaSetStatus(text)                    - texto do rodape
@@ -26,6 +27,11 @@
 
   let MODE_LABELS = {};
   let MODE_DESCRIPTIONS = {};
+
+  function val(id) {
+    const node = document.getElementById(id);
+    return node ? node.value.trim() : '';
+  }
 
   /* ---------------------------- troca de modo ---------------------------- */
 
@@ -58,6 +64,11 @@
     const browserBtn = document.getElementById('btn-start-browser');
     if (browserBtn) browserBtn.hidden = mode === 'nfe';
 
+    // "Login / Carregar Empresas" e exclusivo do NFC-e (login automatico + raspagem
+    // de empresas do portal - substitui a antiga importacao de planilha).
+    const nfceLoadBtn = document.getElementById('btn-nfce-load-companies');
+    if (nfceLoadBtn) nfceLoadBtn.hidden = mode !== 'nfce';
+
     refreshExecuteButton();
     if (mode !== 'nfe') R.renderGrid(mode);
   }
@@ -70,6 +81,7 @@
   function refreshExecuteButton() {
     const btn = document.getElementById('btn-execute');
     const browserBtn = document.getElementById('btn-start-browser');
+    const nfceLoadBtn = document.getElementById('btn-nfce-load-companies');
     if (!btn) return;
     if (S.state.running) {
       btn.disabled = true;
@@ -79,6 +91,8 @@
       btn.disabled = !S.state.browserStarted;
     }
     if (browserBtn) browserBtn.disabled = S.state.running || S.state.browserStarted;
+    // So faz sentido logar/carregar empresas depois que o navegador estiver de pe.
+    if (nfceLoadBtn) nfceLoadBtn.disabled = S.state.running || !S.state.browserStarted;
   }
 
   /** Bloqueia/libera os controles durante a execucao (equivale a _set_controls_state). */
@@ -150,7 +164,6 @@
   // kind -> [metodo da ponte, id do campo que recebe o caminho escolhido]
   const PICKERS = {
     'pick-siga-spreadsheet': ['file', 'spreadsheet', 'siga-spreadsheet'],
-    'pick-nfce-spreadsheet': ['file', 'spreadsheet', 'nfce-spreadsheet'],
     'pick-nfce-base': ['file', 'spreadsheet', 'nfce-base-spreadsheet'],
     'pick-nfe-chrome': ['file', 'chrome', 'nfe-chrome-path'],
     'pick-siga-output': ['dir', 'siga_output', 'siga-output-dir'],
@@ -216,6 +229,47 @@
     await Modal.alert(count + ' empresa(s) prontas para execução.', 'success');
   }
 
+  /**
+   * Substitui a antiga importação de planilha/entrada manual do modo NFC-e: loga no
+   * portal SEFAZ-CE e devolve (de forma assíncrona, via window.sigaOnNfceCompaniesLoaded)
+   * as empresas elegíveis, já cruzadas com a planilha-base IE/CNPJ e a pasta de chaves.
+   */
+  async function loadNfceCompanies() {
+    const cpf = val('nfce-cpf');
+    const senha = document.getElementById('nfce-senha').value;
+    if (!cpf || !senha) {
+      await Modal.alert('Informe o CPF e a senha do contador antes de usar o modo NFC-e.', 'error');
+      return;
+    }
+    const baseSpreadsheet = val('nfce-base-spreadsheet');
+    if (!baseSpreadsheet) {
+      await Modal.alert('Selecione a planilha-base IE/CNPJ.', 'warning');
+      return;
+    }
+    const keysFolder = val('nfce-keys-folder');
+    if (!keysFolder) {
+      await Modal.alert('Selecione a pasta com as planilhas de chaves por empresa.', 'warning');
+      return;
+    }
+
+    const btn = document.getElementById('btn-nfce-load-companies');
+    if (btn) btn.disabled = true;
+    R.setStatus('Carregando empresas do portal SEFAZ-CE... aguarde.');
+
+    const result = await Api.loadNfceCompanies({
+      cpf: cpf,
+      senha: senha,
+      base_spreadsheet: baseSpreadsheet,
+      keys_folder: keysFolder,
+    });
+    if (result && !result.ok) {
+      if (btn) btn.disabled = false;
+      await Modal.alert(result.error, result.level || 'error');
+    }
+    // Sucesso real (empresas carregadas ou falha durante o login/raspagem) chega de
+    // forma assincrona por window.sigaOnNfceCompaniesLoaded / sigaShowMessage.
+  }
+
   /* ------------------------------- eventos ------------------------------- */
 
   function wireEvents() {
@@ -246,7 +300,6 @@
 
         switch (action) {
           case 'load-siga-spreadsheet': return void await loadSpreadsheet('siga');
-          case 'load-nfce-spreadsheet': return void await loadSpreadsheet('nfce');
           case 'load-manual': return void await loadManual(mode);
           case 'clear-manual':
             document.getElementById(mode + '-manual-cnpjs').value = '';
@@ -257,6 +310,7 @@
           case 'clear-all-incluir': return void setAllIncluir(false);
           case 'clear-rows': return void await clearRows(mode);
           case 'validate-rows': return void await validateRows(mode);
+          case 'load-nfce-companies': return void await loadNfceCompanies();
           case 'copy-log': return void copyLog();
           case 'start-browser': return void await startBrowser();
           case 'execute': return void await execute();
@@ -284,7 +338,7 @@
     const btn = document.getElementById('btn-start-browser');
     if (btn) btn.disabled = true;
     R.setStatus('Iniciando o navegador... aguarde.');
-    const result = await Api.startBrowser();
+    const result = await Api.startBrowser(S.state.mode);
     if (result && !result.ok) {
       if (btn) btn.disabled = false;
       await Modal.alert(result.error, 'error');
@@ -317,13 +371,23 @@
   window.sigaOnBrowserStarted = function () {
     S.state.browserStarted = true;
     refreshExecuteButton();
-    R.setStatus('Navegador iniciado. Faça o login manualmente e, depois, clique em Executar.');
+    R.setStatus(
+      S.state.mode === 'nfce'
+        ? 'Navegador iniciado. Clique em "Login / Carregar Empresas" para logar automaticamente.'
+        : 'Navegador iniciado. Faça o login manualmente e, depois, clique em Executar.'
+    );
   };
 
   window.sigaOnBrowserFailed = function (payload) {
     S.state.browserStarted = false;
     refreshExecuteButton();
     R.setStatus('Não foi possível abrir o navegador automaticamente: ' + payload.message);
+  };
+
+  window.sigaOnNfceCompaniesLoaded = function (payload) {
+    const btn = document.getElementById('btn-nfce-load-companies');
+    if (btn) btn.disabled = false;
+    applyLoadedRows('nfce', payload, payload.rows.length + ' empresa(s) encontrada(s) no portal.');
   };
 
   window.sigaOnExecutionFinished = function (payload) {
@@ -335,6 +399,10 @@
   window.sigaSetProgress = function (percent) { R.setProgress(percent); };
   window.sigaSetStatus = function (text) { R.setStatus(text); };
   window.sigaShowMessage = function (payload) {
+    // Reabilita o botao de carregar empresas do NFC-e caso a falha assincrona tenha
+    // vindo dali (login/raspagem do portal falhou dentro da thread de trabalho).
+    const nfceLoadBtn = document.getElementById('btn-nfce-load-companies');
+    if (nfceLoadBtn) nfceLoadBtn.disabled = false;
     Modal.alert(payload.message, payload.level || 'error');
   };
 
@@ -343,7 +411,6 @@
   async function boot() {
     wireEvents();
     setInputTab('siga', 'import');
-    setInputTab('nfce', 'import');
 
     const initial = await Api.getInitialState();
     MODE_LABELS = initial.mode_labels;

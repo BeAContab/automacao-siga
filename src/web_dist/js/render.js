@@ -41,7 +41,8 @@
 
   /**
    * Desenha a grade do modo informado. SIGA usa 5 colunas de documento; NFC-e usa uma
-   * unica coluna "Incluir" (nao existe escolha por tipo de documento nesse fluxo).
+   * coluna "Chaves" (quantas chaves foram encontradas para a empresa) e uma unica
+   * coluna "Incluir" (nao existe escolha por tipo de documento nesse fluxo).
    */
   function renderGrid(mode) {
     const body = document.querySelector('[data-grid-body="' + mode + '"]');
@@ -52,8 +53,13 @@
     if (!rows.length) {
       const tr = el('tr');
       const td = el('td', 'py-lg px-md text-center text-body-sm text-on-surface-variant');
-      td.colSpan = mode === 'siga' ? 7 : 3;
-      td.textContent = 'Nenhuma empresa carregada — importe uma planilha ou use a entrada manual.';
+      if (mode === 'siga') {
+        td.colSpan = 7;
+        td.textContent = 'Nenhuma empresa carregada — importe uma planilha ou use a entrada manual.';
+      } else {
+        td.colSpan = 4;
+        td.textContent = 'Nenhuma empresa carregada — clique em "Login / Carregar Empresas".';
+      }
       tr.appendChild(td);
       body.appendChild(tr);
     } else {
@@ -71,6 +77,7 @@
         if (mode === 'siga') {
           DOC_FIELDS.forEach((field) => tr.appendChild(docCheckboxCell(row, field)));
         } else {
+          tr.appendChild(el('td', 'py-2 px-md text-center text-siga-slate font-console-text', row.chavesCount));
           tr.appendChild(docCheckboxCell(row, 'incluir'));
         }
         body.appendChild(tr);

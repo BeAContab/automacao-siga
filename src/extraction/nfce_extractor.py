@@ -55,8 +55,20 @@ def sanitize_folder_name(value: str) -> str:
     return cleaned or "SEM-NOME"
 
 
+def _is_nfce_key(digits: str) -> bool:
+    """True se a sequência é uma chave de acesso de 44 dígitos do modelo NFC-e (65).
+
+    Posições 21-22 (índice [20:22]) da chave de acesso identificam o modelo do
+    documento fiscal no padrão nacional: 65 = NFC-e, 55 = NF-e, 57 = CT-e. NF-e, NFC-e
+    e CT-e usam o mesmo formato de 44 dígitos, então essa checagem é a rede de
+    segurança que impede uma chave de NF-e/CT-e (ex.: achada por engano numa pasta
+    'NF-e'/'CT-e' vizinha) de ser tratada como chave de NFC-e.
+    """
+    return len(digits) == 44 and digits[20:22] == "65"
+
+
 def extract_keys_from_spreadsheet(path: Path) -> list[str]:
-    """Varre todas as colunas/linhas em busca de sequências de 44 dígitos (chave de acesso)."""
+    """Varre todas as colunas/linhas em busca de chaves de acesso de NFC-e (44 dígitos, modelo 65)."""
     keys: list[str] = []
     seen: set[str] = set()
     try:
@@ -67,7 +79,7 @@ def extract_keys_from_spreadsheet(path: Path) -> list[str]:
                 if cell is None:
                     continue
                 digits = _only_digits(str(cell))
-                if len(digits) == 44 and digits not in seen:
+                if _is_nfce_key(digits) and digits not in seen:
                     seen.add(digits)
                     keys.append(digits)
         workbook.close()
@@ -76,15 +88,65 @@ def extract_keys_from_spreadsheet(path: Path) -> list[str]:
     return keys
 
 
-def find_keys_file_for_cnpj(keys_folder: Path, cnpj: str) -> Path | None:
-    """Localiza, dentro da pasta de chaves, o arquivo .xlsx cujo nome contém o CNPJ."""
+def _company_folder_for_cnpj(keys_folder: Path, cnpj: str) -> Path | None:
+    """Subpasta direta de `keys_folder` cujo nome contém o CNPJ (convenção do modo SIGA:
+    'COD - EMPRESA - CNPJ', ver `_build_taxpayer_folder_name` em `siga_extractor.py`)."""
     normalized = normalize_cnpj(cnpj)
     if not normalized or not keys_folder.is_dir():
         return None
-    for candidate in keys_folder.glob("*.xlsx"):
-        if normalized in _only_digits(candidate.stem):
+    for candidate in keys_folder.iterdir():
+        if candidate.is_dir() and normalized in _only_digits(candidate.name):
             return candidate
     return None
+
+
+def find_keys_files_for_cnpj(keys_folder: Path, cnpj: str) -> list[Path]:
+    """Localiza os arquivos de chaves NFC-e de uma empresa, aceitando dois formatos:
+
+    - Pasta de resultado do SIGA: a subpasta '<COD> - <EMPRESA> - <CNPJ>' contém uma
+      ou mais subpastas chamadas exatamente 'NFC-e' (uma por mês, em qualquer
+      profundidade — ver `_build_taxpayer_output_dir` em `siga_extractor.py`). Só
+      arquivos dentro dessas pastas entram; pastas irmãs 'NF-e'/'CT-e' (mesmo formato
+      de chave de 44 dígitos) nunca são varridas.
+    - Formato antigo: um arquivo .xlsx solto direto em `keys_folder`, nomeado com o CNPJ.
+
+    Devolve a união dos dois formatos, sem duplicar.
+    """
+    normalized = normalize_cnpj(cnpj)
+    if not normalized or not keys_folder.is_dir():
+        return []
+
+    files: list[Path] = []
+    company_folder = _company_folder_for_cnpj(keys_folder, cnpj)
+    if company_folder is not None:
+        for item in company_folder.rglob("*"):
+            if item.is_dir() and item.name.strip().lower() == "nfc-e":
+                files.extend(sorted(item.glob("*.xlsx")))
+
+    for candidate in keys_folder.glob("*.xlsx"):
+        if normalized in _only_digits(candidate.stem):
+            files.append(candidate)
+
+    seen_paths: set[Path] = set()
+    unique_files: list[Path] = []
+    for f in files:
+        if f not in seen_paths:
+            seen_paths.add(f)
+            unique_files.append(f)
+    return unique_files
+
+
+def collect_nfce_keys_for_cnpj(keys_folder: Path, cnpj: str) -> list[str]:
+    """Agrega, sem duplicar, as chaves NFC-e válidas de todos os arquivos encontrados
+    para o CNPJ (pasta de resultado do SIGA e/ou arquivo solto no formato antigo)."""
+    keys: list[str] = []
+    seen: set[str] = set()
+    for path in find_keys_files_for_cnpj(keys_folder, cnpj):
+        for key in extract_keys_from_spreadsheet(path):
+            if key not in seen:
+                seen.add(key)
+                keys.append(key)
+    return keys
 
 
 def load_cnpj_ie_base(path: Path | None) -> dict[str, str]:
@@ -148,6 +210,21 @@ class NfceSessionManager:
 
     def fazer_login(self) -> bool:
         """Efetua login com CPF/senha (settings.nfce_cpf/nfce_senha); idempotente se já logado."""
+        # Checa a pagina ATUAL antes de navegar para qualquer lugar: se esta chamada
+        # vem logo apos `discover_selectable_companies` (mesmo navegador, sessao ja
+        # autenticada, parado na area de empresas), navegar de novo para
+        # nfce_login_url tem comportamento imprevisivel no portal (o redirecionamento
+        # pode nao cair nem na area de empresas nem na tela de login, derrubando as 3
+        # tentativas abaixo com "elemento #txtUsuario nao encontrado"). Reaproveitar a
+        # sessao pela pagina atual evita esse ponto de falha por completo.
+        try:
+            if self.page.locator("xpath=//a[contains(@href,'submete')]").count() > 0:
+                LOGGER.info("Usuario NFC-e ja estava logado (sessao reaproveitada)")
+                self._login_time = time.time()
+                return True
+        except Error:
+            pass
+
         for tentativa in range(1, 4):
             try:
                 self.page.goto(
@@ -370,15 +447,13 @@ class NfceBatchExtractor:
                 results.append(NfceBatchResult(spreadsheet_row, status="sem_empresa"))
                 continue
 
-            keys_file = find_keys_file_for_cnpj(self.keys_folder, target_cnpj)
-            if keys_file is None:
-                narrate_warning("Nenhuma planilha de chaves encontrada para %s na pasta configurada.", empresa_nome)
-                results.append(NfceBatchResult(spreadsheet_row, status="sem_chaves"))
-                continue
-
-            chaves = extract_keys_from_spreadsheet(keys_file)
+            chaves = collect_nfce_keys_for_cnpj(self.keys_folder, target_cnpj)
             if not chaves:
-                narrate_warning("A planilha de chaves de %s não contém chaves de 44 dígitos válidas.", empresa_nome)
+                narrate_warning(
+                    "Nenhuma chave de NFC-e encontrada para %s na pasta configurada "
+                    "(nem em subpasta 'NFC-e' de resultado do SIGA, nem em planilha solta).",
+                    empresa_nome,
+                )
                 results.append(NfceBatchResult(spreadsheet_row, status="sem_chaves"))
                 continue
 
@@ -401,6 +476,52 @@ class NfceBatchExtractor:
             )
 
         return results
+
+    def discover_selectable_companies(self, context: BrowserContext) -> list[dict]:
+        """Loga no portal e devolve as empresas elegíveis para a tela de seleção.
+
+        Elegível = a IE devolvida pelo portal resolve para um CNPJ na planilha-base
+        IE/CNPJ *e* esse CNPJ tem um arquivo de chaves correspondente na pasta
+        configurada (com pelo menos uma chave válida). Usado só para popular a grade
+        antes da execução; `run_batch_in_context` refaz login/listagem do zero por
+        conta própria (idempotente, já que `fazer_login` detecta sessão já ativa).
+        """
+        page = context.pages[0] if context.pages else context.new_page()
+        session = NfceSessionManager(self.settings, page)
+
+        narrate("Fazendo login no portal SEFAZ-CE (modo NFC-e)...")
+        if not session.fazer_login():
+            narrate_error("Não foi possível fazer login no portal SEFAZ-CE com as credenciais configuradas.")
+            raise RuntimeError("Falha no login automático do modo NFC-e.")
+        narrate_success("Login no portal SEFAZ-CE realizado com sucesso.")
+
+        session.acessar_area_empresas()
+        empresas = session.listar_empresas()
+        narrate("%s empresa(s) encontrada(s) na sessão do portal.", len(empresas))
+
+        mapa_cnpj_ie = load_cnpj_ie_base(self.base_spreadsheet_path)
+        mapa_ie_cnpj = {ie: cnpj for cnpj, ie in mapa_cnpj_ie.items() if ie}
+
+        rows: list[dict] = []
+        for index, company in enumerate(empresas, start=1):
+            cnpj = mapa_ie_cnpj.get(normalize_ie(company.ie), "")
+            if not cnpj:
+                continue
+            chaves = collect_nfce_keys_for_cnpj(self.keys_folder, cnpj)
+            if not chaves:
+                continue
+            rows.append(
+                {
+                    "row_number": index,
+                    "cod": company.ie,
+                    "empresa": company.nome,
+                    "cnpj": cnpj,
+                    "chaves_count": len(chaves),
+                }
+            )
+
+        narrate_success("%s empresa(s) elegível(is) para download (com chaves disponíveis).", len(rows))
+        return rows
 
     def _match_company(
         self,
@@ -444,7 +565,7 @@ class NfceBatchExtractor:
 
             script = company.href.replace("javascript:", "")
             try:
-                self._abrir_empresa(page, script)
+                empresa_page = self._abrir_empresa(page, script)
             except (Error, TimeoutError) as exc:
                 LOGGER.warning("Falha ao abrir a empresa %s: %s", company.nome, exc)
                 if not (session.renovar_login() or session.reset_completo_com_espera()):
@@ -452,21 +573,28 @@ class NfceBatchExtractor:
                 continue
 
             progresso_nesta_passada = 0
-            for chave_index, chave in enumerate(list(pendentes), start=1):
-                if chave_index % self.settings.nfce_session_renewal_check_every_n_keys == 0 and session.sessao_expirando():
-                    narrate("Renovando sessão antes de continuar o lote de %s...", company.nome)
-                    break
+            try:
+                for chave_index, chave in enumerate(list(pendentes), start=1):
+                    if chave_index % self.settings.nfce_session_renewal_check_every_n_keys == 0 and session.sessao_expirando():
+                        narrate("Renovando sessão antes de continuar o lote de %s...", company.nome)
+                        break
 
-                sucesso, precisa_reset = self._baixar_xml_chave(context, page, chave, download_manager)
-                if sucesso:
-                    baixadas.add(chave)
-                    pendentes.remove(chave)
-                    progresso_nesta_passada += 1
-                if precisa_reset:
-                    narrate_warning("Sessão instável durante o download de %s; acionando recuperação.", company.nome)
-                    if not (session.renovar_login() or session.reset_completo_com_espera()):
-                        return len(baixadas)
-                    break
+                    sucesso, precisa_reset = self._baixar_xml_chave(context, empresa_page, chave, download_manager)
+                    if sucesso:
+                        baixadas.add(chave)
+                        pendentes.remove(chave)
+                        progresso_nesta_passada += 1
+                    if precisa_reset:
+                        narrate_warning("Sessão instável durante o download de %s; acionando recuperação.", company.nome)
+                        if not (session.renovar_login() or session.reset_completo_com_espera()):
+                            return len(baixadas)
+                        break
+            finally:
+                # Sempre fecha a aba da empresa ao fim da passada (sucesso, falha ou
+                # reset) e volta pra lista — a próxima passada reabre a empresa do
+                # zero, mesmo padrão do script original. Sem isso, cada passada
+                # acumularia mais uma aba aberta.
+                self._fechar_aba_empresa(empresa_page, page)
 
             if progresso_nesta_passada == 0:
                 passadas_sem_progresso += 1
@@ -483,11 +611,28 @@ class NfceBatchExtractor:
 
         return len(baixadas)
 
-    def _abrir_empresa(self, page: Page, script: str) -> None:
-        """Executa o script de abertura da empresa e navega para a consulta de NFC-e."""
+    def _abrir_empresa(self, page: Page, script: str) -> Page:
+        """Executa o script de abertura da empresa e navega para a consulta de NFC-e.
+
+        O script (`javascript:submete(...)` raspado do portal) abre a empresa numa
+        aba/janela NOVA via `window.open()` — nunca navega a aba atual. Precisa
+        detectar essa aba nova (comparando os handles antes/depois) e devolvê-la,
+        já que a aba original (lista de empresas) nunca vai ter o link "Consultar
+        NFC-e". `launch_debug_browser` já abre o Chrome com `--disable-popup-blocking`
+        para esse pop-up não ser bloqueado.
+        """
+        handles_antes = set(page.driver.window_handles)
         page.evaluate(script)
         page.wait_for_timeout(1500)
-        page.evaluate(
+
+        novos_handles = [h for h in page.driver.window_handles if h not in handles_antes]
+        if not novos_handles:
+            raise TimeoutError(
+                "A empresa não abriu uma aba nova (pop-up pode ter sido bloqueado pelo navegador)."
+            )
+        empresa_page = Page(page.context, novos_handles[0])
+
+        empresa_page.evaluate(
             """
             () => {
                 document.querySelectorAll('.mfe-migration-modal, .modal-backdrop, .modal').forEach((el) => el.remove());
@@ -496,10 +641,24 @@ class NfceBatchExtractor:
             }
             """
         )
-        link = page.locator("a[ui-sref='taxpayers.fiscalCouponsNfceList']")
+        link = empresa_page.locator("a[ui-sref='taxpayers.fiscalCouponsNfceList']")
         link.wait_for(state="visible", timeout=10_000)
         link.click(force=True)
-        page.wait_for_timeout(2000)
+        empresa_page.wait_for_timeout(2000)
+        return empresa_page
+
+    def _fechar_aba_empresa(self, empresa_page: Page, pagina_lista: Page) -> None:
+        """Fecha a aba da empresa (aberta por `_abrir_empresa`) e volta para a lista."""
+        driver = empresa_page.driver
+        try:
+            if empresa_page.handle in driver.window_handles:
+                driver.switch_to.window(empresa_page.handle)
+                driver.close()
+        except Error:
+            pass
+        finally:
+            if pagina_lista.handle in driver.window_handles:
+                driver.switch_to.window(pagina_lista.handle)
 
     def _baixar_xml_chave(
         self,

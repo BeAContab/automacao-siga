@@ -4,7 +4,7 @@ Este arquivo fornece orientações ao Claude Code (claude.ai/code) para trabalha
 
 ## Visão geral do projeto
 
-O SIGA Automação é uma ferramenta desktop para Windows (Python + Selenium) que automatiza a extração em lote de documentos fiscais (NF-e, NFC-e, CT-e, Malha Fiscal, Débitos Fiscais) do portal SIGA da SEFAZ-CE (Secretaria da Fazenda do Estado do Ceará). A ferramenta controla um navegador real (Chrome/Edge) via CDP, permite que o usuário faça login manualmente (inclusive com certificado digital) e então percorre o portal por CNPJ, solicitando e baixando os relatórios, organizando a saída em pastas `COD - EMPRESA - CNPJ`. **A GUI é a única interface de extração suportada** (o antigo modo de lote via terminal foi descontinuado) e, desde a v2.0.0, é uma interface **pywebview** (HTML/CSS/JS renderizado pelo WebView2 do Edge) — a antiga GUI Tkinter (`src/gui.py`) foi removida. Consulte [README.md](README.md) para a descrição completa do produto. **Nota:** o `.spec` do PyInstaller foi recriado na v2.0.0 (`siga-automacao.spec`); o `.iss` do Inno Setup continua ausente (removido junto com `pré-lixo/`), então há caminho para gerar `.exe`, mas não para gerar instalador.
+O SIGA Automação é uma ferramenta desktop para Windows (Python + Selenium) que automatiza a extração em lote de documentos fiscais (NF-e, NFC-e, CT-e, Malha Fiscal, Débitos Fiscais) do portal SIGA da SEFAZ-CE (Secretaria da Fazenda do Estado do Ceará). A ferramenta controla um navegador real (Chrome/Edge) via CDP, permite que o usuário faça login manualmente (inclusive com certificado digital) e então percorre o portal por CNPJ, solicitando e baixando os relatórios, organizando a saída em pastas `COD - EMPRESA - CNPJ`. **A GUI é a única interface de extração suportada** (o antigo modo de lote via terminal foi descontinuado) e, desde a v2.0.0, é uma interface **pywebview** (HTML/CSS/JS renderizado pelo WebView2 do Edge) — a antiga GUI Tkinter (`src/gui.py`) foi removida. Consulte [README.md](README.md) para a descrição completa do produto. **Nota:** o `.spec` do PyInstaller (`siga-automacao.spec`) e o `.iss` do Inno Setup (`installer/siga-automacao.iss`) foram recriados na v2.0.0/v2.0.3, respectivamente — ambos removidos junto com `pré-lixo/` numa limpeza anterior — então há caminho pronto para gerar tanto `.exe` quanto instalador de novo.
 
 ## Comandos
 
@@ -40,7 +40,13 @@ Gerar o executável (`siga-automacao.spec`, recriado na v2.0.0):
 python web/build.py
 pyinstaller siga-automacao.spec
 ```
-A ordem importa: o spec empacota `src/web_dist/` como está, então a interface precisa ter sido compilada antes. Não há mais `.iss` do Inno Setup — o instalador continua sem caminho pronto (removido junto com `pré-lixo/`).
+A ordem importa: o spec empacota `src/web_dist/` como está, então a interface precisa ter sido compilada antes.
+
+Gerar o instalador (`installer/siga-automacao.iss`, recriado na v2.0.3 — requer o Inno Setup instalado, `ISCC.exe`):
+```
+iscc installer\siga-automacao.iss
+```
+Depende do `.exe` já ter sido gerado (passo anterior): o script copia a pasta inteira `dist\siga-automacao\` (build "onedir" do PyInstaller — `.exe` + pasta `_internal\` de dependências), não um único arquivo. Gera `dist\installer\Setup <versão>.exe`. Atualize `MyAppVersion` no topo do `.iss` a cada release, junto com `src/__init__.py` e o `CHANGELOG.md`.
 
 Requisito de runtime da interface: **Microsoft Edge WebView2 Runtime**, que acompanha o Windows 11 e o Windows 10 atualizado. Em máquina sem ele, o app não abre a janela e mostra uma mensagem explicativa em português (ver `_report_startup_failure` em [src/webui/app.py](src/webui/app.py)) em vez de um erro cru.
 
@@ -72,7 +78,7 @@ O logging técnico é centralizado por [src/utils/logging_setup.py](src/utils/lo
 - `brain/` contém notas de trabalho datadas, ignoradas pelo git, documentando decisões de implementação passadas (um arquivo por mudança, ex.: `brain/2026-06-12-busca-cnpj-sem-paginacao.md`) — útil como contexto para investigar *por que* algum trecho de lógica de extração/correspondência está do jeito que está, mas não é algo que precise continuar sendo atualizado.
 - O histórico voltado ao usuário/versão fica em [CHANGELOG.md](CHANGELOG.md), agrupado em entradas de versão datadas com seções `### Adicionado` / `### Alterado` / `### Corrigido` / `### Removido` em português — siga esse formato quando for solicitado a registrar uma mudança.
 - Como o frontend do SIGA é uma SPA Angular/PrimeNG propensa a mudanças de layout, o código de extração privilegia seletores resilientes e com fallback (correspondência por texto/label, remoção de acentos, loops de retry) em vez de seletores fixos frágeis — mantenha esse estilo em vez de introduzir seletores CSS de tiro único ao alterar `siga_extractor.py` ou `siga_page.py`.
-- `pré-lixo/` **não existe mais** — a pasta inteira (documentação de planejamento, specs de build/instalador `.spec`/`.iss`, script de teste manual, exports de design do Stitch) foi removida do repositório (movida para a lixeira do Windows, não hard-delete). Isso levou junto o `.spec` do PyInstaller e o `.iss` do Inno Setup — não há build de `.exe`/instalador configurado até esses arquivos serem recriados. Se precisar recuperar algo de lá, veja o histórico do git de antes dessa remoção.
+- `pré-lixo/` **não existe mais** — a pasta inteira (documentação de planejamento, specs de build/instalador `.spec`/`.iss`, script de teste manual, exports de design do Stitch) foi removida do repositório (movida para a lixeira do Windows, não hard-delete). Isso levou junto o `.spec` do PyInstaller e o `.iss` do Inno Setup, ambos recriados desde então (`siga-automacao.spec` na v2.0.0, `installer/siga-automacao.iss` na v2.0.3) — não são mais idênticos aos originais removidos, mas cobrem o mesmo papel. Se precisar comparar com a versão original, veja o histórico do git de antes dessa remoção.
 - `importação/` (raiz do projeto, não rastreada) guarda o material-fonte de outros módulos de extração fiscal fora do escopo do SIGA: `importação/NFCE/codigo-fonte/xml nfce.py` foi a base da portagem para `src/extraction/nfce_extractor.py` (nunca importar ou copiar esse arquivo original para dentro de `src/` — ele tem credenciais reais em texto puro); `importação/NFE 2/automacao-meu-danfe/main.py` foi a base da portagem para `src/extraction/meudanfe_extractor.py` (item 4c da Arquitetura); `importação/NFE/` (o script Playwright) não foi integrado e não tem relação com o modo NF-e atual (ver `brain/2026-08-19-nfe-playwright-nao-integrado.md` e `brain/2026-08-20-nfe-meudanfe-integrado.md`). Não mover nada disso para `pré-lixo/` em limpezas futuras — é material de trabalho ativo, não lixo.
 - `.env.example` (raiz do projeto) documenta as variáveis de ambiente esperadas (`PREFER_EXISTING_SIGA_SESSION`) — o `.env` real nunca é versionado. CPF/senha do modo NFC-e não vão no `.env`: são digitados na própria GUI a cada execução.
 
@@ -110,7 +116,7 @@ explícita.
 ## 4. Changelog e Versionamento
 
 Toda atualização de código deve ser registrada no CHANGELOG.md, seguindo versionamento semântico (Major.Minor.Patch), com escopo claro das mudanças — isso vale para qualquer mudança de código, não só releases formais.
-Além disso, **sempre** que lançar uma nova versão no CHANGELOG, atualize `src/__init__.py` (`__version__ = "<versão>"`) com o mesmo valor — é a única fonte de verdade lida em runtime pela GUI (título da janela e badge na topbar). (O `.iss` do instalador que antes também precisava ser sincronizado foi removido junto com `pré-lixo/`; se um instalador for recriado no futuro, reaplique essa mesma regra a ele.)
+Além disso, **sempre** que lançar uma nova versão no CHANGELOG, atualize `src/__init__.py` (`__version__ = "<versão>"`) com o mesmo valor — é a única fonte de verdade lida em runtime pela GUI (título da janela e badge na topbar) — **e também** `MyAppVersion` no topo de `installer/siga-automacao.iss`, senão o instalador gerado carrega o nome/versão antigos no título e no `Setup <versão>.exe` de saída.
 
 ## 5. Dados Sensíveis e i18n
 
