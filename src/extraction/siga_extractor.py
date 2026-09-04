@@ -2649,7 +2649,7 @@ class SigaContributorExtractor:
         targets: list[DownloadLookupTarget],
     ) -> dict[str, DownloadRowMatch]:
         """Varre todas as paginas e escolhe o melhor match por solicitacao."""
-        deadline = time.time() + (self.settings.download_wait_timeout_ms / 1000)
+        deadline = time.time() + (self.settings.download_generation_timeout_ms / 1000)
         target_keys = {target.request.request_key for target in targets}
         # Acumula os matches ja confirmados (preferidos) entre ciclos: uma vez resolvida, uma
         # solicitacao nao precisa ser reprocurada nos ciclos de espera seguintes, entao os ciclos
@@ -2706,25 +2706,32 @@ class SigaContributorExtractor:
             # O reload da SPA reseta o paginador para o tamanho padrao; reaplica o maximo.
             self._select_max_downloads_page_size(page)
 
-        if all_settled:
-            # Antes de retornar, faz uma varredura completa (sem parada antecipada) com todos os
-            # alvos originais, para garantir a resolucao de duplicatas em paginas posteriores,
-            # independentemente da ordenacao da Central de Downloads. O resultado se junta ao
-            # melhor match ja visto em ciclos anteriores (nao substitui): se esta varredura final
-            # nao reencontrar algo que um ciclo anterior ja tinha achado com confianca, o match
-            # anterior sobrevive em vez de ser perdido.
-            final_scan_matches, _ = self._scan_downloads_table_once(page, targets, full_scan=True)
-            for match in final_scan_matches.values():
-                self._store_best_download_match(best_matches_ever, match)
-            missing_keys = sorted(target_keys - set(best_matches_ever.keys()))
-            if missing_keys:
-                LOGGER.warning(
-                    "Downloads nao localizados apos a varredura completa: %s",
-                    ", ".join(self._pending_request_labels(targets, missing_keys)),
-                )
-        elif best_matches_ever:
+        # Faz sempre uma varredura completa final (sem parada antecipada) com todos os alvos
+        # originais antes de retornar — inclusive quando o timeout expirou sem `all_settled`.
+        # Isso e essencial: um match "encontrado" num ciclo intermediario pode estar obsoleto
+        # minutos depois (linha ainda "processando" naquele instante, ou que mudou de pagina
+        # com a chegada de novas solicitacoes de outros usuarios na mesma Central compartilhada).
+        # Sem essa reconfirmacao, `_capture_download_for_match` tentava clicar direto na posicao
+        # antiga e falhava com "Nao foi possivel reencontrar a linha" mesmo para itens que o
+        # SIGA ja tinha, de fato, terminado de gerar. O resultado desta varredura se junta ao
+        # melhor match ja visto em ciclos anteriores (nao substitui): se esta varredura final nao
+        # reencontrar algo que um ciclo anterior ja tinha achado com confianca, o match anterior
+        # sobrevive em vez de ser perdido.
+        final_scan_matches, _ = self._scan_downloads_table_once(page, targets, full_scan=True)
+        for match in final_scan_matches.values():
+            self._store_best_download_match(best_matches_ever, match)
+        missing_keys = sorted(target_keys - set(best_matches_ever.keys()))
+        if not all_settled:
             LOGGER.warning(
-                "A Central de Downloads expirou antes de concluir todas as linhas pendentes; usando os matches encontrados ate agora."
+                "A Central de Downloads expirou antes de concluir todas as linhas pendentes; "
+                "varredura final de confirmacao localizou %s de %s solicitacoes.",
+                len(target_keys) - len(missing_keys),
+                len(target_keys),
+            )
+        if missing_keys:
+            LOGGER.warning(
+                "Downloads nao localizados apos a varredura completa: %s",
+                ", ".join(self._pending_request_labels(targets, missing_keys)),
             )
 
         return best_matches_ever
@@ -3042,7 +3049,7 @@ class SigaContributorExtractor:
         segundos antes da varredura final do lote (ex.: o ultimo CNPJ processado) e tratada
         como "nao localizada" so porque nunca chegou a ser vista em nenhum estado, quando na
         verdade só precisava de mais alguns ciclos de espera dentro do mesmo timeout ja
-        configurado (`download_wait_timeout_ms`).
+        configurado (`download_generation_timeout_ms`).
         """
         waiting_keys: list[str] = []
         for target in targets:
@@ -3223,9 +3230,32 @@ class SigaContributorExtractor:
         for attempt in range(1, attempts + 1):
             row = self._find_download_row_for_match_on_current_page(page, target, match)
             if row is None:
-                raise TimeoutError(
+                # A linha pode ainda nao estar "Concluido" (match antigo/otimista de um ciclo
+                # anterior) ou ter mudado de pagina desde a varredura que gerou `match` — antes
+                # este caso levantava erro direto na primeira tentativa, ignorando por completo
+                # o retry configurado (`download_retry_count`). Agora trata como uma falha
+                # retentavel: espera e revarre a Central de Downloads para reencontrar a linha
+                # em qualquer pagina antes de desistir.
+                last_error = TimeoutError(
                     f"Nao foi possivel reencontrar a linha '{target.request.tela_aba}' na pagina {match.page_number}."
                 )
+                if attempt < attempts:
+                    LOGGER.warning(
+                        "Linha de %s nao encontrada/concluida na pagina %s (tentativa %s/%s); "
+                        "revarrendo a Central de Downloads antes de tentar novamente.",
+                        target.request.tela_aba,
+                        match.page_number,
+                        attempt,
+                        attempts,
+                    )
+                    narrate_warning("Aguardando o arquivo de %s ficar pronto para baixar...", target.request.tela_aba)
+                    page.wait_for_timeout(self.settings.download_retry_delay_ms)
+                    refreshed_matches, _ = self._scan_downloads_table_once(page, [target], full_scan=True)
+                    refreshed = refreshed_matches.get(target.request.request_key)
+                    if refreshed is not None:
+                        match = refreshed
+                    continue
+                break
 
             basename = self._download_output_basename(target.request)
             try:

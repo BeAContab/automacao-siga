@@ -138,6 +138,7 @@ class Api:
         self._worker_thread: threading.Thread | None = None
         self._browser_thread: threading.Thread | None = None
         self._browser_started = False
+        self._nfce_discovery_thread: threading.Thread | None = None
 
     # ---------------------------------------------- estado interno (não exposto ao JS)
 
@@ -258,8 +259,13 @@ class Api:
 
     # ------------------------------------------------------------------ navegador
 
-    def start_browser(self) -> dict[str, Any]:
-        """Abre o navegador de depuração usado por SIGA/NFC-e (login manual do usuário)."""
+    def start_browser(self, mode: str = "siga") -> dict[str, Any]:
+        """Abre o navegador de depuração usado por SIGA/NFC-e.
+
+        No SIGA o login é manual (certificado), então a aba inicial abre direto na tela
+        de login do SIGA. No NFC-e o login é automático (CPF/senha), então a aba inicial
+        abre no portal SEFAZ-CE em vez da tela do SIGA, que seria irrelevante ali.
+        """
         if self._browser_started:
             self._bridge.set_status("O navegador já foi iniciado. Faça o login manual e clique em Executar.")
             return _ok()
@@ -270,18 +276,22 @@ class Api:
         if not self._settings.connect_browser_url:
             self._settings.connect_browser_url = get_connect_browser_url(self._settings)
 
+        initial_url = self._settings.nfce_login_url if mode == "nfce" else self._settings.siga_url
         narrate("Iniciando o navegador de depuração...")
 
         def worker() -> None:
             try:
-                launch_debug_browser(self._settings)
+                launch_debug_browser(self._settings, initial_url=initial_url)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Não foi possível abrir o navegador de depuração")
                 narrate_error("Falha ao iniciar o navegador: %s", exc)
                 self._bridge.browser_failed(str(exc))
             else:
                 self._browser_started = True
-                narrate_success("Navegador iniciado. Aguardando login manual do usuário.")
+                if mode == "nfce":
+                    narrate_success("Navegador iniciado. Clique em 'Login / Carregar Empresas' para logar automaticamente.")
+                else:
+                    narrate_success("Navegador iniciado. Aguardando login manual do usuário.")
                 self._bridge.browser_started()
 
         self._browser_thread = threading.Thread(target=worker, daemon=True)
@@ -421,7 +431,15 @@ class Api:
                 selected_tabs_by_row_number=tabs_by_row_number,
                 on_row_processed=on_row_processed,
             )
-            download_count = sum(len(result.fiscal_results) for result in results)
+            # Conta apenas downloads que de fato ocorreram (fiscal.downloaded_at preenchido),
+            # nao a quantidade de detalhamentos solicitados/tentados — `fiscal_results` inclui
+            # tambem os que falharam ou geraram apenas aviso de indisponibilidade (.txt).
+            download_count = sum(
+                1
+                for result in results
+                for fiscal in result.fiscal_results
+                if fiscal.downloaded_at is not None
+            )
             not_found_count = sum(1 for result in results if result.status == "taxpayer_not_found")
             narrate_success("Processo concluído.")
             narrate("Contribuintes processados: %s de %s", len(results), len(selected_rows))
@@ -464,6 +482,80 @@ class Api:
             LOGGER.exception("Falha ao criar planilha de resultados para a entrada manual")
             narrate_warning("Erro ao criar planilha de resultados: %s", exc)
             return None
+
+    # ------------------------------------------------------------- descoberta NFC-e
+
+    def load_nfce_companies(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Loga no portal SEFAZ-CE e devolve as empresas elegíveis, para popular a grade
+        de seleção antes da execução (substitui a antiga importação de planilha de
+        empresas / entrada manual do modo NFC-e — nome e IE agora vêm direto do portal).
+        """
+        busy = self._reject_if_busy()
+        if busy:
+            return busy
+        if not self._browser_started:
+            return _fail("Clique em 'Iniciar Navegador' antes de carregar as empresas.", level="warning")
+        if self._nfce_discovery_thread is not None and self._nfce_discovery_thread.is_alive():
+            return _fail("Já existe um carregamento de empresas em andamento. Aguarde.", level="info")
+
+        cpf = str(payload.get("cpf") or "").strip()
+        senha = str(payload.get("senha") or "")
+        if not cpf or not senha:
+            return _fail("Informe o CPF e a senha do contador antes de usar o modo NFC-e.")
+
+        base_raw = str(payload.get("base_spreadsheet") or "").strip()
+        if not base_raw:
+            return _fail("Selecione a planilha-base IE/CNPJ.", level="warning")
+        base_spreadsheet = Path(base_raw).expanduser()
+        if not base_spreadsheet.exists():
+            return _fail(f"Planilha-base não encontrada:\n{base_spreadsheet}")
+
+        keys_folder_raw = str(payload.get("keys_folder") or "").strip()
+        if not keys_folder_raw:
+            return _fail("Selecione a pasta com as planilhas de chaves por empresa.", level="warning")
+        keys_folder = Path(keys_folder_raw).expanduser()
+        if not keys_folder.is_dir():
+            return _fail(f"Pasta de chaves não encontrada:\n{keys_folder}")
+
+        # CPF/senha vivem só neste atributo, em memória, pelo tempo da execução — nunca
+        # são persistidos (nem .env, nem planilha, nem log).
+        self._settings.nfce_cpf = cpf
+        self._settings.nfce_senha = senha
+
+        narrate("Carregando empresas do portal SEFAZ-CE...")
+
+        def worker() -> None:
+            from src.extraction.nfce_extractor import NfceBatchExtractor
+
+            try:
+                extractor = NfceBatchExtractor(
+                    self._settings,
+                    output_dir=self._settings.output_dir,
+                    keys_folder=keys_folder,
+                    base_spreadsheet_path=base_spreadsheet,
+                )
+                with BrowserSession(self._settings) as context:
+                    rows = extractor.discover_selectable_companies(context)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception("Falha ao carregar empresas do portal SEFAZ-CE")
+                narrate_error("Falha ao carregar empresas do portal: %s", exc)
+                self._bridge.show_message(f"Falha ao carregar empresas do portal:\n{exc}")
+                return
+
+            if not rows:
+                narrate_warning("Nenhuma empresa elegível encontrada (sem CNPJ resolvido ou sem chaves na pasta).")
+                self._bridge.show_message(
+                    "Nenhuma empresa elegível foi encontrada — confira a planilha-base e a pasta de chaves.",
+                    level="warning",
+                )
+                return
+
+            narrate_success("%s empresa(s) carregada(s) do portal.", len(rows))
+            self._bridge.nfce_companies_loaded(rows)
+
+        self._nfce_discovery_thread = threading.Thread(target=worker, daemon=True)
+        self._nfce_discovery_thread.start()
+        return _ok()
 
     # ------------------------------------------------------------------ execução NFC-e
 

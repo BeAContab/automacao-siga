@@ -116,6 +116,9 @@ class JsBridge:
     def execution_finished(self, status: str) -> None:
         self.dispatch("sigaOnExecutionFinished", {"status": status})
 
+    def nfce_companies_loaded(self, rows: list[dict]) -> None:
+        self.dispatch("sigaOnNfceCompaniesLoaded", {"rows": rows})
+
     def set_progress(self, percent: float) -> None:
         self.dispatch("sigaSetProgress", percent)
 

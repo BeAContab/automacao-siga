@@ -25,15 +25,19 @@
     /**
      * Grade de empresas, por modo. SIGA e NFC-e mantem listas independentes: sao
      * fluxos diferentes, e o usuario pode ter carregado planilhas distintas em cada
-     * um. Cada item: {rowNumber, cod, empresa, cnpj, nfe, nfce, cte, malha, debitos, incluir}
+     * um. Cada item: {rowNumber, cod, empresa, cnpj, nfe, nfce, cte, malha, debitos,
+     * incluir, chavesCount (so usado no modo NFC-e)}
      */
     rows: { siga: [], nfce: [] },
 
     /** Rotulo da origem dos dados exibido acima da grade ("Planilha carregada com N..."). */
-    sourceLabel: { siga: 'Nenhuma planilha carregada ainda.', nfce: 'Nenhuma planilha carregada ainda.' },
+    sourceLabel: { siga: 'Nenhuma planilha carregada ainda.', nfce: 'Nenhuma empresa carregada ainda.' },
 
-    /** Aba de entrada ativa por modo: 'import' (planilha) ou 'manual' (CNPJs digitados). */
-    inputTab: { siga: 'import', nfce: 'import' },
+    /**
+     * Aba de entrada ativa por modo: 'import' (planilha) ou 'manual' (CNPJs digitados).
+     * NFC-e nao tem mais abas (empresas vem do portal) - so SIGA usa isto.
+     */
+    inputTab: { siga: 'import' },
 
     /**
      * Tabela de resultados NF-e: Map chaveado pelo caminho da planilha (upsert) +
@@ -56,6 +60,9 @@
       cod: raw.cod || 'SEM-COD',
       empresa: raw.empresa || 'SEM-EMPRESA',
       cnpj: raw.cnpj || '',
+      // Modo NFC-e: quantas chaves de 44 digitos foram encontradas para esta empresa
+      // na pasta de chaves configurada (vem de discover_selectable_companies).
+      chavesCount: raw.chaves_count || 0,
       // Modo SIGA: um checkbox por tipo de documento, todos marcados ao carregar
       // (mesmo default das BooleanVars da versao Tkinter).
       nfe: true,

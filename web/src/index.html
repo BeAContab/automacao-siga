@@ -165,33 +165,6 @@
       <span class="bg-tertiary-container/30 text-on-tertiary-container text-body-sm font-body-sm px-3 py-1 rounded-full border border-tertiary-container/50" data-count-chip="nfce">Total carregadas: 0</span>
     </div>
 
-    <div class="siga-card rounded-lg flex flex-col">
-      <div class="flex border-b border-outline-variant/30" data-tabs="nfce">
-        <button class="input-tab px-md py-sm text-label-bold font-label-bold border-b-2 border-transparent" data-tab="import" type="button">Importar Planilha</button>
-        <button class="input-tab px-md py-sm text-label-bold font-label-bold border-b-2 border-transparent" data-tab="manual" type="button">Entrada Manual</button>
-      </div>
-
-      <div class="p-md flex flex-col gap-md" data-tab-panel="nfce-import">
-        <p class="text-body-sm font-body-sm text-on-surface-variant">Selecione uma planilha XLSX para carregar as empresas.</p>
-        <div class="flex gap-sm">
-          <input class="flex-1 siga-form-field rounded px-sm py-2 text-body-md font-body-md bg-white" id="nfce-spreadsheet" placeholder="Selecione o arquivo .xlsx" readonly type="text">
-          <button class="bg-surface-container-high hover:bg-surface-variant border border-outline-variant/50 px-md rounded text-label-bold font-label-bold flex items-center gap-xs transition-colors" data-action="pick-nfce-spreadsheet" type="button">
-            <span class="material-symbols-outlined text-[18px]">folder_open</span> Abrir
-          </button>
-          <button class="bg-siga-petrol text-white px-md rounded text-label-bold font-label-bold hover:brightness-110 transition-all" data-action="load-nfce-spreadsheet" type="button">Carregar</button>
-        </div>
-      </div>
-
-      <div class="p-md flex flex-col gap-md" data-tab-panel="nfce-manual" hidden>
-        <p class="text-body-sm font-body-sm text-on-surface-variant">Cole um CNPJ por linha, ou vários separados por vírgula, ponto e vírgula ou espaço.</p>
-        <textarea class="siga-form-field rounded px-sm py-2 text-body-md font-console-text bg-white h-24 resize-none" id="nfce-manual-cnpjs" spellcheck="false"></textarea>
-        <div class="flex gap-sm">
-          <button class="flex-1 bg-siga-petrol text-white py-sm rounded text-label-bold font-label-bold hover:brightness-110 transition-all" data-action="load-manual" type="button">Carregar CNPJs manuais</button>
-          <button class="flex-1 bg-white border border-error/40 text-error py-sm rounded text-label-bold font-label-bold hover:bg-error-container/40 transition-colors" data-action="clear-manual" type="button">Limpar campo</button>
-        </div>
-      </div>
-    </div>
-
     <!-- Parametros: ARQUIVOS e AUTENTICACAO lado a lado (mesmo agrupamento do mockup) -->
     <div class="siga-card rounded-lg p-md grid grid-cols-2 gap-lg">
       <div class="flex flex-col gap-sm">
@@ -209,6 +182,7 @@
             <input class="flex-1 siga-form-field rounded-l px-sm py-2 text-body-sm bg-white min-w-0" id="nfce-keys-folder" readonly type="text">
             <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfce-keys" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
           </div>
+          <span class="text-[10px] text-on-surface-variant leading-snug">Aceita uma pasta de resultado do SIGA (reconhece as subpastas "NFC-e" automaticamente) ou uma planilha .xlsx solta nomeada com o CNPJ.</span>
         </label>
         <label class="flex flex-col gap-xs">
           <span class="text-body-sm font-body-sm text-on-surface-variant">Pasta de saída dos XMLs</span>
@@ -238,7 +212,7 @@
     <!-- Grade de empresas: sem escolha por tipo de documento, so "Incluir" -->
     <div class="siga-card rounded-lg flex flex-col overflow-hidden">
       <div class="px-md py-sm border-b border-outline-variant/30 flex items-center gap-md flex-wrap">
-        <span class="text-body-sm font-body-sm text-on-surface-variant" data-source-label="nfce">Nenhuma planilha carregada ainda.</span>
+        <span class="text-body-sm font-body-sm text-on-surface-variant" data-source-label="nfce">Nenhuma empresa carregada ainda.</span>
         <div class="ml-auto flex items-center gap-sm">
           <button class="text-label-bold font-label-bold text-siga-petrol hover:underline" data-action="select-all-incluir" type="button">Marcar tudo</button>
           <span class="text-outline-variant">|</span>
@@ -251,6 +225,7 @@
             <tr>
               <th class="py-2 px-md font-semibold w-20 text-center">COD</th>
               <th class="py-2 px-md font-semibold">EMPRESA</th>
+              <th class="py-2 px-md font-semibold w-24 text-center">Chaves</th>
               <th class="py-2 px-md font-semibold w-24 text-center">Incluir</th>
             </tr>
           </thead>
@@ -261,7 +236,6 @@
         <button class="text-label-bold font-label-bold text-siga-slate hover:text-error transition-colors flex items-center gap-xs" data-action="clear-rows" type="button">
           <span class="material-symbols-outlined text-[16px]">delete</span> Limpar Lista
         </button>
-        <button class="bg-siga-petrol text-white px-md py-sm rounded text-label-bold font-label-bold hover:brightness-110 transition-all" data-action="validate-rows" type="button">Validar Empresas</button>
       </div>
     </div>
   </section>
@@ -346,6 +320,10 @@
     <!-- Escondido no modo NF-e (ele nao usa BrowserSession) - ver main.js -->
     <button class="w-full bg-white border border-siga-slate text-siga-petrol text-label-bold font-label-bold py-sm rounded hover:bg-surface transition-colors flex items-center justify-center gap-xs" data-action="start-browser" id="btn-start-browser" type="button">
       <span class="material-symbols-outlined text-[18px]">open_in_browser</span> Iniciar Navegador
+    </button>
+    <!-- Exclusivo do modo NFC-e (login automático + raspagem de empresas do portal) - ver main.js -->
+    <button class="w-full bg-white border border-siga-slate text-siga-petrol text-label-bold font-label-bold py-sm rounded hover:bg-surface transition-colors flex items-center justify-center gap-xs" data-action="load-nfce-companies" id="btn-nfce-load-companies" type="button" hidden>
+      <span class="material-symbols-outlined text-[18px]">login</span> Login / Carregar Empresas
     </button>
     <button class="w-full bg-siga-gold text-siga-gold-text text-label-bold font-label-bold py-md rounded-lg shadow-sm hover:brightness-105 active:brightness-95 transition-all flex items-center justify-center gap-xs uppercase tracking-wider" data-action="execute" id="btn-execute" type="button">
       <span class="material-symbols-outlined">play_arrow</span> <span id="btn-execute-label">Extração SIGA</span>
