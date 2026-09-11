@@ -12,6 +12,14 @@ DEFAULT_BROWSER_PROFILE_DIR = PROJECT_ROOT / ".browser-profile"
 DEFAULT_BROWSER_DEBUG_PROFILE_DIR = PROJECT_ROOT / "browser-debug-profile"
 DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "saida"
+# Planilha CNPJ/IE de rede compartilhada pelo escritório — sempre a mesma para todo
+# operador do modo NFC-e, por isso pré-preenchida em vez de exigir seleção manual a
+# cada execução (pedido do usuário; decisão anterior era deliberadamente não ter
+# default de rede aqui, ver histórico do campo abaixo).
+DEFAULT_NFCE_BASE_SPREADSHEET_PATH = Path(
+    r"Z:\1 Arquivos e documentos\3.Contábil e Fiscal\3.2 Processo Fiscal\4 Arquivos Eletronicos"
+    r"\1 AUTOMACOES BeA\SIGA + NFe + NFCe_em teste\IE e CNPJ empresas.xlsx"
+)
 
 
 @dataclass(slots=True)
@@ -110,8 +118,9 @@ class Settings:
     # memória pelo tempo da execução — nunca gravadas em .env, planilha ou log.
     nfce_cpf: str | None = None
     nfce_senha: str | None = None
-    # Sem default de rede (ex.: Y:\...) — selecionável pelo usuário, como qualquer planilha.
-    nfce_base_spreadsheet_path: Path | None = None
+    # Pré-preenchida com a planilha de rede do escritório (ver DEFAULT_NFCE_BASE_SPREADSHEET_PATH);
+    # continua selecionável/trocável pelo usuário, como qualquer planilha.
+    nfce_base_spreadsheet_path: Path | None = DEFAULT_NFCE_BASE_SPREADSHEET_PATH
     # Pasta com uma planilha de chaves de 44 dígitos por empresa (nome do arquivo
     # contendo o CNPJ), usada para resolver quais chaves buscar por empresa.
     nfce_keys_folder_path: Path | None = None

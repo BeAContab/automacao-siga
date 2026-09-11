@@ -491,9 +491,17 @@
     });
     monthSelect.value = initial.month;
     document.getElementById('siga-year').value = initial.year;
-    document.getElementById('siga-output-dir').value = initial.output_dir;
+    // "Pasta de saída" fica em branco de propósito - o usuário sempre escolhe na hora,
+    // sem sugestão de pasta anterior/padrão (pedido do usuário).
     document.getElementById('nfe-max-workers').value = initial.nfe_max_workers;
     document.getElementById('chain-nfe-max-workers').value = initial.nfe_max_workers;
+    // Planilha-base CNPJ/IE do NFC-e: mesmo arquivo de rede do escritório em toda
+    // execução, então já vem pré-preenchida (nos dois lugares onde existe o campo:
+    // modo NFC-e isolado e a etapa NFC-e da Cadeia Completa) - continua trocável.
+    if (initial.nfce_base_spreadsheet) {
+      document.getElementById('nfce-base-spreadsheet').value = initial.nfce_base_spreadsheet;
+      document.getElementById('chain-nfce-base-spreadsheet').value = initial.nfce_base_spreadsheet;
+    }
     if (initial.spreadsheet) document.getElementById('siga-spreadsheet').value = initial.spreadsheet;
 
     setMode('siga');

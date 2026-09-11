@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-09-11] — Versão 2.4.1
+
+### Alterado
+- **"Pasta de saída" do modo SIGA não vem mais pré-preenchida** — sempre exigia que o usuário reparasse e trocasse a sugestão antes de executar; agora o campo começa em branco e precisa ser escolhido explicitamente a cada execução (pedido do usuário).
+- **"Planilha-base CNPJ/IE" do modo NFC-e (e da mesma etapa na Cadeia Completa) agora vem pré-preenchida** com a planilha de rede do escritório (`Settings.DEFAULT_NFCE_BASE_SPREADSHEET_PATH`, `src/config.py`) — é sempre o mesmo arquivo para qualquer operador, então deixa de ser necessário selecioná-lo manualmente toda vez; continua trocável pelo seletor de arquivo normalmente.
+
 ## [2026-09-11] — Versão 2.4.0
 
 ### Adicionado
