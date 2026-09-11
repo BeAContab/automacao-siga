@@ -91,11 +91,22 @@ def extract_keys_from_spreadsheet(path: Path) -> list[str]:
 
 
 def _company_folder_for_cnpj(keys_folder: Path, cnpj: str) -> Path | None:
-    """Subpasta direta de `keys_folder` cujo nome contém o CNPJ (convenção do modo SIGA:
-    'COD - EMPRESA - CNPJ', ver `_build_taxpayer_folder_name` em `siga_extractor.py`)."""
+    """Pasta da empresa dentro de `keys_folder`, cujo nome contém o CNPJ (convenção do
+    modo SIGA: 'COD - EMPRESA - CNPJ', ver `_build_taxpayer_folder_name` em
+    `siga_extractor.py`) — aceita `keys_folder` apontando tanto para a pasta raiz de
+    saída do SIGA (o CNPJ está numa subpasta direta) quanto para a pasta de uma empresa
+    específica selecionada diretamente (o CNPJ está no próprio nome de `keys_folder`).
+
+    Não vai mais fundo que isso de propósito: numa pasta de nível inferior (ex. o mês
+    ou a subpasta "NFC-e" em si) não sobra nenhum sinal do CNPJ no caminho, então
+    "adivinhar" a que empresa ela pertence arriscaria atribuir documentos de uma
+    empresa a outra num lote com várias empresas - pior que simplesmente não achar.
+    """
     normalized = normalize_cnpj(cnpj)
     if not normalized or not keys_folder.is_dir():
         return None
+    if normalized in _only_digits(keys_folder.name):
+        return keys_folder
     for candidate in keys_folder.iterdir():
         if candidate.is_dir() and normalized in _only_digits(candidate.name):
             return candidate

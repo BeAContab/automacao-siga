@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-09-11] — Versão 2.5.1
+
+### Corrigido
+- **Modo NFC-e não reconhecia chaves quando a "Pasta de chaves" apontava direto para a pasta de uma empresa específica** (ex.: `Teste Siga\7 - PLANOS HOTEIS - 10484384000119`), só funcionando se apontasse para a pasta raiz de saída do SIGA. `_company_folder_for_cnpj` (`src/extraction/nfce_extractor.py`) procurava o CNPJ só nas subpastas diretas de `keys_folder`; agora também reconhece quando o próprio `keys_folder` já é a pasta da empresa (o CNPJ está no nome dela). Testado contra dados reais: nenhuma chave "vaza" entre empresas quando se aponta para a pasta de uma empresa específica com o CNPJ errado.
+  - Continua não suportado apontar para uma pasta abaixo do nível da empresa (ex. a pasta do mês ou "NFC-e" em si) — de propósito, para não arriscar atribuir documentos de uma empresa a outra num lote com várias empresas.
+
 ## [2026-09-11] — Versão 2.5.0
 
 ### Adicionado
