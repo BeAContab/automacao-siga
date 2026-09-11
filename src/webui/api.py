@@ -56,12 +56,14 @@ MODE_LABELS = {
     "siga": "Extração SIGA",
     "nfce": "Extração NFC-e",
     "nfe": "Extração NF-e",
+    "chain": "Cadeia Completa",
 }
 
 MODE_DESCRIPTIONS = {
     "siga": "Extração em lote de NF-e, NFC-e, CT-e, Malha Fiscal e Débitos Fiscais do portal SIGA.",
     "nfce": "Login automático e download de XML de NFC-e no portal da SEFAZ-CE por empresa.",
     "nfe": "Download de XML/PDF de NF-e por chave de acesso, via consulta pública no Meu DANFE.",
+    "chain": "Executa SIGA, depois NF-e e depois NFC-e em sequência, reaproveitando a saída do SIGA como entrada das duas etapas seguintes.",
 }
 
 # Filtros dos diálogos nativos de arquivo, por tipo de campo.
@@ -139,6 +141,15 @@ class Api:
         self._browser_thread: threading.Thread | None = None
         self._browser_started = False
         self._nfce_discovery_thread: threading.Thread | None = None
+
+        # Controle cooperativo de pausar/continuar/encerrar (ver src/utils/execution_control.py)
+        # — um único par de Event cobre qualquer um dos 3 modos, já que só uma execução roda
+        # por vez no processo inteiro (`_reject_if_busy`). `_current_mode` diz qual modo está
+        # ativo, para "Encerrar" saber se também deve matar o navegador de depuração (só
+        # SIGA/NFC-e o usam) ou não (NF-e gerencia seus próprios Chromes independentes).
+        self._pause_event = threading.Event()
+        self._cancel_event = threading.Event()
+        self._current_mode: str | None = None
 
     # ---------------------------------------------- estado interno (não exposto ao JS)
 
@@ -300,8 +311,14 @@ class Api:
 
     # ------------------------------------------------------------------ execução (comum)
 
-    def _start_worker(self, target, output_dir: Path, started_status: str, finished_status: str) -> dict[str, Any]:
+    def _start_worker(
+        self, target, output_dir: Path, started_status: str, finished_status: str, mode: str
+    ) -> dict[str, Any]:
         """Dispara a thread de trabalho com o mesmo envelope de log/estado dos 3 modos."""
+        self._pause_event.clear()
+        self._cancel_event.clear()
+        self._current_mode = mode
+
         self._bridge.set_progress(0)
         self._bridge.set_status(started_status)
 
@@ -347,6 +364,51 @@ class Api:
             return _fail("Uma execução já está em andamento.", level="info")
         return None
 
+    # ------------------------------------------------------------------ pausar/continuar/encerrar
+
+    def pause_extraction(self) -> dict[str, Any]:
+        """Pausa a execução em andamento — cooperativo, some efeito só no próximo ponto seguro
+        do laço (início da próxima empresa/chave), não interrompe uma chamada em curso."""
+        if not self._worker_running:
+            return _fail("Nenhuma execução em andamento para pausar.", level="info")
+        self._pause_event.set()
+        narrate_warning("Execução pausada pelo usuário. Clique em Continuar para retomar.")
+        return _ok()
+
+    def resume_extraction(self) -> dict[str, Any]:
+        """Retoma uma execução pausada."""
+        if not self._worker_running:
+            return _fail("Nenhuma execução em andamento para continuar.", level="info")
+        self._pause_event.clear()
+        narrate_success("Execução retomada.")
+        return _ok()
+
+    def stop_extraction(self) -> dict[str, Any]:
+        """Encerra a execução em andamento por completo (não é retomável).
+
+        Sinaliza o cancelamento cooperativo (efetivo no próximo ponto seguro do laço) e,
+        para SIGA/NFC-e, também derruba o navegador de depuração na hora — o cancelamento
+        sozinho não interrompe uma chamada Selenium já em andamento (ex.: um `wait_for` de
+        10-15s), então matar o navegador força essa chamada a falhar rápido, mesma técnica
+        já usada em `_on_closing` (`app.py`) ao fechar a janela do app. O modo NF-e não usa
+        esse navegador (gerencia seus próprios Chromes via `undetected_chromedriver`,
+        fechados individualmente por cada worker ao ver o cancelamento) — chamar
+        `shutdown_debug_browser` ali arriscaria matar um navegador de depuração órfão de
+        outra sessão sem relação com esta execução.
+        """
+        if not self._worker_running:
+            return _fail("Nenhuma execução em andamento para encerrar.", level="info")
+        self._cancel_event.set()
+        self._pause_event.clear()  # nao deixa preso pausado — o cancelamento precisa fluir
+        narrate_warning("Encerrando a execução a pedido do usuário...")
+        # "chain" tambem usa BrowserSession (etapas SIGA e NFC-e da cadeia), mesma razao
+        # de siga/nfce: sem isso uma chamada Selenium em andamento nao seria interrompida.
+        if self._current_mode in ("siga", "nfce", "chain"):
+            from src.utils.browser import shutdown_debug_browser
+
+            shutdown_debug_browser(self._settings)
+        return _ok()
+
     # ------------------------------------------------------------------ execução SIGA
 
     def start_siga_extraction(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -388,6 +450,7 @@ class Api:
             output_dir,
             "Execução iniciada. Aguarde a conclusão no navegador e no log.",
             "Execução finalizada.",
+            mode="siga",
         )
 
     def _execute_siga(
@@ -430,6 +493,8 @@ class Api:
                 selected_tabs=None,
                 selected_tabs_by_row_number=tabs_by_row_number,
                 on_row_processed=on_row_processed,
+                cancel_event=self._cancel_event,
+                pause_event=self._pause_event,
             )
             # Conta apenas downloads que de fato ocorreram (fiscal.downloaded_at preenchido),
             # nao a quantidade de detalhamentos solicitados/tentados — `fiscal_results` inclui
@@ -604,6 +669,7 @@ class Api:
             output_dir,
             "Execução NFC-e iniciada. Aguarde a conclusão no log.",
             "Execução NFC-e finalizada.",
+            mode="nfce",
         )
 
     def _execute_nfce(
@@ -634,7 +700,12 @@ class Api:
             base_spreadsheet_path=base_spreadsheet,
         )
         with BrowserSession(self._settings) as context:
-            results = extractor.run_batch_in_context(context, selected_rows)
+            results = extractor.run_batch_in_context(
+                context,
+                selected_rows,
+                cancel_event=self._cancel_event,
+                pause_event=self._pause_event,
+            )
             success_count = sum(1 for result in results if result.status == "concluido")
             narrate_success("Processo NFC-e concluído.")
             narrate("Empresas processadas com sucesso: %s de %s", success_count, len(results))
@@ -653,32 +724,47 @@ class Api:
         if not input_folder.is_dir():
             return _fail(f"Pasta não encontrada:\n{input_folder}")
 
+        output_dir_raw = str(payload.get("output_dir") or "").strip()
+        if not output_dir_raw:
+            return _fail("Selecione a pasta de destino dos downloads.", level="warning")
+        output_folder = Path(output_dir_raw).expanduser()
+        try:
+            output_folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return _fail(f"Não foi possível criar a pasta de destino:\n{exc}")
+
         try:
             max_workers = int(payload.get("max_workers"))
         except (TypeError, ValueError):
-            return _fail("Informe uma quantidade de Chromes entre 1 e 4.", level="warning")
-        if not 1 <= max_workers <= 4:
-            return _fail("Informe uma quantidade de Chromes entre 1 e 4.", level="warning")
+            return _fail("Informe uma quantidade de Chromes entre 1 e 8.", level="warning")
+        if not 1 <= max_workers <= 8:
+            return _fail("Informe uma quantidade de Chromes entre 1 e 8.", level="warning")
 
         chrome_raw = str(payload.get("chrome_path") or "").strip()
 
         narrate("Execução do modo NF-e (Meu DANFE) iniciada pela interface gráfica.")
         return self._start_worker(
-            lambda: self._execute_nfe(input_folder, max_workers, chrome_raw),
-            input_folder,
+            lambda: self._execute_nfe(input_folder, output_folder, max_workers, chrome_raw),
+            output_folder,
             "Execução NF-e iniciada. Aguarde a conclusão no log.",
             "Execução NF-e finalizada.",
+            mode="nfe",
         )
 
-    def _execute_nfe(self, input_folder: Path, max_workers: int, chrome_path: str) -> None:
+    def _execute_nfe(self, input_folder: Path, output_folder: Path, max_workers: int, chrome_path: str) -> None:
         from src.extraction.meudanfe_extractor import MeudanfeBatchExtractor
 
         self._settings.nf_meudanfe_input_folder = input_folder
+        self._settings.nf_meudanfe_output_folder = output_folder
         self._settings.nf_meudanfe_max_workers = max_workers
         self._settings.nf_meudanfe_chrome_path = Path(chrome_path).expanduser() if chrome_path else None
 
-        extractor = MeudanfeBatchExtractor(self._settings, input_folder=input_folder)
-        results = extractor.executar_lote(on_planilha_concluida=self._push_nfe_result)
+        extractor = MeudanfeBatchExtractor(self._settings, input_folder=input_folder, output_folder=output_folder)
+        results = extractor.executar_lote(
+            on_planilha_concluida=self._push_nfe_result,
+            cancelar_evento=self._cancel_event,
+            pausar_evento=self._pause_event,
+        )
         success_count = sum(1 for result in results if result.status == "concluido")
         narrate_success("Processo NF-e concluído.")
         narrate("Planilhas concluídas: %s de %s", success_count, len(results))
@@ -724,3 +810,169 @@ class Api:
             "status_code": status_code,
             "status_label": status_label,
         }
+
+    # ------------------------------------------------------------ execução em cadeia
+
+    def start_chain_extraction(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Executa SIGA, depois NF-e (Meu DANFE) e depois NFC-e em sequência.
+
+        Reaproveita a pasta de saída do SIGA como entrada das duas etapas seguintes
+        (ver `ChainBatchExtractor`) — o usuário só informa, além dos parâmetros do
+        SIGA, as credenciais/planilha-base do NFC-e e os parâmetros do NF-e.
+        """
+        busy = self._reject_if_busy()
+        if busy:
+            return busy
+        if not self._browser_started:
+            return _fail("Clique em 'Iniciar Navegador' e faça o login antes de executar.", level="warning")
+
+        raw_rows = payload.get("rows") or []
+        if not raw_rows:
+            return _fail("Selecione pelo menos um CNPJ e uma aba fiscal.", level="warning")
+
+        month = str(payload.get("month") or "").strip()
+        if not month:
+            return _fail("Informe o mês de referência.", level="warning")
+        year = str(payload.get("year") or "").strip()
+        if not (year.isdigit() and len(year) == 4):
+            return _fail("Informe um ano válido com 4 dígitos.", level="warning")
+
+        output_dir_raw = str(payload.get("output_dir") or "").strip()
+        if not output_dir_raw:
+            return _fail("Informe uma pasta de saída válida.", level="warning")
+        output_dir = Path(output_dir_raw).expanduser()
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return _fail(f"Não foi possível criar a pasta de saída:\n{exc}")
+
+        cpf = str(payload.get("cpf") or "").strip()
+        senha = str(payload.get("senha") or "")
+        if not cpf or not senha:
+            return _fail("Informe o CPF e a senha do contador (etapa NFC-e).")
+
+        base_raw = str(payload.get("base_spreadsheet") or "").strip()
+        if not base_raw:
+            return _fail("Selecione a planilha-base CNPJ/IE (etapa NFC-e).", level="warning")
+        base_spreadsheet = Path(base_raw).expanduser()
+        if not base_spreadsheet.exists():
+            return _fail(f"Planilha-base não encontrada:\n{base_spreadsheet}")
+
+        try:
+            max_workers = int(payload.get("max_workers"))
+        except (TypeError, ValueError):
+            return _fail("Informe uma quantidade de Chromes entre 1 e 8 (etapa NF-e).", level="warning")
+        if not 1 <= max_workers <= 8:
+            return _fail("Informe uma quantidade de Chromes entre 1 e 8 (etapa NF-e).", level="warning")
+
+        chrome_raw = str(payload.get("chrome_path") or "").strip()
+
+        selected_rows = [_dict_to_row(raw) for raw in raw_rows]
+        tabs_by_row_number = {int(raw["row_number"]): list(raw.get("tabs") or []) for raw in raw_rows}
+        manual_mode = bool(payload.get("manual_mode"))
+        spreadsheet_path = str(payload.get("spreadsheet_path") or "").strip()
+
+        narrate("Execução da cadeia completa (SIGA → NF-e → NFC-e) iniciada pela interface gráfica.")
+        return self._start_worker(
+            lambda: self._execute_chain(
+                selected_rows,
+                tabs_by_row_number,
+                month,
+                year,
+                manual_mode,
+                spreadsheet_path,
+                output_dir,
+                cpf,
+                senha,
+                base_spreadsheet,
+                max_workers,
+                chrome_raw,
+            ),
+            output_dir,
+            "Execução em cadeia iniciada. Aguarde a conclusão no log.",
+            "Execução em cadeia finalizada.",
+            mode="chain",
+        )
+
+    def _execute_chain(
+        self,
+        selected_rows: list[SpreadsheetRow],
+        tabs_by_row_number: dict[int, list[str]],
+        month_reference: str,
+        year_value: str,
+        manual_mode: bool,
+        spreadsheet_path: str,
+        output_dir: Path,
+        cpf: str,
+        senha: str,
+        base_spreadsheet: Path,
+        max_workers: int,
+        chrome_path: str,
+    ) -> None:
+        from src.extraction.chain_extractor import ChainBatchExtractor
+
+        output_spreadsheet_path = self._prepare_results_spreadsheet(selected_rows, manual_mode, spreadsheet_path)
+
+        # CPF/senha vivem só neste atributo, em memória, pelo tempo da execução —
+        # nunca são persistidos (nem .env, nem planilha, nem log).
+        self._settings.nfce_cpf = cpf
+        self._settings.nfce_senha = senha
+        self._settings.nf_meudanfe_chrome_path = Path(chrome_path).expanduser() if chrome_path else None
+
+        chain_extractor = ChainBatchExtractor(
+            self._settings,
+            siga_output_dir=output_dir,
+            nfe_output_dir=output_dir / "NFe",
+            nfce_output_dir=output_dir / "NFCe",
+            nfce_base_spreadsheet_path=base_spreadsheet,
+            nfe_max_workers=max_workers,
+        )
+
+        stage_status = {
+            "siga": "Etapa 1 de 3: extração SIGA em andamento...",
+            "nfe": "Etapa 2 de 3: extração NF-e (Meu DANFE) em andamento...",
+            "nfce": "Etapa 3 de 3: extração NFC-e em andamento...",
+        }
+
+        def on_stage_started(stage: str, base_percent: int) -> None:
+            self._bridge.set_status(stage_status.get(stage, ""))
+            self._bridge.set_progress(float(base_percent))
+
+        def on_siga_row_processed(done: int, total: int) -> None:
+            # Reserva 0-40% para a etapa SIGA (as duas seguintes ganham seus proprios
+            # marcos em on_stage_started); mesma logica de _execute_siga, só que numa
+            # faixa menor porque aqui existem mais duas etapas depois dela.
+            if total > 0:
+                self._bridge.set_progress(min(40.0, (done / total) * 40))
+
+        result = chain_extractor.run(
+            selected_rows,
+            tabs_by_row_number,
+            month_reference,
+            year_value,
+            output_spreadsheet_path,
+            on_stage_started=on_stage_started,
+            on_siga_row_processed=on_siga_row_processed,
+            on_nfe_planilha_concluida=self._push_nfe_result,
+            cancel_event=self._cancel_event,
+            pause_event=self._pause_event,
+        )
+
+        download_count = sum(
+            1
+            for siga_result in result.siga_results
+            for fiscal in siga_result.fiscal_results
+            if fiscal.downloaded_at is not None
+        )
+        nfe_success = sum(1 for r in result.nfe_results if r.status == "concluido")
+        nfce_success = sum(1 for r in result.nfce_results if r.status == "concluido")
+
+        narrate_success("Cadeia completa concluída.")
+        narrate(
+            "SIGA — contribuintes processados: %s de %s (detalhamentos baixados: %s).",
+            len(result.siga_results),
+            len(selected_rows),
+            download_count,
+        )
+        narrate("NF-e — planilhas concluídas: %s de %s.", nfe_success, len(result.nfe_results))
+        narrate("NFC-e — empresas concluídas: %s de %s.", nfce_success, len(result.nfce_results))

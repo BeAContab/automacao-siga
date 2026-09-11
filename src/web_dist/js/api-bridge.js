@@ -71,5 +71,9 @@
     startSiga: (payload) => call('start_siga_extraction', payload),
     startNfce: (payload) => call('start_nfce_extraction', payload),
     startNfe: (payload) => call('start_nfe_extraction', payload),
+    startChain: (payload) => call('start_chain_extraction', payload),
+    pauseExtraction: () => call('pause_extraction'),
+    resumeExtraction: () => call('resume_extraction'),
+    stopExtraction: () => call('stop_extraction'),
   };
 })();

@@ -11,10 +11,12 @@ from typing import Any, Callable
 
 from selenium.common.exceptions import (
     JavascriptException,
+    NoAlertPresentException,
     NoSuchElementException,
     NoSuchWindowException,
     StaleElementReferenceException,
     TimeoutException as SeleniumTimeoutException,
+    UnexpectedAlertPresentException,
     WebDriverException,
 )
 from selenium.webdriver import ActionChains
@@ -28,6 +30,12 @@ from src.config import Settings
 
 
 Error = WebDriverException
+# Levantada pelo Selenium quando um alert() nativo do navegador (ex.: "Tempo limite
+# excedido! Sera necessario reiniciar a operacao" do portal da SEFAZ-CE) bloqueia
+# qualquer comando seguinte. E subclasse de `Error`, entao codigo que so captura `Error`
+# ja pega essa excecao tambem -- este alias serve para tratamento especifico, com acesso
+# ao texto do alerta (`exc.alert_text`) e ao helper `Page.dismiss_alert_if_present`.
+UnexpectedAlertError = UnexpectedAlertPresentException
 
 
 class TimeoutError(WebDriverException):
@@ -393,6 +401,19 @@ class Page:
         output_path = Path(path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         self.driver.save_screenshot(str(output_path))
+
+    def dismiss_alert_if_present(self) -> str | None:
+        """Fecha um alert() nativo do navegador, se houver algum aberto, destravando a
+        pagina para comandos seguintes. Devolve o texto do alerta, ou None se nao havia
+        nenhum aberto. Uso tipico: dentro de um `except UnexpectedAlertError`, para
+        limpar o alerta que bloqueou o comando original antes de reportar o erro."""
+        try:
+            alert = self.driver.switch_to.alert
+            text = alert.text
+            alert.accept()
+            return text
+        except NoAlertPresentException:
+            return None
 
     def content(self) -> str:
         self._switch()

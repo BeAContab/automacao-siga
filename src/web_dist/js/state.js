@@ -10,14 +10,22 @@
 (function () {
   'use strict';
 
-  const MODES = ['siga', 'nfce', 'nfe'];
+  const MODES = ['siga', 'nfce', 'nfe', 'chain'];
 
   const state = {
-    /** Modo ativo: 'siga' | 'nfce' | 'nfe'. */
+    /**
+     * Modo ativo: 'siga' | 'nfce' | 'nfe' | 'chain'. O modo 'chain' (cadeia completa
+     * SIGA -> NF-e -> NFC-e) reaproveita a mesma tela e o mesmo estado do modo 'siga'
+     * (grade de empresas, planilha/entrada manual) - so acrescenta um bloco de campos
+     * extras (ver [data-chain-only] em index.html); por isso nao existe rows.chain.
+     */
     mode: 'siga',
 
     /** true enquanto uma extracao esta rodando (bloqueia disparar outra). */
     running: false,
+
+    /** true enquanto a extracao em andamento esta pausada (so tem sentido com running=true). */
+    paused: false,
 
     /** true depois que o navegador de depuracao abriu com sucesso (SIGA/NFC-e). */
     browserStarted: false,
