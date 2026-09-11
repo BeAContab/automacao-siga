@@ -754,7 +754,14 @@ class NfceBatchExtractor:
         chave: str,
         download_manager: NfceDownloadManager,
     ) -> tuple[bool, bool]:
-        """Consulta uma chave e baixa o XML. Retorna (sucesso, precisa_reset_de_sessao)."""
+        """Consulta uma chave e baixa o XML. Retorna (sucesso, precisa_reset_de_sessao).
+
+        Narra o resultado de cada chave (sucesso ou o motivo exato da falha) — antes,
+        os quatro pontos de saída sem sucesso desta função eram todos silenciosos, e o
+        operador só via "N chave(s) não baixaram" no resumo final, sem conseguir
+        distinguir nota genuinamente inexistente/cancelada (nada a fazer) de nota
+        encontrada mas cujo download travou (potencial instabilidade do portal).
+        """
         try:
             page.evaluate(
                 """
@@ -772,8 +779,12 @@ class NfceBatchExtractor:
                 chave,
             )
 
-            resultados = page.locator("#table-search-coupons")
-            resultados.wait_for(state="visible", timeout=10_000)
+            try:
+                resultados = page.locator("#table-search-coupons")
+                resultados.wait_for(state="visible", timeout=10_000)
+            except TimeoutError:
+                narrate_warning("Chave %s: a consulta no portal não respondeu a tempo.", chave)
+                return False, False
 
             achou_link = page.evaluate(
                 """
@@ -787,16 +798,25 @@ class NfceBatchExtractor:
                 """
             )
             if not achou_link:
+                narrate_warning(
+                    "Chave %s: não encontrada na consulta (nota cancelada/denegada/inexistente na SEFAZ, ou ainda não processada).",
+                    chave,
+                )
                 return False, False
 
-            botao_xml = page.locator("button[ng-click='downloadXML()']")
-            botao_xml.wait_for(state="visible", timeout=10_000)
+            try:
+                botao_xml = page.locator("button[ng-click='downloadXML()']")
+                botao_xml.wait_for(state="visible", timeout=10_000)
+            except TimeoutError:
+                narrate_warning("Chave %s: nota encontrada, mas o botão de baixar XML não apareceu a tempo.", chave)
+                return False, False
 
             snapshot = context.download_snapshot()
             botao_xml.click(force=True)
             try:
                 downloaded_path = context.wait_for_download(snapshot, timeout_ms=15_000)
             except TimeoutError:
+                narrate_warning("Chave %s: nota encontrada e download clicado, mas o arquivo não chegou a tempo.", chave)
                 return False, False
 
             download_manager.mover_arquivo(downloaded_path, chave)
@@ -808,11 +828,14 @@ class NfceBatchExtractor:
                 }
                 """
             )
+            narrate_success("Chave %s baixada.", chave)
             return True, False
         except TimeoutError:
+            narrate_warning("Chave %s: tempo esgotado ao consultar no portal.", chave)
             return False, False
         except Error as exc:
             texto_erro = str(exc).lower()
             precisa_reset = "disconnected" in texto_erro or "stacktrace" in texto_erro or "script timeout" in texto_erro
             LOGGER.warning("Falha ao baixar a chave %s: %s", chave, exc)
+            narrate_warning("Chave %s: erro técnico ao processar (%s).", chave, exc)
             return False, precisa_reset

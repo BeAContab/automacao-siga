@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026-09-11] — Versão 2.6.0
+
+### Adicionado
+- **Modo NFC-e: log passa a narrar o motivo exato de cada chave que não baixa**, em vez de só o resumo final ("N chave(s) não baixaram após tentativas repetidas"). `_baixar_xml_chave` (`src/extraction/nfce_extractor.py`) tinha 4 pontos de saída silenciosos, sem nenhuma narração — agora cada um informa exatamente onde parou:
+  - Consulta no portal não respondeu a tempo.
+  - Chave não encontrada na consulta (nota cancelada/denegada/inexistente na SEFAZ, ou ainda não processada).
+  - Nota **encontrada**, mas o botão de baixar XML não apareceu a tempo.
+  - Nota **encontrada** e download clicado, mas o arquivo não chegou a tempo (o caso "achou mas não baixou" relatado pelo usuário).
+  - Erro técnico ao processar (sessão instável etc.).
+  - Sucesso, também narrado por chave (mesma densidade que o modo NF-e já usa).
+  - Sem mudança de comportamento/retorno — só visibilidade; os 6 caminhos foram testados individualmente com mocks para confirmar que o resultado (sucesso/falha, precisa reiniciar sessão) continua idêntico ao de antes.
+
 ## [2026-09-11] — Versão 2.5.1
 
 ### Corrigido
