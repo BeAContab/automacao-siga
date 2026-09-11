@@ -20,14 +20,16 @@ from pathlib import Path
 import logging
 import re
 import shutil
+import threading
 import time
 
 from openpyxl import load_workbook
 
 from src.config import Settings
 from src.extraction.spreadsheet import SpreadsheetRow
+from src.utils.execution_control import wait_if_paused
 from src.utils.narration import narrate, narrate_error, narrate_success, narrate_warning
-from src.utils.selenium_compat import BrowserContext, Error, Page, TimeoutError
+from src.utils.selenium_compat import BrowserContext, Error, Page, TimeoutError, UnexpectedAlertError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -208,6 +210,25 @@ class NfceSessionManager:
         self.page = page
         self._login_time: float | None = None
 
+    def _describe_unexpected_alert(self, exc: UnexpectedAlertError) -> str:
+        """Fecha o alerta nativo que interrompeu o comando e monta uma mensagem clara.
+
+        O alerta mais comum aqui e o "Tempo limite excedido! Sera necessario reiniciar a
+        operacao" do proprio portal da SEFAZ-CE — ele aparece tanto por expiracao real de
+        sessao quanto quando ja existe OUTRA sessao ativa com o mesmo CPF (o portal derruba
+        a sessao nova). O codigo nao tem como diferenciar as duas causas a partir do texto
+        do alerta sozinho, entao a mensagem cobre as duas.
+        """
+        alert_text = (getattr(exc, "alert_text", None) or "").strip()
+        dismissed_text = (self.page.dismiss_alert_if_present() or "").strip()
+        alert_text = alert_text or dismissed_text
+        detalhe = f' ("{alert_text}")' if alert_text else ""
+        return (
+            f"O portal SEFAZ-CE encerrou a sessão inesperadamente{detalhe}. Isso costuma "
+            "acontecer quando já existe outra sessão ativa com o mesmo CPF em outro "
+            "computador ou navegador — feche a outra sessão e tente novamente."
+        )
+
     def fazer_login(self) -> bool:
         """Efetua login com CPF/senha (settings.nfce_cpf/nfce_senha); idempotente se já logado."""
         # Checa a pagina ATUAL antes de navegar para qualquer lugar: se esta chamada
@@ -260,6 +281,14 @@ class NfceSessionManager:
                 )
                 self.page.locator("#btEntrar").click()
                 self.page.wait_for_timeout(4000)
+            except UnexpectedAlertError as exc:
+                # Causa externa (ex.: outra sessao ja ativa com o mesmo CPF) — repetir o
+                # login aqui nao resolve, entao falha na hora em vez de gastar as 3
+                # tentativas com o mesmo alerta bloqueando o navegador toda vez.
+                message = self._describe_unexpected_alert(exc)
+                LOGGER.warning("Alerta inesperado do portal durante o login NFC-e: %s", message)
+                narrate_error(message)
+                return False
             except Error as exc:
                 LOGGER.warning("Tentativa %s de login NFC-e falhou: %s", tentativa, exc)
                 self.page.wait_for_timeout(2000)
@@ -273,12 +302,17 @@ class NfceSessionManager:
         return False
 
     def acessar_area_empresas(self) -> None:
-        self.page.goto(
-            self.settings.nfce_empresas_url,
-            wait_until="domcontentloaded",
-            timeout=self.settings.timeout_ms,
-        )
-        self.page.wait_for_timeout(1500)
+        try:
+            self.page.goto(
+                self.settings.nfce_empresas_url,
+                wait_until="domcontentloaded",
+                timeout=self.settings.timeout_ms,
+            )
+            self.page.wait_for_timeout(1500)
+        except UnexpectedAlertError as exc:
+            message = self._describe_unexpected_alert(exc)
+            LOGGER.warning("Alerta inesperado do portal ao acessar a área de empresas: %s", message)
+            raise RuntimeError(message) from exc
 
     def sessao_expirando(self) -> bool:
         """True se o login já está velho o suficiente para renovar antes do portal derrubar."""
@@ -338,16 +372,21 @@ class NfceSessionManager:
 
     def listar_empresas(self) -> list[NfceCompanyLink]:
         """Raspa a lista de empresas vinculadas ao CPF logado (IE + nome + link de abertura)."""
-        raw = (
-            self.page.evaluate(
-                """
-                () => Array.from(document.querySelectorAll("a[href*='submete']"))
-                    .map((a) => ({ text: (a.innerText || "").trim(), href: a.getAttribute("href") || "" }))
-                    .filter((item) => item.text)
-                """
+        try:
+            raw = (
+                self.page.evaluate(
+                    """
+                    () => Array.from(document.querySelectorAll("a[href*='submete']"))
+                        .map((a) => ({ text: (a.innerText || "").trim(), href: a.getAttribute("href") || "" }))
+                        .filter((item) => item.text)
+                    """
+                )
+                or []
             )
-            or []
-        )
+        except UnexpectedAlertError as exc:
+            message = self._describe_unexpected_alert(exc)
+            LOGGER.warning("Alerta inesperado do portal ao listar as empresas: %s", message)
+            raise RuntimeError(message) from exc
 
         agrupados: dict[str, dict[str, str]] = {}
         for item in raw:
@@ -411,6 +450,8 @@ class NfceBatchExtractor:
         self,
         context: BrowserContext,
         selected_rows: list[SpreadsheetRow],
+        cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
     ) -> list[NfceBatchResult]:
         page = context.pages[0] if context.pages else context.new_page()
         session = NfceSessionManager(self.settings, page)
@@ -431,6 +472,11 @@ class NfceBatchExtractor:
 
         results: list[NfceBatchResult] = []
         for index, spreadsheet_row in enumerate(selected_rows, start=1):
+            if not wait_if_paused(cancel_event, pause_event):
+                LOGGER.info("Lote NFC-e encerrado a pedido do usuario antes da proxima empresa.")
+                narrate_warning("Execução encerrada pelo usuário.")
+                break
+
             target_cnpj = normalize_cnpj(spreadsheet_row.cnpj)
             empresa_nome = spreadsheet_row.empresa or "SEM-EMPRESA"
             narrate(
@@ -459,7 +505,9 @@ class NfceBatchExtractor:
 
             narrate("%s chave(s) a processar para %s.", len(chaves), empresa_nome)
             empresa_dir = self.output_dir / sanitize_folder_name(f"{company.ie} - {empresa_nome}")
-            baixadas = self._processar_empresa(context, page, session, company, chaves, empresa_dir)
+            baixadas = self._processar_empresa(
+                context, page, session, company, chaves, empresa_dir, cancel_event, pause_event
+            )
 
             status = "concluido" if baixadas == len(chaves) else "parcial"
             if status == "concluido":
@@ -543,6 +591,8 @@ class NfceBatchExtractor:
         company: NfceCompanyLink,
         chaves: list[str],
         empresa_dir: Path,
+        cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
     ) -> int:
         """Processa as chaves de uma empresa, com renovação de sessão e recuperação em falha.
 
@@ -558,6 +608,9 @@ class NfceBatchExtractor:
 
         for _passada in range(5):
             if not pendentes:
+                break
+            if not wait_if_paused(cancel_event, pause_event):
+                LOGGER.info("Processamento de %s encerrado a pedido do usuario.", company.nome)
                 break
 
             if session.sessao_expirando():
@@ -575,6 +628,10 @@ class NfceBatchExtractor:
             progresso_nesta_passada = 0
             try:
                 for chave_index, chave in enumerate(list(pendentes), start=1):
+                    if not wait_if_paused(cancel_event, pause_event):
+                        LOGGER.info("Processamento de %s encerrado a pedido do usuario.", company.nome)
+                        return len(baixadas)
+
                     if chave_index % self.settings.nfce_session_renewal_check_every_n_keys == 0 and session.sessao_expirando():
                         narrate("Renovando sessão antes de continuar o lote de %s...", company.nome)
                         break

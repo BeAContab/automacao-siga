@@ -116,9 +116,14 @@
       await Modal.alert('Selecione a pasta com as planilhas NF-e.', 'warning');
       return false;
     }
+    const outputDir = val('nfe-output-dir');
+    if (!outputDir) {
+      await Modal.alert('Selecione a pasta de destino dos downloads.', 'warning');
+      return false;
+    }
     const workers = parseInt(val('nfe-max-workers'), 10);
-    if (!Number.isInteger(workers) || workers < 1 || workers > 4) {
-      await Modal.alert('Informe uma quantidade de Chromes entre 1 e 4.', 'warning');
+    if (!Number.isInteger(workers) || workers < 1 || workers > 8) {
+      await Modal.alert('Informe uma quantidade de Chromes entre 1 e 8.', 'warning');
       return false;
     }
 
@@ -128,8 +133,73 @@
 
     return handleBackendResult(await Api.startNfe({
       input_folder: inputFolder,
+      output_dir: outputDir,
       max_workers: workers,
       chrome_path: val('nfe-chrome-path'),
+    }));
+  }
+
+  /* --------------------------- Cadeia completa --------------------------- */
+
+  async function runChain() {
+    if (!S.state.browserStarted) {
+      await Modal.alert("Clique em 'Iniciar Navegador' e faça o login antes de executar.", 'warning');
+      return false;
+    }
+    const outputDir = val('siga-output-dir');
+    if (!outputDir) {
+      await Modal.alert('Informe uma pasta de saída válida.', 'warning');
+      return false;
+    }
+    const selection = S.collectSigaSelection();
+    if (!selection.length) {
+      await Modal.alert('Selecione pelo menos um CNPJ e uma aba fiscal.', 'warning');
+      return false;
+    }
+    const month = val('siga-month');
+    if (!month) {
+      await Modal.alert('Informe o mês de referência.', 'warning');
+      return false;
+    }
+    const year = val('siga-year');
+    if (!/^\d{4}$/.test(year)) {
+      await Modal.alert('Informe um ano válido com 4 dígitos.', 'warning');
+      return false;
+    }
+    const cpf = val('chain-nfce-cpf');
+    const senha = document.getElementById('chain-nfce-senha').value;
+    if (!cpf || !senha) {
+      await Modal.alert('Informe o CPF e a senha do contador (etapa NFC-e).', 'error');
+      return false;
+    }
+    const baseSpreadsheet = val('chain-nfce-base-spreadsheet');
+    if (!baseSpreadsheet) {
+      await Modal.alert('Selecione a planilha-base CNPJ/IE (etapa NFC-e).', 'warning');
+      return false;
+    }
+    const workers = parseInt(val('chain-nfe-max-workers'), 10);
+    if (!Number.isInteger(workers) || workers < 1 || workers > 8) {
+      await Modal.alert('Informe uma quantidade de Chromes entre 1 e 8 (etapa NF-e).', 'warning');
+      return false;
+    }
+
+    // Zera a tabela de resultados NF-e para nao misturar contagens com uma execucao
+    // anterior — ela e alimentada pela etapa 2 da cadeia mesmo com a tela NF-e oculta.
+    S.resetNfeResults();
+    window.SigaRender.clearNfeResults();
+
+    return handleBackendResult(await Api.startChain({
+      rows: selection,
+      month: month,
+      year: year,
+      output_dir: outputDir,
+      manual_mode: S.state.inputTab.siga === 'manual',
+      spreadsheet_path: val('siga-spreadsheet'),
+      cpf: cpf,
+      senha: senha,
+      base_spreadsheet: baseSpreadsheet,
+      max_workers: workers,
+      chrome_path: val('chain-nfe-chrome-path'),
     }));
   }
 
@@ -137,6 +207,7 @@
     run: function (mode) {
       if (mode === 'nfce') return runNfce();
       if (mode === 'nfe') return runNfe();
+      if (mode === 'chain') return runChain();
       return runSiga();
     },
   };

@@ -37,7 +37,11 @@ class Settings:
     # Timeout de espera pelo SIGA GERAR o relatorio na Central de Downloads (processando ->
     # concluido) antes do clique — bem mais lento e variavel que o download em si; casos reais
     # chegaram a levar ate 12 minutos (ver comentario em _find_pending_download_matches).
-    download_generation_timeout_ms: int = 240_000
+    # Elevado de 240s para 600s apos um lote real de 22 solicitacoes (2 CNPJs x 5 abas fiscais)
+    # onde a maioria das solicitacoes ainda nao tinha aparecido na Central passados os 240s —
+    # fila do backend do SIGA sob carga (Central compartilhada com outros usuarios do
+    # escritorio), nao um bug do lado cliente (ver ARQUIVOS/PASTA DE SAIDA/log.txt).
+    download_generation_timeout_ms: int = 600_000
     download_retry_count: int = 2
     download_retry_delay_ms: int = 2_000
     click_certificate_option: bool = False
@@ -48,6 +52,51 @@ class Settings:
     chrome_profile_directory: str | None = None
     configure_certificate_policy: bool = True
     blank_page_retry_count: int = 2
+    # Retentativas ao SOLICITAR uma aba fiscal específica (Malha Fiscal, Débitos Fiscais,
+    # NF-e, NFC-e, CT-e) dentro de um contribuinte já aberto — mesma classe de falha
+    # transitória (timeout, overlay travado, lentidão momentânea) que já ganha 3 tentativas
+    # na abertura do contribuinte (`_open_taxpayer_from_home`), mas que antes falhava
+    # definitivamente na primeira tentativa quando ocorria aqui, minutos depois no fluxo.
+    fiscal_tab_retry_count: int = 3
+    fiscal_tab_retry_delay_ms: int = 2_000
+    # Retentativas específicas para reautenticar e acessar a Central de Downloads ao final
+    # do lote — o ponto mais caro de se perder de todo o fluxo, já que todas as solicitações
+    # fiscais de todos os CNPJs já foram enviadas ao SIGA nesse momento (potencialmente
+    # horas de trabalho). Caso real: sessão de 4h+ degradou perto do fim de um lote de 155
+    # CNPJs e a página não renderizou nem após as 2 recargas padrão de
+    # `stabilize_after_navigation`, perdendo a busca de 675 arquivos já prontos no SIGA.
+    downloads_context_retry_count: int = 5
+    downloads_context_retry_delay_ms: int = 5_000
+    # Varreduras periodicas da Central de Downloads DURANTE o lote, em vez de so no final —
+    # colhe arquivos assim que ficam prontos, espalhando a busca pelas horas que o lote
+    # inteiro ja leva. Motivado por um lote real de 155 CNPJs/660 solicitacoes onde a unica
+    # varredura final (com os 600s de `download_generation_timeout_ms`) so achou 95: os
+    # pedidos sao enviados ao vivo ao longo do lote, mas ninguem ia buscar ate o fim. `0`
+    # desliga os checkpoints e volta ao comportamento antigo (so varredura final).
+    download_checkpoint_interval: int = 10
+    # Pausa antes de cada checkpoint, dando um tempo minimo para o SIGA comecar a processar
+    # as solicitacoes da ultima leva de empresas antes de olhar a Central.
+    download_checkpoint_pause_ms: int = 30_000
+    # Timeout de CADA checkpoint intermediario: curto e nao bloqueante — so colhe o que ja
+    # estiver pronto agora. Nao e o prazo real de espera de um item: isso continua sendo
+    # "quantos checkpoints faltam ate o fim do lote", mais a varredura final (que usa o
+    # timeout completo de `download_generation_timeout_ms`, como ja acontece hoje).
+    download_checkpoint_scan_timeout_ms: int = 10_000
+    # Budget de cada tentativa de confirmar que a tabela/paginador da Central de Downloads
+    # renderizou de verdade apos um `page.reload()`, antes de tentar ler/paginar. Corrige um
+    # caso real: `reload(wait_until="domcontentloaded")` so espera o HTML inicial parsear, nao
+    # o Angular buscar/renderizar a tabela — sem essa espera, o codigo tratava "componente
+    # ainda nao montado" como "nao encontrado" silenciosamente, travando a varredura na
+    # pagina 1 por 91 ciclos seguidos (~5min) ate a sessao do navegador cair.
+    downloads_table_ready_timeout_ms: int = 8_000
+    # Falhas consecutivas em confirmar o render da tabela (acima) antes de escalar para uma
+    # recuperacao mais forte: reabrir a Central de Downloads do zero pelo menu, em vez de so
+    # recarregar a mesma pagina de novo.
+    downloads_render_retry_count: int = 3
+    # Intervalo do aviso periodico ("ainda aguardando", com tempo decorrido) durante uma
+    # espera longa na Central de Downloads — sem isso, o unico sinal visivel no console da
+    # interface e uma linha identica se repetindo, indistinguivel de travamento real.
+    download_wait_heartbeat_interval_ms: int = 60_000
     siga_app_root_selector: str = "app-root"
     remote_debugging_port: int = 9222
     browser_start_timeout_ms: int = 15_000
@@ -79,8 +128,13 @@ class Settings:
     # Pasta com as planilhas .xlsx contendo a coluna "Chave NF-e" (ex.: a própria pasta de
     # saída do modo SIGA, já que o detalhamento de NF-e do SIGA tem essa mesma coluna).
     nf_meudanfe_input_folder: Path | None = None
-    # 1 a 4 instâncias de Chrome em paralelo (undetected_chromedriver, uma por worker);
-    # limitado a 4 mesmo que o usuário configure mais, para reduzir risco de bloqueio anti-bot.
+    # Pasta de destino dos downloads (obrigatória, escolhida pelo usuário na interface,
+    # mesmo padrão de "Pasta de saída"/"Pasta de saída dos XMLs" do SIGA/NFC-e) — cada
+    # planilha grava em <destino>/downloads-meudanfe/<planilha>/{XML,PDF}.
+    nf_meudanfe_output_folder: Path | None = None
+    # 1 a 8 instâncias de Chrome em paralelo (undetected_chromedriver, uma por worker) —
+    # teto igual ao do script original; mais paralelismo aumenta o risco de bloqueio
+    # anti-bot (captcha do Cloudflare travando um worker), decisão consciente do usuário.
     nf_meudanfe_max_workers: int = 1
     nf_meudanfe_captcha_timeout_seconds: int = 180
     nf_meudanfe_download_timeout_seconds: int = 45

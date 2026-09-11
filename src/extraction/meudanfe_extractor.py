@@ -57,31 +57,19 @@ from selenium.webdriver.support.ui import WebDriverWait
 import undetected_chromedriver as uc
 
 from src.config import Settings
+from src.utils.execution_control import wait_if_paused as _aguardar_execucao
 from src.utils.narration import narrate, narrate_error, narrate_success, narrate_warning
 
 LOGGER = logging.getLogger(__name__)
 
 COLUNA_CHAVE_NFE = "chave nf-e"
 PASTA_DOWNLOADS_MEUDANFE = "downloads-meudanfe"
-MAX_WORKERS_PERMITIDO = 4
+MAX_WORKERS_PERMITIDO = 8
 
 # Serializa a criação do driver entre workers paralelos: o undetected_chromedriver
 # faz o patch do binário do chromedriver em disco, e duas criações simultâneas podem
 # colidir no Windows (FileExistsError).
 _LOCK_INICIALIZACAO_DRIVER = threading.Lock()
-
-
-def _aguardar_execucao(
-    cancelar_evento: threading.Event | None,
-    pausar_evento: threading.Event | None,
-    intervalo: float = 0.5,
-) -> bool:
-    """Bloqueia enquanto a execução estiver pausada e respeita cancelamento."""
-    while pausar_evento is not None and pausar_evento.is_set():
-        if cancelar_evento is not None and cancelar_evento.is_set():
-            return False
-        time.sleep(intervalo)
-    return not (cancelar_evento is not None and cancelar_evento.is_set())
 
 
 def normalizar_texto(valor: object) -> str:
@@ -178,8 +166,19 @@ class MeudanfeBatchResult:
 
     @property
     def status(self) -> str:
+        """Status final da planilha — só faz sentido chamar depois que o lote inteiro terminou.
+
+        `chaves_com_falha == 0` sozinho não basta para dizer "concluído": se o lote foi
+        encerrado (usuário clicou Encerrar, ou algum outro corte cedo), uma planilha cujas
+        chaves nunca chegaram a ser tentadas também tem `chaves_com_falha == 0` — sem esse
+        campo, ela caía aqui como "concluido" mesmo com 0 de N chaves realmente processadas,
+        deixando o resumo do lote ("Planilhas concluídas: X de Y") mentiroso.
+        """
         if self.chaves_total == 0:
             return "sem_chaves"
+        processadas = self.chaves_baixadas + self.chaves_puladas + self.chaves_com_falha
+        if processadas < self.chaves_total:
+            return "interrompido"
         if self.chaves_com_falha:
             return "parcial" if (self.chaves_baixadas + self.chaves_puladas) else "erro"
         return "concluido"
@@ -204,12 +203,27 @@ def localizar_coluna_chave_nfe(aba) -> tuple[int, int]:
     raise ValueError("A coluna 'Chave NF-e' não foi encontrada.")
 
 
-def montar_pasta_destino_planilha(caminho_planilha: Path) -> Path:
-    """Pasta de saída da planilha: sempre ao lado dela, nunca na planilha original."""
-    return caminho_planilha.parent / PASTA_DOWNLOADS_MEUDANFE / caminho_planilha.stem
+def montar_pasta_destino_planilha(caminho_planilha: Path, pasta_destino_base: Path, pasta_entrada: Path) -> Path:
+    """Pasta de saída da planilha, preservando a estrutura de empresa da pasta de entrada.
+
+    A pasta de entrada (tipicamente a própria saída do modo SIGA) já organiza cada planilha
+    em `<COD - EMPRESA - CNPJ>/<mês>/<aba>/planilha.xlsx` — sem preservar esse caminho
+    relativo, todas as empresas caiam numa única pasta nomeada só pelo tipo de relatório
+    (igual para qualquer empresa), misturando as chaves de todas elas com nada além da
+    própria chave de 44 dígitos para diferenciar a origem.
+    """
+    try:
+        caminho_relativo = caminho_planilha.relative_to(pasta_entrada)
+    except ValueError:
+        # Planilha fora da pasta de entrada esperada (não deveria acontecer, já que
+        # `listar_planilhas_nfe` sempre varre a partir dela) — cai para o nome isolado.
+        caminho_relativo = Path(caminho_planilha.name)
+    return pasta_destino_base / PASTA_DOWNLOADS_MEUDANFE / caminho_relativo.parent / caminho_relativo.stem
 
 
-def extrair_registros_planilha_nfe(caminho_planilha: Path) -> list[RegistroPlanilhaNFe]:
+def extrair_registros_planilha_nfe(
+    caminho_planilha: Path, pasta_destino_base: Path, pasta_entrada: Path
+) -> list[RegistroPlanilhaNFe]:
     """Extrai as chaves válidas (44 dígitos, deduplicadas) de uma planilha e sua origem."""
     with warnings.catch_warnings():
         warnings.filterwarnings(
@@ -220,7 +234,7 @@ def extrair_registros_planilha_nfe(caminho_planilha: Path) -> list[RegistroPlani
     try:
         aba = workbook[workbook.sheetnames[0]]
         linha_cabecalho, coluna_chave = localizar_coluna_chave_nfe(aba)
-        pasta_destino = montar_pasta_destino_planilha(caminho_planilha)
+        pasta_destino = montar_pasta_destino_planilha(caminho_planilha, pasta_destino_base, pasta_entrada)
         registros: list[RegistroPlanilhaNFe] = []
         chaves_vistas: set[str] = set()
 
@@ -743,9 +757,10 @@ class MeudanfeBatchExtractor:
     contrário de `SigaContributorExtractor`/`NfceBatchExtractor`.
     """
 
-    def __init__(self, settings: Settings, input_folder: Path) -> None:
+    def __init__(self, settings: Settings, input_folder: Path, output_folder: Path) -> None:
         self.settings = settings
         self.input_folder = input_folder
+        self.output_folder = output_folder
 
     def executar_lote(
         self,
@@ -768,7 +783,9 @@ class MeudanfeBatchExtractor:
         registros: list[RegistroPlanilhaNFe] = []
         for caminho_planilha in listar_planilhas_nfe(self.input_folder):
             try:
-                registros.extend(extrair_registros_planilha_nfe(caminho_planilha))
+                registros.extend(
+                    extrair_registros_planilha_nfe(caminho_planilha, self.output_folder, self.input_folder)
+                )
             except Exception as exc:  # noqa: BLE001
                 narrate_warning("Falha ao ler a planilha %s: %s", caminho_planilha.name, exc)
 
@@ -813,7 +830,16 @@ class MeudanfeBatchExtractor:
                     else:
                         resultado_planilha.chaves_com_falha += 1
                         chaves_com_falha.append(
-                            (item.chave, item.caminho_planilha.name, str(montar_pasta_destino_planilha(item.caminho_planilha)), item.erro)
+                            (
+                                item.chave,
+                                item.caminho_planilha.name,
+                                str(
+                                    montar_pasta_destino_planilha(
+                                        item.caminho_planilha, self.output_folder, self.input_folder
+                                    )
+                                ),
+                                item.erro,
+                            )
                         )
                     planilhas_atualizadas.add(item.caminho_planilha)
                 if on_planilha_concluida is not None:
@@ -846,8 +872,8 @@ class MeudanfeBatchExtractor:
         return list(resultados_por_planilha.values())
 
     def _gravar_log_falhas(self, chaves_falhas: list[tuple[str, str, str, str]]) -> None:
-        """Grava um arquivo enxuto só com as chaves que falharam, na pasta de entrada."""
-        caminho_log = self.input_folder / "chaves_falhas_meudanfe.log"
+        """Grava um arquivo enxuto só com as chaves que falharam, na pasta de destino."""
+        caminho_log = self.output_folder / "chaves_falhas_meudanfe.log"
         linhas = ["Chaves que não obtiveram sucesso:"]
         for chave, planilha, pasta_destino, erro in chaves_falhas:
             linhas.append(f"- Chave {chave} | Planilha {planilha} | Pasta {pasta_destino} | Erro {erro}")

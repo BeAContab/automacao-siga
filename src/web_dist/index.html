@@ -43,6 +43,7 @@
     <button class="nav-item w-full text-left px-md py-sm flex items-center gap-md transition-all border-l-4 border-transparent hover:bg-surface-container-high" data-mode="siga" type="button">
       <span class="material-symbols-outlined text-[20px]">analytics</span>
       <span class="text-label-bold font-label-bold">Extração SIGA</span>
+      <span class="ml-auto bg-siga-slate/20 text-siga-slate px-1 rounded text-[8px] font-bold uppercase tracking-widest">EM TESTES</span>
     </button>
     <button class="nav-item w-full text-left px-md py-sm flex items-center gap-md transition-all border-l-4 border-transparent hover:bg-surface-container-high" data-mode="nfce" type="button">
       <span class="material-symbols-outlined text-[20px]">receipt_long</span>
@@ -52,6 +53,13 @@
     <button class="nav-item w-full text-left px-md py-sm flex items-center gap-md transition-all border-l-4 border-transparent hover:bg-surface-container-high" data-mode="nfe" type="button">
       <span class="material-symbols-outlined text-[20px]">description</span>
       <span class="text-label-bold font-label-bold">Extração NF-e</span>
+      <span class="ml-auto bg-siga-slate/20 text-siga-slate px-1 rounded text-[8px] font-bold uppercase tracking-widest">EM TESTES</span>
+    </button>
+    <!-- Cadeia completa: reaproveita a mesma tela/grade do modo SIGA (ver [data-chain-only] abaixo e gridMode() em main.js) -->
+    <button class="nav-item w-full text-left px-md py-sm flex items-center gap-md transition-all border-l-4 border-transparent hover:bg-surface-container-high" data-mode="chain" type="button">
+      <span class="material-symbols-outlined text-[20px]">rocket_launch</span>
+      <span class="text-label-bold font-label-bold">Cadeia Completa</span>
+      <span class="ml-auto bg-siga-slate/20 text-siga-slate px-1 rounded text-[8px] font-bold uppercase tracking-widest">EM TESTES</span>
     </button>
   </div>
   <!-- Descricao do modo ativo: orienta antes de o usuario clicar em qualquer coisa. -->
@@ -119,6 +127,52 @@
             </button>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Parametros extras da cadeia completa (etapas NF-e e NFC-e) - visivel so no modo "chain" -->
+    <div class="siga-card rounded-lg p-md grid grid-cols-2 gap-lg" data-chain-only hidden>
+      <div class="flex flex-col gap-sm">
+        <h2 class="text-label-bold font-label-bold text-secondary uppercase tracking-wider">NFC-e — Autenticação e planilha-base</h2>
+        <label class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Planilha-base CNPJ/IE</span>
+          <div class="flex">
+            <input class="flex-1 siga-form-field rounded-l px-sm py-2 text-body-sm bg-white min-w-0" id="chain-nfce-base-spreadsheet" readonly type="text">
+            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-chain-nfce-base" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
+          </div>
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">CPF do contador</span>
+          <input class="siga-form-field rounded px-sm py-2 text-body-sm bg-white" id="chain-nfce-cpf" placeholder="000.000.000-00" type="text">
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Senha</span>
+          <input class="siga-form-field rounded px-sm py-2 text-body-sm bg-white" id="chain-nfce-senha" placeholder="••••••••" type="password">
+        </label>
+        <p class="text-[10px] text-on-surface-variant mt-1 flex items-start gap-1 leading-snug">
+          <span class="material-symbols-outlined text-[12px] mt-px">info</span>
+          Usados apenas nesta execução; nunca são gravados em disco (nem em .env, planilha ou log).
+        </p>
+      </div>
+      <div class="flex flex-col gap-sm">
+        <h2 class="text-label-bold font-label-bold text-secondary uppercase tracking-wider">NF-e — Meu DANFE</h2>
+        <div class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Chrome.exe <span class="text-siga-slate">(opcional)</span></span>
+          <div class="flex">
+            <input class="flex-1 siga-form-field rounded-l px-sm py-2 text-body-sm bg-white min-w-0" id="chain-nfe-chrome-path" placeholder="Caminho personalizado" readonly type="text">
+            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-chain-nfe-chrome" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
+          </div>
+        </div>
+        <label class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Chromes em paralelo</span>
+          <div class="flex items-center gap-sm">
+            <input class="siga-form-field rounded px-sm py-2 text-body-sm bg-white w-20 text-center" id="chain-nfe-max-workers" max="8" min="1" type="number" value="1">
+            <span class="text-body-sm font-body-sm text-on-surface-variant">de 1 a 8 instâncias</span>
+          </div>
+        </label>
+        <p class="text-[10px] text-on-surface-variant leading-snug">
+          As pastas "NFe" e "NFCe" são criadas automaticamente dentro da pasta de saída do SIGA acima, que também é reaproveitada como entrada de ambas as etapas.
+        </p>
       </div>
     </div>
 
@@ -251,12 +305,19 @@
     <!-- Parametros do modo NF-e -->
     <div class="siga-card rounded-lg p-md flex flex-col gap-md">
       <h2 class="text-label-bold font-label-bold text-secondary uppercase tracking-wider">Parâmetros de extração</h2>
-      <div class="grid grid-cols-3 gap-md">
+      <div class="grid grid-cols-2 gap-md">
         <div class="flex flex-col gap-xs">
           <span class="text-body-sm font-body-sm text-on-surface-variant">Pasta com planilhas NF-e</span>
           <div class="flex">
             <input class="flex-1 siga-form-field rounded-l px-sm py-2 text-body-md font-body-md bg-white min-w-0" id="nfe-input-folder" placeholder="Saída do modo SIGA" readonly title="Pasta com planilhas .xlsx que tenham a coluna &quot;Chave NF-e&quot; — tipicamente a própria pasta de saída do modo SIGA." type="text">
             <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfe-input" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
+          </div>
+        </div>
+        <div class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Pasta de destino dos downloads</span>
+          <div class="flex">
+            <input class="flex-1 siga-form-field rounded-l px-sm py-2 text-body-md font-body-md bg-white min-w-0" id="nfe-output-dir" readonly type="text">
+            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfe-output" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
           </div>
         </div>
         <div class="flex flex-col gap-xs">
@@ -269,8 +330,8 @@
         <label class="flex flex-col gap-xs">
           <span class="text-body-sm font-body-sm text-on-surface-variant">Chromes em paralelo</span>
           <div class="flex items-center gap-sm">
-            <input class="siga-form-field rounded px-sm py-2 text-body-md font-body-md bg-white w-20 text-center" id="nfe-max-workers" max="4" min="1" type="number" value="1">
-            <span class="text-body-sm font-body-sm text-on-surface-variant">de 1 a 4 instâncias</span>
+            <input class="siga-form-field rounded px-sm py-2 text-body-md font-body-md bg-white w-20 text-center" id="nfe-max-workers" max="8" min="1" type="number" value="1">
+            <span class="text-body-sm font-body-sm text-on-surface-variant">de 1 a 8 instâncias</span>
           </div>
         </label>
       </div>
@@ -328,6 +389,15 @@
     <button class="w-full bg-siga-gold text-siga-gold-text text-label-bold font-label-bold py-md rounded-lg shadow-sm hover:brightness-105 active:brightness-95 transition-all flex items-center justify-center gap-xs uppercase tracking-wider" data-action="execute" id="btn-execute" type="button">
       <span class="material-symbols-outlined">play_arrow</span> <span id="btn-execute-label">Extração SIGA</span>
     </button>
+    <!-- So aparecem com uma execucao em andamento - ver refreshExecuteButton() em main.js -->
+    <div class="flex gap-sm" id="btn-pause-stop-row">
+      <button class="flex-1 bg-white border border-siga-slate text-siga-petrol text-label-bold font-label-bold py-sm rounded hover:bg-surface transition-colors flex items-center justify-center gap-xs" data-action="pause-resume" id="btn-pause-resume" type="button" hidden>
+        <span class="material-symbols-outlined text-[18px]" id="btn-pause-resume-icon">pause</span> <span id="btn-pause-resume-label">Pausar</span>
+      </button>
+      <button class="flex-1 bg-white border border-error/50 text-error text-label-bold font-label-bold py-sm rounded hover:bg-error-container/40 transition-colors flex items-center justify-center gap-xs" data-action="stop-execution" id="btn-stop-execution" type="button" hidden>
+        <span class="material-symbols-outlined text-[18px]">stop_circle</span> Encerrar
+      </button>
+    </div>
   </div>
 
   <!-- Console de execucao -->

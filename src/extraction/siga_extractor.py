@@ -2,14 +2,16 @@ from __future__ import annotations
 
 """Fluxo principal de busca de contribuintes e extração dos relatórios do SIGA."""
 
+import csv
 import logging
 import re
+import threading
 import time
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Callable, Iterator, TypeVar
 
 from openpyxl import Workbook
 
@@ -17,6 +19,7 @@ from src.auth.siga_login import SigaLoginFlow
 from src.config import Settings
 from src.extraction.spreadsheet import SpreadsheetRow, close_status_workbook, write_status_to_spreadsheet_cell
 from src.utils.browser import BrowserSession
+from src.utils.execution_control import wait_if_paused
 from src.utils.narration import narrate, narrate_error, narrate_success, narrate_warning
 from src.utils.selenium_compat import BrowserContext, Download, Error, Locator, Page, TimeoutError
 from src.utils.siga_page import SigaPageInspector
@@ -24,6 +27,17 @@ from src.utils.text import slugify, strip_accents
 
 
 LOGGER = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+
+def _format_elapsed_seconds(seconds: float) -> str:
+    """Formata um intervalo em segundos como texto curto para narracao (ex.: "2min30s")."""
+    total_seconds = max(0, int(seconds))
+    minutes, secs = divmod(total_seconds, 60)
+    if minutes:
+        return f"{minutes}min{secs}s"
+    return f"{secs}s"
 
 
 @dataclass(slots=True)
@@ -153,6 +167,10 @@ class SigaContributorExtractor:
         # Cache do indice da opcao "maior valor" no dropdown de linhas por pagina da Central de
         # Downloads, para evitar reler todas as opcoes a cada reload (ver _select_max_downloads_page_size).
         self._downloads_page_size_option_index: int | None = None
+        # Mapa CNPJ normalizado -> COD da empresa, montado uma vez por lote (ver
+        # _run_batch_from_spreadsheet_in_context) para exibir o COD em vez do CNPJ no
+        # console de execucao (narrate*), mantendo o CNPJ no log tecnico para diagnostico.
+        self._cnpj_to_cod: dict[str, str] = {}
 
     def run(self, cnpj: str) -> ExtractionResult:
         """Executa a extração completa para um único contribuinte."""
@@ -210,6 +228,8 @@ class SigaContributorExtractor:
         selected_tabs_by_cnpj: dict[str, list[str]] | None = None,
         selected_tabs_by_row_number: dict[int, list[str]] | None = None,
         on_row_processed: Callable[[int, int], None] | None = None,
+        cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
     ) -> list[BatchExtractionResult]:
         """Reaproveita um contexto já autenticado para processar vários documentos em sequência.
 
@@ -218,6 +238,10 @@ class SigaContributorExtractor:
         processada, não encontrada, ou erro após esgotar as retentativas) — não conta
         reenfileiramentos por falha temporária. Serve para alimentar uma barra de
         progresso em tempo real; sem callback o comportamento não muda em nada.
+
+        `cancel_event`/`pause_event` (opcionais) permitem interromper/pausar o lote de fora —
+        checados nos pontos seguros do laço (início de cada empresa, e dentro da espera pela
+        Central de Downloads). Ver `src/utils/execution_control.py`.
         """
         try:
             return self._run_batch_from_spreadsheet_in_context(
@@ -229,6 +253,8 @@ class SigaContributorExtractor:
                 selected_tabs_by_cnpj,
                 selected_tabs_by_row_number,
                 on_row_processed,
+                cancel_event,
+                pause_event,
             )
         finally:
             # Libera o workbook de status mantido em memória durante o lote (ver spreadsheet.py).
@@ -244,11 +270,21 @@ class SigaContributorExtractor:
         selected_tabs_by_cnpj: dict[str, list[str]] | None = None,
         selected_tabs_by_row_number: dict[int, list[str]] | None = None,
         on_row_processed: Callable[[int, int], None] | None = None,
+        cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
     ) -> list[BatchExtractionResult]:
         normalized_month = month_reference.strip()
         if not normalized_month:
             raise ValueError("Informe o mes de referencia antes de iniciar a extracao.")
         normalized_year = self._normalize_reference_year(reference_year)
+
+        # Monta o mapa CNPJ -> COD deste lote, usado por `_company_display_label` para mostrar
+        # o COD da empresa no console de execução em vez do CNPJ (item solicitado pelo operador).
+        self._cnpj_to_cod = {
+            self._normalize_numeric_document(row.cnpj): row.cod.strip()
+            for row in spreadsheet_rows
+            if row.cod and row.cod.strip()
+        }
 
         total_rows = len(spreadsheet_rows)
         processed_rows = 0
@@ -263,6 +299,9 @@ class SigaContributorExtractor:
         pending_requests_by_row_number: dict[int, list[PendingDetailRequest]] = {}
         taxpayer_folder_names_by_row_number: dict[int, str] = {}
         all_pending_requests: list[PendingDetailRequest] = []
+        # Preenchido tanto pelos checkpoints periodicos quanto pela varredura final — chave
+        # e o `request_key`, entao um item ja resolvido num checkpoint nunca e buscado de novo.
+        detail_paths: dict[str, Path] = {}
         not_found_row_numbers: set[int] = set()
         prebuilt_results_by_row_number: dict[int, BatchExtractionResult] = {}
         last_successful_taxpayer_cnpj: str | None = None
@@ -275,10 +314,14 @@ class SigaContributorExtractor:
         row_retry_counts: dict[int, int] = {}
 
         while queue:
+            if not wait_if_paused(cancel_event, pause_event):
+                LOGGER.info("Lote SIGA encerrado a pedido do usuario antes da proxima empresa.")
+                narrate_warning("Execução encerrada pelo usuário.")
+                break
             spreadsheet_row = queue.pop(0)
             # Cada linha da planilha vira uma busca independente dentro do SIGA.
             LOGGER.info("Processando o CNPJ %s da linha %s da planilha", spreadsheet_row.cnpj, spreadsheet_row.row_number)
-            narrate("Processando o CNPJ %s (linha %s da planilha)...", self._format_cnpj(spreadsheet_row.cnpj), spreadsheet_row.row_number)
+            narrate("Processando %s (linha %s da planilha)...", self._company_display_label(spreadsheet_row.cnpj), spreadsheet_row.row_number)
             taxpayer_folder_name = self._build_taxpayer_folder_name(spreadsheet_row)
             taxpayer_folder_names_by_row_number[spreadsheet_row.row_number] = taxpayer_folder_name
 
@@ -304,7 +347,7 @@ class SigaContributorExtractor:
                 self._open_taxpayer_from_home(page, spreadsheet_row.cnpj)
             except TaxpayerNotFoundError as exc:
                 LOGGER.warning("CNPJ %s nao foi encontrado na pesquisa do SIGA; seguindo para o proximo.", spreadsheet_row.cnpj)
-                narrate_warning("CNPJ %s não foi encontrado no SIGA; seguindo para o próximo.", self._format_cnpj(spreadsheet_row.cnpj))
+                narrate_warning("%s não foi encontrado no SIGA; seguindo para o próximo.", self._company_display_label(spreadsheet_row.cnpj))
                 notice_path = self._save_taxpayer_not_found_notice(
                     cgf=spreadsheet_row.cnpj,
                     month_reference=normalized_month,
@@ -331,6 +374,11 @@ class SigaContributorExtractor:
                 mark_row_processed()
                 continue
             except Exception as exc:  # noqa: BLE001
+                if cancel_event is not None and cancel_event.is_set():
+                    # Navegador provavelmente ja foi derrubado por um "Encerrar" do usuario —
+                    # nao reenfileira nem narra "tentando novamente" contra uma sessao morta.
+                    LOGGER.info("Lote SIGA encerrado a pedido do usuario durante a abertura do contribuinte.")
+                    break
                 # Se for um erro temporário (como TimeoutError, erro de conexão ou página em branco)
                 # e ainda houver tentativas para esta linha, coloca no final da fila.
                 retry_count = row_retry_counts.get(spreadsheet_row.row_number, 0)
@@ -346,8 +394,8 @@ class SigaContributorExtractor:
                     )
                     queue.append(spreadsheet_row)
                     narrate_warning(
-                        "Tentando novamente o CNPJ %s (tentativa %s de 3)...",
-                        self._format_cnpj(spreadsheet_row.cnpj),
+                        "Tentando novamente %s (tentativa %s de 3)...",
+                        self._company_display_label(spreadsheet_row.cnpj),
                         retry_count + 1,
                     )
                     continue
@@ -359,8 +407,8 @@ class SigaContributorExtractor:
                     retry_count,
                 )
                 narrate_error(
-                    "Não foi possível abrir o CNPJ %s após várias tentativas.",
-                    self._format_cnpj(spreadsheet_row.cnpj),
+                    "Não foi possível abrir %s após várias tentativas.",
+                    self._company_display_label(spreadsheet_row.cnpj),
                 )
                 for tab in tabs_for_row:
                     write_status_to_spreadsheet_cell(self.output_spreadsheet_path, spreadsheet_row.row_number, tab, f"Erro: {exc}")
@@ -404,19 +452,107 @@ class SigaContributorExtractor:
             all_pending_requests.extend(pending_requests)
             mark_row_processed()
 
-        detail_paths: dict[str, Path] = {}
-        if all_pending_requests:
+            # Checkpoint periodico da Central de Downloads: em vez de deixar todas as
+            # solicitacoes do lote empilhadas para uma unica janela de espera no final (que um
+            # lote real de 155 CNPJs/660 solicitacoes mostrou insuficiente — so 95 encontradas
+            # nos 600s finais), colhe aqui o que ja estiver pronto a cada N empresas, espalhando
+            # a busca pelas horas que o lote inteiro ja leva. `download_checkpoint_interval=0`
+            # desliga e mantem o comportamento antigo (so a varredura final, abaixo).
+            checkpoint_interval = self.settings.download_checkpoint_interval
+            if checkpoint_interval > 0 and queue and processed_rows % checkpoint_interval == 0:
+                still_pending = [
+                    request for request in all_pending_requests if request.request_key not in detail_paths
+                ]
+                if still_pending:
+                    LOGGER.info(
+                        "Checkpoint da Central de Downloads apos %s empresas processadas: aguardando %s ms "
+                        "antes de verificar %s solicitacao(oes) ainda pendente(s).",
+                        processed_rows,
+                        self.settings.download_checkpoint_pause_ms,
+                        len(still_pending),
+                    )
+                    narrate(
+                        "Verificando a Central de Downloads (checkpoint a cada %s empresas, %s pendente(s))...",
+                        checkpoint_interval,
+                        len(still_pending),
+                    )
+                    page.wait_for_timeout(self.settings.download_checkpoint_pause_ms)
+                    try:
+                        checkpoint_paths = self._download_pending_detail_requests(
+                            page,
+                            still_pending,
+                            context=context,
+                            fallback_taxpayer_cnpj=last_successful_taxpayer_cnpj,
+                            timeout_ms=self.settings.download_checkpoint_scan_timeout_ms,
+                            give_up_on_missing=False,
+                            cancel_event=cancel_event,
+                            pause_event=pause_event,
+                        )
+                        detail_paths.update(checkpoint_paths)
+                        if checkpoint_paths:
+                            narrate_success(
+                                "Checkpoint: %s de %s arquivo(s) pendente(s) já baixado(s).",
+                                len(checkpoint_paths),
+                                len(still_pending),
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        # Nao e fatal: o item continua pendente e o proximo checkpoint (ou a
+                        # varredura final, ja com o timeout completo) tenta de novo.
+                        LOGGER.warning(
+                            "Falha no checkpoint periodico da Central de Downloads (nao critico; "
+                            "tentando de novo no proximo checkpoint ou na varredura final): %s",
+                            exc,
+                        )
+
+        still_pending_requests = [
+            request for request in all_pending_requests if request.request_key not in detail_paths
+        ]
+        batch_was_cancelled = cancel_event is not None and cancel_event.is_set()
+        if still_pending_requests and batch_was_cancelled:
             LOGGER.info(
-                "Todas as solicitacoes fiscais foram preparadas para %s CNPJ(s); abrindo a Central de Downloads uma unica vez para buscar %s arquivo(s).",
+                "Varredura final da Central de Downloads pulada: lote encerrado a pedido do usuario "
+                "(%s solicitacoes ainda pendentes, ja enviadas ao SIGA).",
+                len(still_pending_requests),
+            )
+        elif still_pending_requests:
+            LOGGER.info(
+                "Todas as solicitacoes fiscais foram preparadas para %s CNPJ(s); abrindo a Central de Downloads "
+                "uma ultima vez para buscar %s arquivo(s) ainda pendente(s) (de %s solicitacoes totais).",
                 len(spreadsheet_rows),
+                len(still_pending_requests),
                 len(all_pending_requests),
             )
-            detail_paths = self._download_pending_detail_requests(
-                page,
-                all_pending_requests,
-                context=context,
-                fallback_taxpayer_cnpj=last_successful_taxpayer_cnpj,
-            )
+            try:
+                final_paths = self._download_pending_detail_requests(
+                    page,
+                    still_pending_requests,
+                    context=context,
+                    fallback_taxpayer_cnpj=last_successful_taxpayer_cnpj,
+                    cancel_event=cancel_event,
+                    pause_event=pause_event,
+                )
+                detail_paths.update(final_paths)
+            except Exception as exc:  # noqa: BLE001
+                # As solicitacoes fiscais deste lote ja foram enviadas ao SIGA com sucesso
+                # antes desta etapa — perder a varredura final da Central de Downloads nao
+                # significa perder o trabalho do lote inteiro (e os checkpoints periodicos ja
+                # devem ter recuperado boa parte), so significa que os arquivos restantes
+                # precisam ser buscados manualmente. Por isso o lote termina de forma graciosa
+                # (results ainda e montado abaixo, com o detail_paths acumulado ate aqui) em
+                # vez de propagar e abortar tudo sem explicacao.
+                LOGGER.exception(
+                    "Falha ao acessar a Central de Downloads na varredura final apos preparar %s solicitacoes "
+                    "fiscais (%s ainda pendentes); as solicitacoes ja foram enviadas ao SIGA e podem ser "
+                    "buscadas manualmente.",
+                    len(all_pending_requests),
+                    len(still_pending_requests),
+                )
+                narrate_error(
+                    "Não foi possível acessar a Central de Downloads para buscar os %s arquivos ainda pendentes (%s). "
+                    "As solicitações já foram enviadas ao SIGA — acesse a Central de Downloads manualmente no portal para baixá-las.",
+                    len(still_pending_requests),
+                    exc,
+                )
 
         for spreadsheet_row in spreadsheet_rows:
             if spreadsheet_row.row_number in not_found_row_numbers:
@@ -489,17 +625,13 @@ class SigaContributorExtractor:
                 self._open_taxpayer(page, cgf)
                 return
             except TaxpayerNotFoundError as exc:
-                last_error = exc
-                LOGGER.warning(
-                    "A tentativa %s indicou que o contribuinte %s nao foi encontrado: %s",
-                    attempt,
-                    cgf,
-                    exc,
-                )
-                if attempt == 3:
-                    raise
-                if attempt < 3:
-                    page.wait_for_timeout(1_000)
+                # Uma unica tentativa: _wait_for_taxpayer_search_result ja tem seu proprio
+                # teto generoso (90s) antes de concluir "nao encontrado", entao repetir a
+                # busca aqui so multiplicava um resultado ja bem confirmado — medido ao vivo
+                # em ~91s por tentativa, ou seja, ~5min por CNPJ genuinamente ausente com as
+                # 3 tentativas antigas (ver CHANGELOG da correcao).
+                LOGGER.warning("O contribuinte %s nao foi encontrado: %s", cgf, exc)
+                raise
             except (TimeoutError, Error) as exc:
                 last_error = exc
                 LOGGER.warning(
@@ -644,7 +776,12 @@ class SigaContributorExtractor:
         # --- Abas especiais que não seguem o fluxo de Informações Fiscais ---
         if "Malha Fiscal" in allowed_tabs:
             try:
-                request = self._request_malha_fiscal(page, cgf, month_reference, taxpayer_folder_name, row_number)
+                request = self._request_fiscal_tab_with_retry(
+                    page,
+                    "Malha Fiscal",
+                    cgf,
+                    lambda: self._request_malha_fiscal(page, cgf, month_reference, taxpayer_folder_name, row_number),
+                )
                 if request is not None:
                     results.append(request)
                 else:
@@ -652,11 +789,16 @@ class SigaContributorExtractor:
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Falha ao solicitar Malha Fiscal para o CNPJ %s", cgf)
                 write_status_to_spreadsheet_cell(self.output_spreadsheet_path, row_number, "Malha Fiscal", f"Erro: {exc}")
-                narrate_warning("Não foi possível solicitar a Malha Fiscal do CNPJ %s.", self._format_cnpj(cgf))
+                narrate_warning("Não foi possível solicitar a Malha Fiscal de %s.", self._company_display_label(cgf))
 
         if "Débitos Fiscais" in allowed_tabs:
             try:
-                request = self._request_debitos_fiscais(page, cgf, month_reference, taxpayer_folder_name, row_number)
+                request = self._request_fiscal_tab_with_retry(
+                    page,
+                    "Débitos Fiscais",
+                    cgf,
+                    lambda: self._request_debitos_fiscais(page, cgf, month_reference, taxpayer_folder_name, row_number),
+                )
                 if request is not None:
                     results.append(request)
                 else:
@@ -664,7 +806,7 @@ class SigaContributorExtractor:
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Falha ao solicitar Débitos Fiscais para o CNPJ %s", cgf)
                 write_status_to_spreadsheet_cell(self.output_spreadsheet_path, row_number, "Débitos Fiscais", f"Erro: {exc}")
-                narrate_warning("Não foi possível solicitar os Débitos Fiscais do CNPJ %s.", self._format_cnpj(cgf))
+                narrate_warning("Não foi possível solicitar os Débitos Fiscais de %s.", self._company_display_label(cgf))
 
         # --- Abas fiscais padrão (NF-e, NFC-e, CT-e) ---
         for tab_config in self._build_fiscal_tab_configs():
@@ -674,21 +816,68 @@ class SigaContributorExtractor:
             try:
                 narrate("Extraindo dados de %s do contribuinte...", tab_config.tab_name)
                 results.extend(
-                    self._collect_fiscal_tab_requests(
+                    self._request_fiscal_tab_with_retry(
                         page,
+                        tab_config.tab_name,
                         cgf,
-                        month_reference,
-                        reference_year,
-                        taxpayer_folder_name,
-                        tab_config,
-                        row_number,
+                        lambda tab_config=tab_config: self._collect_fiscal_tab_requests(
+                            page,
+                            cgf,
+                            month_reference,
+                            reference_year,
+                            taxpayer_folder_name,
+                            tab_config,
+                            row_number,
+                        ),
                     )
                 )
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("Falha ao solicitar %s para o CNPJ %s", tab_config.tab_name, cgf)
                 write_status_to_spreadsheet_cell(self.output_spreadsheet_path, row_number, tab_config.tab_name, f"Erro: {exc}")
-                narrate_warning("Não foi possível extrair %s do CNPJ %s.", tab_config.tab_name, self._format_cnpj(cgf))
+                narrate_warning("Não foi possível extrair %s de %s.", tab_config.tab_name, self._company_display_label(cgf))
         return results
+
+    def _request_fiscal_tab_with_retry(
+        self,
+        page: Page,
+        tab_name: str,
+        cgf: str,
+        action: Callable[[], _T],
+    ) -> _T:
+        """Executa a solicitação de uma aba fiscal com retentativas para falhas transitórias.
+
+        Mesma classe de erro (timeout, overlay travado, lentidão momentânea do SIGA) que já
+        ganha 3 tentativas ao abrir o contribuinte (`_open_taxpayer_from_home`) — antes, se
+        ocorresse aqui minutos depois, ao solicitar uma aba específica já dentro do
+        contribuinte, desistia definitivamente na primeira falha, sem nenhuma nova tentativa.
+        """
+        attempts = max(1, self.settings.fiscal_tab_retry_count)
+        last_exc: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return action()
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if attempt < attempts:
+                    LOGGER.warning(
+                        "Falha temporaria ao solicitar %s para o CNPJ %s (tentativa %s/%s): %s. Tentando novamente.",
+                        tab_name,
+                        cgf,
+                        attempt,
+                        attempts,
+                        exc,
+                    )
+                    narrate_warning(
+                        "Tentando novamente %s de %s (tentativa %s de %s)...",
+                        tab_name,
+                        self._company_display_label(cgf),
+                        attempt,
+                        attempts,
+                    )
+                    page.wait_for_timeout(self.settings.fiscal_tab_retry_delay_ms)
+                    continue
+        assert last_exc is not None
+        raise last_exc
 
     def _build_pending_request(
         self,
@@ -726,7 +915,7 @@ class SigaContributorExtractor:
                 self._sanitize_filename(tela_aba),
             )
         )
-        return PendingDetailRequest(
+        pending_request = PendingDetailRequest(
             request_key=request_key,
             document_tab=document_tab,
             profile_name=profile_name,
@@ -743,6 +932,55 @@ class SigaContributorExtractor:
             is_summary_request=is_summary_request,
             summary_request_key=summary_request_key,
         )
+        self._append_request_log_row(pending_request)
+        return pending_request
+
+    def _append_request_log_row(self, request: "PendingDetailRequest") -> None:
+        """Registra a solicitação num CSV simples e separado do log técnico/narração.
+
+        Cada linha é gravada e o arquivo é fechado na hora (sem handler de vida longa
+        atrelado ao lote) para que nada se perca mesmo se a execução travar minutos
+        depois — como no caso real em que a Central de Downloads não reabriu ao final
+        de um lote de 155 CNPJs. Com este CSV, o usuário pode localizar manualmente
+        cada solicitação pendente na Central (coluna `tela_na_central`) e baixar na mão.
+        Falha ao gravar aqui nunca deve interromper a extração fiscal em si.
+        """
+        try:
+            self.settings.output_dir.mkdir(parents=True, exist_ok=True)
+            log_path = self.settings.output_dir / "documentos-solicitados.csv"
+            write_header = not log_path.exists()
+            with log_path.open("a", newline="", encoding="utf-8-sig") as handle:
+                writer = csv.writer(handle, delimiter=";")
+                if write_header:
+                    writer.writerow(
+                        [
+                            "data_hora",
+                            "empresa",
+                            "aba_documento",
+                            "perfil",
+                            "mes_referencia",
+                            "tela_na_central",
+                            "arquivo_esperado",
+                            "chave_solicitacao",
+                        ]
+                    )
+                writer.writerow(
+                    [
+                        request.requested_after.strftime("%Y-%m-%d %H:%M:%S"),
+                        request.taxpayer_folder_name,
+                        request.document_tab,
+                        request.profile_name,
+                        request.month_reference,
+                        request.tela_aba,
+                        request.output_basename or "",
+                        request.request_key,
+                    ]
+                )
+        except OSError:
+            LOGGER.exception(
+                "Falha ao gravar o log de solicitacoes (documentos-solicitados.csv) para %s",
+                request.taxpayer_cnpj,
+            )
 
     def _normalize_selected_tabs(self, selected_tabs: list[str] | None) -> set[str]:
         """Converte a seleção do usuário em um conjunto válido de abas fiscais.
@@ -1028,7 +1266,7 @@ class SigaContributorExtractor:
                         document_value,
                         state.get("matchCount", 0),
                     )
-                    narrate_success("Contribuinte %s localizado.", self._format_cnpj(document_value))
+                    narrate_success("Contribuinte %s localizado.", self._company_display_label(document_value))
                     return
                 if state.get("skeletonVisible"):
                     empty_result_seen_at = None
@@ -1087,7 +1325,7 @@ class SigaContributorExtractor:
     def _open_taxpayer(self, page: Page, document_value: str) -> None:
         """Abre o contribuinte encontrado usando a linha ou célula que melhor bater com o documento."""
         LOGGER.info("Abrindo a linha do contribuinte %s", document_value)
-        narrate("Abrindo a ficha do contribuinte %s...", self._format_cnpj(document_value))
+        narrate("Abrindo a ficha do contribuinte %s...", self._company_display_label(document_value))
         if self._is_taxpayer_detail_page(page):
             LOGGER.info("A visualização de detalhes do contribuinte já foi detectada; ignorando a seleção de linha para %s", document_value)
             return
@@ -1370,7 +1608,7 @@ class SigaContributorExtractor:
         """
         import time as _time
         LOGGER.info("Iniciando extração de Malha Fiscal para o CNPJ %s", cgf)
-        narrate("Solicitando o relatório de Malha Fiscal do CNPJ %s...", self._format_cnpj(cgf))
+        narrate("Solicitando o relatório de Malha Fiscal de %s...", self._company_display_label(cgf))
         self._ensure_side_menu_open(page)
 
         # --- Navegar até Malha Fiscal ---
@@ -1458,7 +1696,7 @@ class SigaContributorExtractor:
         """
         import time as _time
         LOGGER.info("Iniciando extração de Débitos Fiscais para o CNPJ %s", cgf)
-        narrate("Solicitando o relatório de Débitos Fiscais do CNPJ %s...", self._format_cnpj(cgf))
+        narrate("Solicitando o relatório de Débitos Fiscais de %s...", self._company_display_label(cgf))
         self._ensure_side_menu_open(page)
 
         # --- Navegar até Débitos Fiscais ---
@@ -2510,10 +2748,50 @@ class SigaContributorExtractor:
         pending_requests: list[PendingDetailRequest],
         context: BrowserContext | None = None,
         fallback_taxpayer_cnpj: str | None = None,
+        *,
+        timeout_ms: int | None = None,
+        give_up_on_missing: bool = True,
+        cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
     ) -> dict[str, Path]:
         origin_url = page.url
-        LOGGER.info("Abrindo o menu de Downloads para buscar %s arquivo(s) de detalhamento pendente(s)", len(pending_requests))
         narrate("Abrindo a Central de Downloads para buscar %s arquivo(s)...", len(pending_requests))
+        page = self._open_downloads_screen(page, context, fallback_taxpayer_cnpj)
+
+        targets = self._build_download_lookup_targets(pending_requests)
+        matches = self._find_pending_download_matches(
+            page,
+            targets,
+            timeout_ms=timeout_ms,
+            context=context,
+            fallback_taxpayer_cnpj=fallback_taxpayer_cnpj,
+            cancel_event=cancel_event,
+            pause_event=pause_event,
+        )
+        detail_paths = self._download_found_pending_requests(
+            page,
+            targets,
+            matches,
+            give_up_on_missing=give_up_on_missing,
+        )
+
+        page.goto(origin_url, wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
+        page.wait_for_timeout(1_000)
+        return detail_paths
+
+    def _open_downloads_screen(
+        self,
+        page: Page,
+        context: BrowserContext | None,
+        fallback_taxpayer_cnpj: str | None,
+    ) -> Page:
+        """Garante contexto autenticado, abre a tela de Downloads e ajusta o tamanho de pagina.
+
+        Extraido de `_download_pending_detail_requests` para ser reutilizavel tambem como
+        recuperacao forte dentro do laco de espera de `_find_pending_download_matches`, quando
+        um simples `page.reload()` nao for suficiente para a tabela renderizar de novo.
+        """
+        LOGGER.info("Abrindo o menu de Downloads para buscar arquivo(s) de detalhamento pendente(s)")
         page = self._prepare_downloads_context(page, context, fallback_taxpayer_cnpj)
         self._ensure_side_menu_open(page)
         if self._click_xpath(
@@ -2531,20 +2809,10 @@ class SigaContributorExtractor:
             )
             page.wait_for_timeout(1_000)
 
+        self._wait_for_downloads_table_ready(page, self.settings.downloads_table_ready_timeout_ms)
         # Reduz o numero de paginas a percorrer na varredura (ver PLANO_CORRECOES.md item 27).
         self._select_max_downloads_page_size(page)
-
-        targets = self._build_download_lookup_targets(pending_requests)
-        matches = self._find_pending_download_matches(page, targets)
-        detail_paths = self._download_found_pending_requests(
-            page,
-            targets,
-            matches,
-        )
-
-        page.goto(origin_url, wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
-        page.wait_for_timeout(1_000)
-        return detail_paths
+        return page
 
     def _prepare_downloads_context(
         self,
@@ -2561,10 +2829,41 @@ class SigaContributorExtractor:
             return page
 
         if context is not None:
-            page = self._ensure_authenticated(page, context)
-            self._ensure_side_menu_open(page)
-            if self._has_downloads_menu_entry(page):
-                return page
+            # Ponto critico do lote inteiro: se essa reautenticacao falhar sem recuperacao,
+            # todas as solicitacoes fiscais ja enviadas ao SIGA (potencialmente horas de
+            # processamento de varios CNPJs) ficam sem ser buscadas — mesmo ja prontas do
+            # lado do SIGA. Por isso aplicamos mais tentativas e espera maior aqui do que o
+            # padrao de estabilizacao (2 recargas) usado em outros pontos do fluxo (caso
+            # real: sessao de 4h+ degradou perto do fim de um lote de 155 CNPJs e a pagina
+            # nao renderizou nem apos as 2 recargas padrao, perdendo a busca de 675 arquivos).
+            retry_count = max(1, self.settings.downloads_context_retry_count)
+            for attempt in range(1, retry_count + 1):
+                try:
+                    page = self._ensure_authenticated(page, context)
+                    self._ensure_side_menu_open(page)
+                    if self._has_downloads_menu_entry(page):
+                        return page
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    if attempt >= retry_count:
+                        LOGGER.warning(
+                            "Falha ao reautenticar para acessar a Central de Downloads apos %s tentativas: %s",
+                            attempt,
+                            exc,
+                        )
+                        break
+                    LOGGER.warning(
+                        "Falha ao reautenticar para acessar a Central de Downloads (tentativa %s/%s): %s. Tentando novamente.",
+                        attempt,
+                        retry_count,
+                        exc,
+                    )
+                    narrate_warning(
+                        "A página do SIGA não respondeu ao abrir a Central de Downloads; tentando novamente (tentativa %s de %s)...",
+                        attempt,
+                        retry_count,
+                    )
+                    page.wait_for_timeout(self.settings.downloads_context_retry_delay_ms)
 
         if context is not None and fallback_taxpayer_cnpj:
             # Se a ultima pesquisa terminou fora de um contribuinte, reabrimos um CNPJ
@@ -2643,13 +2942,72 @@ class SigaContributorExtractor:
         }
         return [labels_by_key.get(request_key, request_key) for request_key in request_keys]
 
+    def _wait_for_downloads_table_ready(self, page: Page, timeout_ms: int) -> bool:
+        """Espera a tabela/paginador da Central de Downloads se estabilizar apos um reload.
+
+        Mesma logica de `_wait_for_taxpayer_list_ready` (linha ~662), adaptada para a Central
+        de Downloads: `page.reload(wait_until="domcontentloaded")` so espera o HTML inicial
+        parsear, nao o Angular buscar/renderizar a tabela — sem essa espera, o codigo tratava
+        "componente PrimeNG ainda nao montado" como "elemento nao encontrado" silenciosamente
+        (`_select_max_downloads_page_size`/`_go_to_next_downloads_page` sem auto-wait), travando
+        a varredura na pagina 1. Caso real: 91 ciclos seguidos (~5min) ate a sessao do
+        navegador cair, sem nenhum aviso visivel no console da interface.
+        """
+        self._wait_for_loading_overlays_to_disappear(page)
+        deadline = time.time() + max(timeout_ms, 0) / 1000
+        skeleton_selector = ".p-skeleton, .skeleton, [class*='skeleton']"
+        row_selector = "tr.p-selectable-row, tr[role='row'] td, .p-datatable-tbody tr"
+        paginator_selector = ".p-paginator, [aria-label='Rows per page'], .p-paginator-rpp-options"
+
+        while time.time() < deadline:
+            try:
+                visible_skeleton = self._first_visible_enabled(page.locator(skeleton_selector))
+                if visible_skeleton is not None:
+                    page.wait_for_timeout(300)
+                    continue
+            except Error:
+                pass
+
+            try:
+                if page.locator(row_selector).count() > 0 or page.locator(paginator_selector).count() > 0:
+                    return True
+            except Error:
+                pass
+
+            try:
+                body_text = strip_accents(page.locator("body").inner_text(timeout=2_000)).lower()
+                if any(
+                    marker in body_text
+                    for marker in ("nenhum registro", "nenhum resultado", "nao ha registros", "nao foram encontrados")
+                ):
+                    return True
+            except Error:
+                pass
+
+            page.wait_for_timeout(300)
+
+        return False
+
     def _find_pending_download_matches(
         self,
         page: Page,
         targets: list[DownloadLookupTarget],
+        timeout_ms: int | None = None,
+        context: BrowserContext | None = None,
+        fallback_taxpayer_cnpj: str | None = None,
+        cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
     ) -> dict[str, DownloadRowMatch]:
-        """Varre todas as paginas e escolhe o melhor match por solicitacao."""
-        deadline = time.time() + (self.settings.download_generation_timeout_ms / 1000)
+        """Varre todas as paginas e escolhe o melhor match por solicitacao.
+
+        `timeout_ms` substitui `settings.download_generation_timeout_ms` so nesta chamada —
+        usado pelos checkpoints periodicos do lote, que precisam de uma janela curta (colher
+        o que ja estiver pronto agora) em vez do prazo completo da varredura final.
+        `context`/`fallback_taxpayer_cnpj` sao usados apenas se for preciso reabrir a Central de
+        Downloads do zero apos falhas repetidas de renderizacao (ver `_open_downloads_screen`).
+        """
+        effective_timeout_ms = self.settings.download_generation_timeout_ms if timeout_ms is None else timeout_ms
+        deadline = time.time() + (effective_timeout_ms / 1000)
         target_keys = {target.request.request_key for target in targets}
         # Acumula os matches ja confirmados (preferidos) entre ciclos: uma vez resolvida, uma
         # solicitacao nao precisa ser reprocurada nos ciclos de espera seguintes, entao os ciclos
@@ -2666,8 +3024,19 @@ class SigaContributorExtractor:
         # varredura, descartando o melhor resultado ja confirmado.
         best_matches_ever: dict[str, DownloadRowMatch] = {}
         all_settled = False
+        # Falhas consecutivas em confirmar que a tabela renderizou apos um reload — acima do
+        # limite (`Settings.downloads_render_retry_count`), escala para reabrir a tela do zero
+        # em vez de continuar recarregando cegamente (ver `_wait_for_downloads_table_ready`).
+        consecutive_render_failures = 0
+        wait_started_at = time.time()
+        last_heartbeat_at = wait_started_at
+        heartbeat_interval_s = self.settings.download_wait_heartbeat_interval_ms / 1000
 
         while time.time() < deadline:
+            if not wait_if_paused(cancel_event, pause_event):
+                LOGGER.info("Espera pela Central de Downloads encerrada a pedido do usuario.")
+                break
+
             pending_targets = [
                 target for target in targets
                 if target.request.request_key not in resolved_matches
@@ -2693,7 +3062,19 @@ class SigaContributorExtractor:
                 all_settled = True
                 break
 
-            delay_ms = 1_500 if len(waiting_keys) <= 2 else 2_000
+            now = time.time()
+            if now - last_heartbeat_at >= heartbeat_interval_s:
+                narrate_warning(
+                    "Ainda aguardando %s arquivo(s) na Central de Downloads (%s decorrido(s))...",
+                    len(waiting_keys),
+                    _format_elapsed_seconds(now - wait_started_at),
+                )
+                last_heartbeat_at = now
+
+            # Backoff leve: alarga o intervalo entre tentativas enquanto a tabela nao estiver
+            # renderizando de forma confiavel, para nao empilhar reloads completos da SPA.
+            base_delay_ms = 1_500 if len(waiting_keys) <= 2 else 2_000
+            delay_ms = base_delay_ms + consecutive_render_failures * 1_000
             LOGGER.info(
                 "Downloads ainda em processamento para %s; nova varredura em %s ms.",
                 ", ".join(self._pending_request_labels(targets, waiting_keys)),
@@ -2702,7 +3083,31 @@ class SigaContributorExtractor:
             self._nudge_session_activity(page)
             page.wait_for_timeout(delay_ms)
             page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
-            page.wait_for_timeout(750)
+
+            table_ready = self._wait_for_downloads_table_ready(page, self.settings.downloads_table_ready_timeout_ms)
+            if not table_ready:
+                consecutive_render_failures += 1
+                LOGGER.warning(
+                    "A tabela da Central de Downloads nao terminou de renderizar apos o reload "
+                    "(falha %s/%s consecutiva(s)).",
+                    consecutive_render_failures,
+                    self.settings.downloads_render_retry_count,
+                )
+                remaining_s = deadline - time.time()
+                if consecutive_render_failures >= self.settings.downloads_render_retry_count and remaining_s > 5:
+                    narrate_warning(
+                        "A Central de Downloads não respondeu após %s tentativas; reabrindo a tela do zero...",
+                        consecutive_render_failures,
+                    )
+                    try:
+                        page = self._open_downloads_screen(page, context, fallback_taxpayer_cnpj)
+                    except (TimeoutError, Error) as exc:
+                        LOGGER.warning("Falha ao reabrir a Central de Downloads do zero: %s", exc)
+                    consecutive_render_failures = 0
+                    continue
+            else:
+                consecutive_render_failures = 0
+
             # O reload da SPA reseta o paginador para o tamanho padrao; reaplica o maximo.
             self._select_max_downloads_page_size(page)
 
@@ -3066,8 +3471,16 @@ class SigaContributorExtractor:
         page: Page,
         targets: list[DownloadLookupTarget],
         matches: dict[str, DownloadRowMatch],
+        give_up_on_missing: bool = True,
     ) -> dict[str, Path]:
-        """Baixa os itens encontrados em lote, paginando apenas por pagina com match."""
+        """Baixa os itens encontrados em lote, paginando apenas por pagina com match.
+
+        Quando `give_up_on_missing` e False (checkpoints periodicos do lote), um item nao
+        encontrado simplesmente fica de fora do `detail_paths` retornado — sem aviso de
+        "download indisponivel" nem status de erro na planilha — para tentar de novo no
+        proximo checkpoint ou na varredura final, que e quem de fato desiste (comportamento
+        padrao, `True`).
+        """
         detail_paths: dict[str, Path] = {}
         page_targets: dict[int, list[DownloadLookupTarget]] = {}
 
@@ -3076,6 +3489,8 @@ class SigaContributorExtractor:
             basename = self._download_output_basename(target.request)
             match = matches.get(request_key)
             if match is None:
+                if not give_up_on_missing:
+                    continue
                 detail_paths[request_key] = self._save_unavailable_download_notice(
                     cgf=target.request.taxpayer_cnpj,
                     month_reference=target.request.month_reference,
@@ -3147,13 +3562,16 @@ class SigaContributorExtractor:
                 # A paginacao da Central de Downloads quebrou no meio do lote e a tentativa
                 # de recuperacao tambem falhou. Em vez de abortar tudo (perdendo os downloads
                 # ja concluidos ate aqui), marca os itens das paginas ainda nao alcancadas como
-                # nao localizados e encerra o lote de forma graciosa.
+                # nao localizados (se `give_up_on_missing`) e encerra esta passada de forma
+                # graciosa — num checkpoint periodico, esses itens simplesmente ficam pendentes
+                # para a proxima tentativa, sem aviso definitivo.
                 LOGGER.warning(
                     "Nao foi possivel avancar da pagina %s para a proxima na Central de Downloads "
                     "apos tentativa de recuperacao; marcando os itens restantes como nao localizados.",
                     current_page,
                 )
-                self._mark_unreached_download_pages_as_unavailable(page_targets, current_page, detail_paths)
+                if give_up_on_missing:
+                    self._mark_unreached_download_pages_as_unavailable(page_targets, current_page, detail_paths)
                 break
             current_page += 1
 
@@ -4324,6 +4742,20 @@ class SigaContributorExtractor:
         if len(digits) != 14:
             return digits
         return f"{digits[:2]}.{digits[2:5]}.{digits[5:8]}/{digits[8:12]}-{digits[12:]}"
+
+    def _company_display_label(self, value: str) -> str:
+        """Identificador da empresa para o console de execução (narrate*).
+
+        Mostra o COD da planilha quando disponível (mapeado em `_cnpj_to_cod` no início do
+        lote); cai para o CNPJ formatado quando não há COD conhecido para esse documento
+        (ex.: fluxo de CNPJ único via `run()`, sem planilha). O log técnico (`LOGGER.*`)
+        continua usando o CNPJ em todos os pontos, sem alteração — é o identificador preciso
+        para diagnóstico e bate com o nome das pastas de saída.
+        """
+        cod = self._cnpj_to_cod.get(self._normalize_numeric_document(value))
+        if cod:
+            return f"empresa {cod}"
+        return self._format_cnpj(value)
 
     def _format_cgf(self, value: str) -> str:
         digits = self._normalize_numeric_document(value)

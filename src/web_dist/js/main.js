@@ -33,6 +33,16 @@
     return node ? node.value.trim() : '';
   }
 
+  /**
+   * O modo 'chain' (cadeia completa) reaproveita a tela e o estado ('rows.siga' etc.)
+   * do modo 'siga' inteiros - so acrescenta um bloco de campos extras. Onde o codigo
+   * precisa de uma chave de estado/DOM ligada a grade (renderGrid, limpar linhas...),
+   * usa-se esta traducao em vez do modo bruto.
+   */
+  function gridMode(mode) {
+    return mode === 'chain' ? 'siga' : mode;
+  }
+
   /* ---------------------------- troca de modo ---------------------------- */
 
   function setMode(mode) {
@@ -40,7 +50,12 @@
     S.state.mode = mode;
 
     document.querySelectorAll('[data-screen]').forEach((section) => {
-      section.hidden = section.dataset.screen !== mode;
+      section.hidden = section.dataset.screen !== gridMode(mode);
+    });
+
+    // Campos extras da cadeia completa (NF-e/NFC-e) só aparecem no modo 'chain'.
+    document.querySelectorAll('[data-chain-only]').forEach((node) => {
+      node.hidden = mode !== 'chain';
     });
 
     document.querySelectorAll('.nav-item').forEach((btn) => {
@@ -70,7 +85,7 @@
     if (nfceLoadBtn) nfceLoadBtn.hidden = mode !== 'nfce';
 
     refreshExecuteButton();
-    if (mode !== 'nfe') R.renderGrid(mode);
+    if (mode !== 'nfe') R.renderGrid(gridMode(mode));
   }
 
   /**
@@ -82,6 +97,10 @@
     const btn = document.getElementById('btn-execute');
     const browserBtn = document.getElementById('btn-start-browser');
     const nfceLoadBtn = document.getElementById('btn-nfce-load-companies');
+    const pauseResumeBtn = document.getElementById('btn-pause-resume');
+    const pauseResumeLabel = document.getElementById('btn-pause-resume-label');
+    const pauseResumeIcon = document.getElementById('btn-pause-resume-icon');
+    const stopBtn = document.getElementById('btn-stop-execution');
     if (!btn) return;
     if (S.state.running) {
       btn.disabled = true;
@@ -93,14 +112,54 @@
     if (browserBtn) browserBtn.disabled = S.state.running || S.state.browserStarted;
     // So faz sentido logar/carregar empresas depois que o navegador estiver de pe.
     if (nfceLoadBtn) nfceLoadBtn.disabled = S.state.running || !S.state.browserStarted;
+    // Pausar/Continuar e Encerrar so fazem sentido com uma execucao de fato em andamento.
+    if (pauseResumeBtn) {
+      pauseResumeBtn.hidden = !S.state.running;
+      pauseResumeBtn.disabled = !S.state.running;
+    }
+    if (pauseResumeLabel) pauseResumeLabel.textContent = S.state.paused ? 'Continuar' : 'Pausar';
+    if (pauseResumeIcon) pauseResumeIcon.textContent = S.state.paused ? 'play_arrow' : 'pause';
+    if (stopBtn) {
+      stopBtn.hidden = !S.state.running;
+      stopBtn.disabled = !S.state.running;
+    }
   }
 
   /** Bloqueia/libera os controles durante a execucao (equivale a _set_controls_state). */
   function setRunning(running) {
     S.state.running = running;
+    if (!running) S.state.paused = false; // nunca fica "pausado" fora de uma execucao ativa
     document.querySelectorAll('#workspace button, #workspace input, #workspace select, #workspace textarea')
       .forEach((node) => { node.disabled = running; });
     refreshExecuteButton();
+  }
+
+  /** Alterna pausar/continuar a execucao em andamento. */
+  async function togglePauseResume() {
+    if (!S.state.running) return;
+    const result = S.state.paused ? await Api.resumeExtraction() : await Api.pauseExtraction();
+    if (result && result.ok) {
+      S.state.paused = !S.state.paused;
+      refreshExecuteButton();
+    } else if (result && result.error) {
+      await Modal.alert(result.error, 'error');
+    }
+  }
+
+  /** Encerra a execucao em andamento por completo, apos confirmacao (acao destrutiva). */
+  async function stopExecution() {
+    if (!S.state.running) return;
+    const confirmed = await Modal.confirm(
+      'Encerrar a execução agora? O que já foi solicitado/baixado fica salvo, mas o restante do lote não será processado. Esta ação não pode ser desfeita.',
+      { level: 'warning', okLabel: 'Encerrar', cancelLabel: 'Cancelar' }
+    );
+    if (!confirmed) return;
+    const result = await Api.stopExtraction();
+    if (result && !result.ok && result.error) {
+      await Modal.alert(result.error, 'error');
+    }
+    // A UI volta ao estado normal via sigaOnExecutionFinished, disparado pelo Python
+    // assim que a thread de trabalho efetivamente terminar (nao precisa de setRunning aqui).
   }
 
   /* ------------------------------- entrada ------------------------------- */
@@ -170,6 +229,9 @@
     'pick-nfce-keys': ['dir', 'nfce_keys', 'nfce-keys-folder'],
     'pick-nfce-output': ['dir', 'nfce_output', 'nfce-output-dir'],
     'pick-nfe-input': ['dir', 'nfe_input', 'nfe-input-folder'],
+    'pick-nfe-output': ['dir', 'nfe_output', 'nfe-output-dir'],
+    'pick-chain-nfce-base': ['file', 'spreadsheet', 'chain-nfce-base-spreadsheet'],
+    'pick-chain-nfe-chrome': ['file', 'chrome', 'chain-nfe-chrome-path'],
   };
 
   async function runPicker(action) {
@@ -300,20 +362,22 @@
 
         switch (action) {
           case 'load-siga-spreadsheet': return void await loadSpreadsheet('siga');
-          case 'load-manual': return void await loadManual(mode);
+          case 'load-manual': return void await loadManual(gridMode(mode));
           case 'clear-manual':
-            document.getElementById(mode + '-manual-cnpjs').value = '';
+            document.getElementById(gridMode(mode) + '-manual-cnpjs').value = '';
             return;
           case 'select-all-docs': return void setAllDocs(true);
           case 'clear-all-docs': return void setAllDocs(false);
           case 'select-all-incluir': return void setAllIncluir(true);
           case 'clear-all-incluir': return void setAllIncluir(false);
-          case 'clear-rows': return void await clearRows(mode);
-          case 'validate-rows': return void await validateRows(mode);
+          case 'clear-rows': return void await clearRows(gridMode(mode));
+          case 'validate-rows': return void await validateRows(gridMode(mode));
           case 'load-nfce-companies': return void await loadNfceCompanies();
           case 'copy-log': return void copyLog();
           case 'start-browser': return void await startBrowser();
           case 'execute': return void await execute();
+          case 'pause-resume': return void await togglePauseResume();
+          case 'stop-execution': return void await stopExecution();
           default: return;
         }
       } catch (error) {
@@ -429,6 +493,7 @@
     document.getElementById('siga-year').value = initial.year;
     document.getElementById('siga-output-dir').value = initial.output_dir;
     document.getElementById('nfe-max-workers').value = initial.nfe_max_workers;
+    document.getElementById('chain-nfe-max-workers').value = initial.nfe_max_workers;
     if (initial.spreadsheet) document.getElementById('siga-spreadsheet').value = initial.spreadsheet;
 
     setMode('siga');
