@@ -1,5 +1,14 @@
 # Changelog
 
+## [2026-09-11] — Versão 2.5.0
+
+### Adicionado
+- **Modo NF-e (Meu DANFE): retentativa automática das chaves que falharem na primeira passada.** Análise de um lote real (2.294 chaves, 406 falhas) mostrou que a maioria dos erros não tinha relação com o conteúdo do documento (chave com dígito verificador válido, status/CNPJ na mesma proporção das que deram certo, falhas espalhadas uniformemente pelo arquivo) — indício de instabilidade/bloqueio intermitente do site sob volume alto, não de dado ruim. Até aqui, só o alerta "captcha invalido" tinha nova tentativa automática ([meudanfe_extractor.py](src/extraction/meudanfe_extractor.py)); qualquer outro erro (como o genérico "Falha ao consultar!") falhava a chave de vez, exigindo que o operador reparasse no log e rodasse a planilha inteira de novo manualmente.
+  - `MeudanfeBatchExtractor.executar_lote` agora roda uma segunda passada automática só com as chaves que falharam, após uma espera configurável (`Settings.nf_meudanfe_retry_wait_seconds`, padrão 60s) — o espaçamento no tempo tende a ser mais eficaz contra instabilidade transitória do que repetir na hora. Uma retentativa por chave (2 tentativas no total); respeita Pausar/Continuar/Encerrar durante a espera. O log `chaves_falhas_meudanfe.log` e os contadores da planilha passam a refletir só a falha definitiva (depois das duas tentativas).
+
+### Alterado
+- **Pasta de saída do modo NFC-e padronizada no mesmo formato do SIGA: "COD - EMPRESA - CNPJ"** (antes: "IE - EMPRESA", sem CNPJ). `load_cnpj_ie_base` (`src/extraction/nfce_extractor.py`) passa a também ler uma coluna "COD" opcional da planilha-base CNPJ/IE, se existir — sem quebrar planilhas que não tenham essa coluna (cai em "SEM-COD", igual ao SIGA quando falta o COD na planilha dele). O modo NF-e já era consistente com o SIGA por construção (reproduz a estrutura da pasta de entrada), então não precisou de alteração.
+
 ## [2026-09-11] — Versão 2.4.1
 
 ### Alterado

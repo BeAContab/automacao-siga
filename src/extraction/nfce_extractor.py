@@ -151,8 +151,20 @@ def collect_nfce_keys_for_cnpj(keys_folder: Path, cnpj: str) -> list[str]:
     return keys
 
 
-def load_cnpj_ie_base(path: Path | None) -> dict[str, str]:
-    """Lê a planilha-base (colunas CNPJ/IE) e devolve um mapa cnpj_normalizado -> ie_normalizada."""
+@dataclass(slots=True)
+class NfceBaseInfo:
+    """Uma linha da planilha-base CNPJ/IE, com um COD opcional (se a coluna existir)."""
+
+    ie: str
+    cod: str = ""
+
+
+def load_cnpj_ie_base(path: Path | None) -> dict[str, NfceBaseInfo]:
+    """Lê a planilha-base (colunas CNPJ/IE, e COD opcional) e devolve um mapa
+    cnpj_normalizado -> NfceBaseInfo — a coluna COD é usada para nomear a pasta de saída
+    no mesmo padrão "COD - EMPRESA - CNPJ" do modo SIGA (ver `run_batch_in_context`);
+    sem essa coluna, `NfceBaseInfo.cod` fica vazio e o chamador cai em "SEM-COD".
+    """
     if path is None or not path.exists():
         return {}
     try:
@@ -166,15 +178,17 @@ def load_cnpj_ie_base(path: Path | None) -> dict[str, str]:
             LOGGER.warning("Planilha-base NFC-e sem colunas CNPJ/IE: %s", path)
             workbook.close()
             return {}
+        cod_index = header.index("COD") if "COD" in header else None
 
-        mapa: dict[str, str] = {}
+        mapa: dict[str, NfceBaseInfo] = {}
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if len(row) <= max(cnpj_index, ie_index):
                 continue
             cnpj = normalize_cnpj(row[cnpj_index])
             ie = normalize_ie(row[ie_index])
+            cod = str(row[cod_index] or "").strip() if cod_index is not None and cod_index < len(row) else ""
             if cnpj:
-                mapa[cnpj] = ie
+                mapa[cnpj] = NfceBaseInfo(ie=ie, cod=cod)
         workbook.close()
         return mapa
     except Exception:  # noqa: BLE001
@@ -467,8 +481,8 @@ class NfceBatchExtractor:
         empresas = session.listar_empresas()
         narrate_success("%s empresa(s) encontrada(s) na sessão.", len(empresas))
 
-        mapa_cnpj_ie = load_cnpj_ie_base(self.base_spreadsheet_path)
-        mapa_ie_cnpj = {ie: cnpj for cnpj, ie in mapa_cnpj_ie.items() if ie}
+        mapa_cnpj_base = load_cnpj_ie_base(self.base_spreadsheet_path)
+        mapa_ie_cnpj = {info.ie: cnpj for cnpj, info in mapa_cnpj_base.items() if info.ie}
 
         results: list[NfceBatchResult] = []
         for index, spreadsheet_row in enumerate(selected_rows, start=1):
@@ -504,7 +518,12 @@ class NfceBatchExtractor:
                 continue
 
             narrate("%s chave(s) a processar para %s.", len(chaves), empresa_nome)
-            empresa_dir = self.output_dir / sanitize_folder_name(f"{company.ie} - {empresa_nome}")
+            # Mesmo padrão "COD - EMPRESA - CNPJ" do modo SIGA (ver _build_taxpayer_folder_name
+            # em siga_extractor.py) - "SEM-COD" se a planilha-base não tiver coluna COD, igual
+            # ao fallback que o SIGA já usa quando falta o COD na própria planilha dele.
+            cod = mapa_cnpj_base.get(target_cnpj)
+            cod = (cod.cod if cod else "") or "SEM-COD"
+            empresa_dir = self.output_dir / sanitize_folder_name(f"{cod} - {empresa_nome} - {target_cnpj}")
             baixadas = self._processar_empresa(
                 context, page, session, company, chaves, empresa_dir, cancel_event, pause_event
             )
@@ -547,8 +566,8 @@ class NfceBatchExtractor:
         empresas = session.listar_empresas()
         narrate("%s empresa(s) encontrada(s) na sessão do portal.", len(empresas))
 
-        mapa_cnpj_ie = load_cnpj_ie_base(self.base_spreadsheet_path)
-        mapa_ie_cnpj = {ie: cnpj for cnpj, ie in mapa_cnpj_ie.items() if ie}
+        mapa_cnpj_base = load_cnpj_ie_base(self.base_spreadsheet_path)
+        mapa_ie_cnpj = {info.ie: cnpj for cnpj, info in mapa_cnpj_base.items() if info.ie}
 
         rows: list[dict] = []
         for index, company in enumerate(empresas, start=1):

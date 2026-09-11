@@ -147,6 +147,11 @@ class Settings:
     nf_meudanfe_max_workers: int = 1
     nf_meudanfe_captcha_timeout_seconds: int = 180
     nf_meudanfe_download_timeout_seconds: int = 45
+    # Espera antes da retentativa automática única sobre as chaves que falharam na
+    # primeira passada (ver MeudanfeBatchExtractor.executar_lote) — dá tempo de uma
+    # eventual instabilidade/bloqueio transitório do site se recuperar antes de tentar
+    # de novo, em vez de bater na mesma falha na hora.
+    nf_meudanfe_retry_wait_seconds: int = 60
 
     # --- Interface (pywebview) ---
     # Habilita o DevTools do WebView2 (F12) na janela da interface. Só para

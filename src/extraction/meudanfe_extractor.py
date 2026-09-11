@@ -72,6 +72,24 @@ MAX_WORKERS_PERMITIDO = 8
 _LOCK_INICIALIZACAO_DRIVER = threading.Lock()
 
 
+def _aguardar_intervalo(
+    segundos: float,
+    cancelar_evento: threading.Event | None,
+    pausar_evento: threading.Event | None,
+) -> bool:
+    """Espera cooperativa entre passadas do lote - divide em passos de até 1s para checar
+    cancelamento/pausa (`wait_if_paused`) sem travar `segundos` inteiros de uma vez.
+
+    Devolve `False` se o usuário cancelar durante a espera; `True` se ela terminar normalmente.
+    """
+    fim = time.time() + segundos
+    while time.time() < fim:
+        if not _aguardar_execucao(cancelar_evento, pausar_evento):
+            return False
+        time.sleep(max(0.0, min(1.0, fim - time.time())))
+    return True
+
+
 def normalizar_texto(valor: object) -> str:
     """Normaliza textos para comparar cabeçalhos sem depender de caixa/espaços."""
     texto = "" if valor is None else str(valor)
@@ -775,6 +793,13 @@ class MeudanfeBatchExtractor:
         atualizado pelos resultados daquele worker — um chunk de chaves não corresponde
         a uma única planilha, então uma mesma planilha pode disparar o callback mais de
         uma vez conforme diferentes workers terminam pedaços dela.
+
+        As chaves que falharem na primeira passada ganham uma única retentativa
+        automática ao final (mesma lógica de `processar_passada`, chamada de novo só
+        com elas, após `nf_meudanfe_retry_wait_seconds`) — a maioria das falhas observadas em lotes
+        reais não tem relação com o conteúdo do documento e parece ser instabilidade
+        transitória do site sob volume alto, então espaçar a nova tentativa no tempo
+        tende a recuperar boa parte delas sem intervenção do operador.
         """
         if not self.input_folder.exists():
             raise FileNotFoundError(f"A pasta {self.input_folder} não existe.")
@@ -802,49 +827,81 @@ class MeudanfeBatchExtractor:
 
         narrate_success("%s chave(s) encontrada(s) em %s planilha(s).", len(registros), len(resultados_por_planilha))
 
-        max_workers = max(1, min(MAX_WORKERS_PERMITIDO, self.settings.nf_meudanfe_max_workers))
-        tamanho_chunk = math.ceil(len(registros) / max_workers)
-        chunks = [registros[i : i + tamanho_chunk] for i in range(0, len(registros), tamanho_chunk)]
+        # Registro original por (planilha, chave), para reconstruir a lista de retentativa
+        # a partir de quais chaves ficaram com situacao "falha" - _ResultadoChave não carrega
+        # pasta_destino/linha_origem, só o suficiente para o resumo/log.
+        registros_por_chave = {(r.caminho_planilha, r.chave): r for r in registros}
+        # Último resultado conhecido de cada chave - uma retentativa bem-sucedida sobrescreve
+        # a falha da primeira passada aqui, então os contadores finais refletem só o estado
+        # definitivo (nunca soma duas vezes a mesma chave).
+        resultado_final_por_chave: dict[tuple[Path, str], _ResultadoChave] = {}
 
-        narrate("Iniciando %s worker(s) em paralelo para %s chave(s)...", len(chunks), len(registros))
-        chaves_com_falha: list[tuple[str, str, str, str]] = []
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futuros = [
-                executor.submit(_processar_worker, chunk, worker_id, self.settings, cancelar_evento, pausar_evento)
-                for worker_id, chunk in enumerate(chunks, start=1)
-            ]
-            for futuro in concurrent.futures.as_completed(futuros):
-                try:
-                    resultados_worker = futuro.result()
-                except Exception as exc:  # noqa: BLE001
-                    narrate_error("Um worker do modo NF-e falhou inesperadamente: %s", exc)
+        def recalcular_contadores_planilha(caminho: Path) -> None:
+            resultado_planilha = resultados_por_planilha[caminho]
+            resultado_planilha.chaves_baixadas = 0
+            resultado_planilha.chaves_puladas = 0
+            resultado_planilha.chaves_com_falha = 0
+            for item in resultado_final_por_chave.values():
+                if item.caminho_planilha != caminho:
                     continue
-                planilhas_atualizadas: set[Path] = set()
-                for item in resultados_worker:
-                    resultado_planilha = resultados_por_planilha[item.caminho_planilha]
-                    if item.situacao == "sucesso":
-                        resultado_planilha.chaves_baixadas += 1
-                    elif item.situacao == "pulado":
-                        resultado_planilha.chaves_puladas += 1
-                    else:
-                        resultado_planilha.chaves_com_falha += 1
-                        chaves_com_falha.append(
-                            (
-                                item.chave,
-                                item.caminho_planilha.name,
-                                str(
-                                    montar_pasta_destino_planilha(
-                                        item.caminho_planilha, self.output_folder, self.input_folder
-                                    )
-                                ),
-                                item.erro,
-                            )
-                        )
-                    planilhas_atualizadas.add(item.caminho_planilha)
-                if on_planilha_concluida is not None:
+                if item.situacao == "sucesso":
+                    resultado_planilha.chaves_baixadas += 1
+                elif item.situacao == "pulado":
+                    resultado_planilha.chaves_puladas += 1
+                else:
+                    resultado_planilha.chaves_com_falha += 1
+
+        def processar_passada(pendentes: list[RegistroPlanilhaNFe], numero_passada: int) -> None:
+            max_workers = max(1, min(MAX_WORKERS_PERMITIDO, self.settings.nf_meudanfe_max_workers))
+            tamanho_chunk = math.ceil(len(pendentes) / max_workers)
+            chunks = [pendentes[i : i + tamanho_chunk] for i in range(0, len(pendentes), tamanho_chunk)]
+
+            narrate(
+                "Iniciando %s worker(s) em paralelo para %s chave(s) (passada %s)...",
+                len(chunks),
+                len(pendentes),
+                numero_passada,
+            )
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futuros = [
+                    executor.submit(_processar_worker, chunk, worker_id, self.settings, cancelar_evento, pausar_evento)
+                    for worker_id, chunk in enumerate(chunks, start=1)
+                ]
+                for futuro in concurrent.futures.as_completed(futuros):
+                    try:
+                        resultados_worker = futuro.result()
+                    except Exception as exc:  # noqa: BLE001
+                        narrate_error("Um worker do modo NF-e falhou inesperadamente: %s", exc)
+                        continue
+                    planilhas_atualizadas: set[Path] = set()
+                    for item in resultados_worker:
+                        resultado_final_por_chave[(item.caminho_planilha, item.chave)] = item
+                        planilhas_atualizadas.add(item.caminho_planilha)
                     for caminho in planilhas_atualizadas:
-                        on_planilha_concluida(resultados_por_planilha[caminho])
+                        recalcular_contadores_planilha(caminho)
+                        if on_planilha_concluida is not None:
+                            on_planilha_concluida(resultados_por_planilha[caminho])
+
+        processar_passada(registros, 1)
+
+        cancelado = cancelar_evento is not None and cancelar_evento.is_set()
+        falhas_1a_passada = [
+            registros_por_chave[chave_id]
+            for chave_id, item in resultado_final_por_chave.items()
+            if item.situacao == "falha"
+        ]
+        if falhas_1a_passada and not cancelado:
+            espera = max(0, self.settings.nf_meudanfe_retry_wait_seconds)
+            narrate_warning(
+                "%s chave(s) falharam na primeira passada. Nova tentativa automática em %ss...",
+                len(falhas_1a_passada),
+                espera,
+            )
+            if _aguardar_intervalo(espera, cancelar_evento, pausar_evento):
+                processar_passada(falhas_1a_passada, 2)
+            else:
+                narrate_warning("Retentativa automática cancelada pelo usuário antes de começar.")
 
         for resultado in resultados_por_planilha.values():
             if resultado.chaves_total == 0:
@@ -866,6 +923,16 @@ class MeudanfeBatchExtractor:
                     resultado.chaves_total,
                 )
 
+        chaves_com_falha = [
+            (
+                item.chave,
+                item.caminho_planilha.name,
+                str(montar_pasta_destino_planilha(item.caminho_planilha, self.output_folder, self.input_folder)),
+                item.erro,
+            )
+            for item in resultado_final_por_chave.values()
+            if item.situacao == "falha"
+        ]
         if chaves_com_falha:
             self._gravar_log_falhas(chaves_com_falha)
 
