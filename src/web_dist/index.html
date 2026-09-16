@@ -234,9 +234,10 @@
           <span class="text-body-sm font-body-sm text-on-surface-variant">Pasta de chaves (44 dígitos)</span>
           <div class="flex">
             <input class="flex-1 siga-form-field rounded-l px-sm py-2 text-body-sm bg-white min-w-0" id="nfce-keys-folder" readonly type="text">
-            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfce-keys" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
+            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfce-keys" title="Escolher uma pasta" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
+            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfce-keys-file" title="Ou escolher um arquivo .xlsx único" type="button"><span class="material-symbols-outlined text-[18px] align-middle">description</span></button>
           </div>
-          <span class="text-[10px] text-on-surface-variant leading-snug">Aceita uma pasta de resultado do SIGA (reconhece as subpastas "NFC-e" automaticamente) ou uma planilha .xlsx solta nomeada com o CNPJ.</span>
+          <span class="text-[10px] text-on-surface-variant leading-snug">Aceita uma pasta de resultado do SIGA (reconhece as subpastas "NFC-e" automaticamente), um arquivo .xlsx único solto em qualquer lugar, ou uma planilha nomeada com o CNPJ.</span>
         </label>
         <label class="flex flex-col gap-xs">
           <span class="text-body-sm font-body-sm text-on-surface-variant">Pasta de saída dos XMLs</span>
@@ -310,7 +311,8 @@
           <span class="text-body-sm font-body-sm text-on-surface-variant">Pasta com planilhas NF-e</span>
           <div class="flex">
             <input class="flex-1 siga-form-field rounded-l px-sm py-2 text-body-md font-body-md bg-white min-w-0" id="nfe-input-folder" placeholder="Saída do modo SIGA" readonly title="Pasta com planilhas .xlsx que tenham a coluna &quot;Chave NF-e&quot; — tipicamente a própria pasta de saída do modo SIGA." type="text">
-            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfe-input" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
+            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfe-input" title="Escolher uma pasta" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
+            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfe-input-file" title="Ou escolher um arquivo .xlsx único" type="button"><span class="material-symbols-outlined text-[18px] align-middle">description</span></button>
           </div>
         </div>
         <div class="flex flex-col gap-xs">

@@ -26,7 +26,7 @@ import time
 from openpyxl import load_workbook
 
 from src.config import Settings
-from src.extraction.spreadsheet import SpreadsheetRow
+from src.extraction.spreadsheet import DIRECAO_SUBPASTA, SpreadsheetRow, tipo_nota_do_nome_arquivo
 from src.utils.execution_control import wait_if_paused
 from src.utils.narration import narrate, narrate_error, narrate_success, narrate_warning
 from src.utils.selenium_compat import BrowserContext, Error, Page, TimeoutError, UnexpectedAlertError
@@ -67,6 +67,27 @@ def _is_nfce_key(digits: str) -> bool:
     'NF-e'/'CT-e' vizinha) de ser tratada como chave de NFC-e.
     """
     return len(digits) == 44 and digits[20:22] == "65"
+
+
+def is_nfe_key(digits: str) -> bool:
+    """True se a sequência é uma chave de acesso de 44 dígitos do modelo NF-e (55).
+
+    Mesma rede de segurança que `_is_nfce_key`, só que para o modelo NF-e — usada pelo
+    modo NF-e (`meudanfe_extractor.py`) para descartar uma chave de NFC-e/CT-e que
+    porventura apareça na coluna "Chave NF-e" (dado errado na planilha de origem).
+    """
+    return len(digits) == 44 and digits[20:22] == "55"
+
+
+def cnpj_from_access_key(digits: str) -> str:
+    """CNPJ do emitente embutido na própria chave de acesso (posições 7 a 20).
+
+    Padrão nacional de 44 dígitos: UF(2) + AAMM(4) + CNPJ(14) + modelo(2) + série(3) +
+    número(9) + tpEmis(1) + cNF(8) + DV(1) — o mesmo para NF-e, NFC-e e CT-e. Permite
+    identificar de qual empresa é uma chave sem depender de nome de arquivo/pasta —
+    útil quando as chaves vêm de um arquivo solto, fora da convenção de pastas do SIGA.
+    """
+    return digits[6:20] if len(digits) == 44 else ""
 
 
 def extract_keys_from_spreadsheet(path: Path) -> list[str]:
@@ -114,27 +135,37 @@ def _company_folder_for_cnpj(keys_folder: Path, cnpj: str) -> Path | None:
 
 
 def find_keys_files_for_cnpj(keys_folder: Path, cnpj: str) -> list[Path]:
-    """Localiza os arquivos de chaves NFC-e de uma empresa, aceitando dois formatos:
+    """Localiza os arquivos de chaves NFC-e de uma empresa, aceitando três formatos:
 
-    - Pasta de resultado do SIGA: a subpasta '<COD> - <EMPRESA> - <CNPJ>' contém uma
-      ou mais subpastas chamadas exatamente 'NFC-e' (uma por mês, em qualquer
-      profundidade — ver `_build_taxpayer_output_dir` em `siga_extractor.py`). Só
-      arquivos dentro dessas pastas entram; pastas irmãs 'NF-e'/'CT-e' (mesmo formato
-      de chave de 44 dígitos) nunca são varridas.
+    - Arquivo único: `keys_folder` é o próprio .xlsx, não uma pasta — ex. um arquivo
+      solto baixado direto para Downloads, sem estrutura de pastas nenhuma. Devolvido
+      direto, sem exigir nome/estrutura; quem garante que só entram chaves da empresa
+      certa é o filtro por CNPJ embutido na chave, em `collect_nfce_keys_for_cnpj`.
+    - Pasta de resultado do SIGA: dentro da subpasta '<COD> - <EMPRESA> - <CNPJ>',
+      qualquer .xlsx é candidato, em qualquer profundidade/subpasta (mês, aba,
+      sub-relatório...) — não é mais exigido um nome de pasta específico como
+      'NFC-e', já que o SIGA nem sempre cria essa subpasta (ex.: a visualização
+      "Emissor" de Informações Fiscais deixa o .xlsx solto direto na pasta do mês).
+      Um .xlsx de NF-e/CT-e encontrado nessa varredura não "vaza" chave nenhuma: quem
+      garante que só chaves de NFC-e entram é o filtro por modelo (`_is_nfce_key`,
+      posições 21-22 = "65") em `extract_keys_from_spreadsheet`, aplicado por chave,
+      não por pasta.
     - Formato antigo: um arquivo .xlsx solto direto em `keys_folder`, nomeado com o CNPJ.
 
-    Devolve a união dos dois formatos, sem duplicar.
+    Devolve a união dos formatos aplicáveis, sem duplicar.
     """
     normalized = normalize_cnpj(cnpj)
-    if not normalized or not keys_folder.is_dir():
+    if not normalized:
+        return []
+    if keys_folder.is_file():
+        return [keys_folder]
+    if not keys_folder.is_dir():
         return []
 
     files: list[Path] = []
     company_folder = _company_folder_for_cnpj(keys_folder, cnpj)
     if company_folder is not None:
-        for item in company_folder.rglob("*"):
-            if item.is_dir() and item.name.strip().lower() == "nfc-e":
-                files.extend(sorted(item.glob("*.xlsx")))
+        files.extend(sorted(company_folder.rglob("*.xlsx")))
 
     for candidate in keys_folder.glob("*.xlsx"):
         if normalized in _only_digits(candidate.stem):
@@ -149,17 +180,35 @@ def find_keys_files_for_cnpj(keys_folder: Path, cnpj: str) -> list[Path]:
     return unique_files
 
 
-def collect_nfce_keys_for_cnpj(keys_folder: Path, cnpj: str) -> list[str]:
+def collect_nfce_keys_for_cnpj(keys_folder: Path, cnpj: str) -> dict[str, list[str]]:
     """Agrega, sem duplicar, as chaves NFC-e válidas de todos os arquivos encontrados
-    para o CNPJ (pasta de resultado do SIGA e/ou arquivo solto no formato antigo)."""
-    keys: list[str] = []
+    para o CNPJ (arquivo único, pasta de resultado do SIGA, e/ou arquivo solto no
+    formato antigo) — agrupadas por direção: `"saida"` (perfil "Emissor" no SIGA — a
+    empresa emitiu), `"entrada"` (perfil "Destinatario" — a empresa recebeu) ou `""`
+    quando o nome do arquivo não indica a direção (`tipo_nota_do_nome_arquivo`).
+
+    A direção é uma propriedade do ARQUIVO de origem (cada arquivo do SIGA cobre só um
+    perfil), não da chave em si — por isso é calculada uma vez por arquivo, não por chave.
+
+    Sempre filtra pelo CNPJ do emitente embutido na própria chave (`cnpj_from_access_key`)
+    antes de aceitar qualquer chave — não só quando `keys_folder` é um arquivo único (onde
+    é a única forma de saber a quem a chave pertence), mas também no caso por pasta, como
+    reforço extra: garante que uma chave de outra empresa nunca "vaza" para este resultado,
+    mesmo que tenha sido encontrada por engano num arquivo/pasta com nome enganoso.
+    """
+    normalized = normalize_cnpj(cnpj)
+    agrupado: dict[str, list[str]] = {"saida": [], "entrada": [], "": []}
     seen: set[str] = set()
     for path in find_keys_files_for_cnpj(keys_folder, cnpj):
+        direcao = tipo_nota_do_nome_arquivo(path.name)
         for key in extract_keys_from_spreadsheet(path):
-            if key not in seen:
-                seen.add(key)
-                keys.append(key)
-    return keys
+            if key in seen:
+                continue
+            if cnpj_from_access_key(key) != normalized:
+                continue
+            seen.add(key)
+            agrupado[direcao].append(key)
+    return agrupado
 
 
 @dataclass(slots=True)
@@ -230,10 +279,18 @@ class NfceBatchResult:
 class NfceSessionManager:
     """Login, navegação e renovação de sessão no portal da SEFAZ-CE via selenium_compat."""
 
-    def __init__(self, settings: Settings, page: Page) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        page: Page,
+        cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
+    ) -> None:
         self.settings = settings
         self.page = page
         self._login_time: float | None = None
+        self._cancel_event = cancel_event
+        self._pause_event = pause_event
 
     def _describe_unexpected_alert(self, exc: UnexpectedAlertError) -> str:
         """Fecha o alerta nativo que interrompeu o comando e monta uma mensagem clara.
@@ -255,7 +312,13 @@ class NfceSessionManager:
         )
 
     def fazer_login(self) -> bool:
-        """Efetua login com CPF/senha (settings.nfce_cpf/nfce_senha); idempotente se já logado."""
+        """Efetua login com CPF/senha (settings.nfce_cpf/nfce_senha); idempotente se já logado.
+
+        Quando o portal recusa o login por já existir outra sessão ativa com o mesmo CPF
+        (ou um "Tempo limite excedido" equivalente — ver `_describe_unexpected_alert`),
+        não desiste: espera `nfce_login_retry_wait_seconds` (padrão 5min) e tenta de novo,
+        indefinidamente, até dar certo ou até o cancelamento cooperativo ser sinalizado.
+        """
         # Checa a pagina ATUAL antes de navegar para qualquer lugar: se esta chamada
         # vem logo apos `discover_selectable_companies` (mesmo navegador, sessao ja
         # autenticada, parado na area de empresas), navegar de novo para
@@ -271,6 +334,25 @@ class NfceSessionManager:
         except Error:
             pass
 
+        while True:
+            resultado = self._tentar_login_3x()
+            if resultado is True:
+                return True
+            if resultado is False:
+                return False
+            # `resultado` e a mensagem do alerta de sessao duplicada/expirada — espera e
+            # tenta de novo, em vez de desistir (a causa costuma ser externa ao app: outra
+            # sessao com o mesmo CPF que ainda nao foi fechada).
+            if not self._aguardar_antes_de_retentar_login(resultado):
+                return False
+
+    def _tentar_login_3x(self) -> bool | str:
+        """As 3 tentativas "normais" de login (falhas transitorias de rede/DOM).
+
+        Devolve `True` (sucesso), `False` (as 3 tentativas esgotaram sem sucesso nem
+        alerta) ou a mensagem do alerta de sessao duplicada/expirada (string) — nesse
+        ultimo caso quem chama decide se espera e tenta de novo.
+        """
         for tentativa in range(1, 4):
             try:
                 self.page.goto(
@@ -307,13 +389,9 @@ class NfceSessionManager:
                 self.page.locator("#btEntrar").click()
                 self.page.wait_for_timeout(4000)
             except UnexpectedAlertError as exc:
-                # Causa externa (ex.: outra sessao ja ativa com o mesmo CPF) — repetir o
-                # login aqui nao resolve, entao falha na hora em vez de gastar as 3
-                # tentativas com o mesmo alerta bloqueando o navegador toda vez.
                 message = self._describe_unexpected_alert(exc)
                 LOGGER.warning("Alerta inesperado do portal durante o login NFC-e: %s", message)
-                narrate_error(message)
-                return False
+                return message
             except Error as exc:
                 LOGGER.warning("Tentativa %s de login NFC-e falhou: %s", tentativa, exc)
                 self.page.wait_for_timeout(2000)
@@ -325,6 +403,26 @@ class NfceSessionManager:
                 return True
 
         return False
+
+    def _aguardar_antes_de_retentar_login(self, motivo: str) -> bool:
+        """Espera `nfce_login_retry_wait_seconds` de forma cancelável antes de retentar o login.
+
+        Devolve `False` se o cancelamento foi sinalizado durante a espera (o chamador deve
+        desistir); `True` para seguir e tentar o login de novo.
+        """
+        espera_seg = self.settings.nfce_login_retry_wait_seconds
+        narrate_warning(
+            "%s Tentando novamente em %s minuto(s)...",
+            motivo,
+            espera_seg // 60,
+        )
+        deadline = time.time() + espera_seg
+        while time.time() < deadline:
+            if not wait_if_paused(self._cancel_event, self._pause_event):
+                narrate_warning("Retentativa de login cancelada pelo usuário.")
+                return False
+            time.sleep(1)
+        return wait_if_paused(self._cancel_event, self._pause_event)
 
     def acessar_area_empresas(self) -> None:
         try:
@@ -338,6 +436,27 @@ class NfceSessionManager:
             message = self._describe_unexpected_alert(exc)
             LOGGER.warning("Alerta inesperado do portal ao acessar a área de empresas: %s", message)
             raise RuntimeError(message) from exc
+
+    def autenticar(self) -> None:
+        """Login + acesso à área de empresas, com a mesma retentativa indefinida do
+        `fazer_login` também para o alerta de sessão duplicada/expirada aqui.
+
+        Na prática, o alerta "Tempo limite excedido" costuma aparecer bem AQUI (ao
+        navegar para a área de empresas logo após um login que já deu certo), não
+        durante o preenchimento do formulário de login em si — então cobrir só
+        `fazer_login` deixava esse caso escapando sem retry nenhum. Como a sessão
+        pode já estar comprometida nesse ponto, refaz login + acesso do zero a cada
+        tentativa, em vez de só repetir a navegação.
+        """
+        while True:
+            if not self.fazer_login():
+                raise RuntimeError("Falha no login automático do modo NFC-e.")
+            try:
+                self.acessar_area_empresas()
+                return
+            except RuntimeError as exc:
+                if not self._aguardar_antes_de_retentar_login(str(exc)):
+                    raise RuntimeError("Falha no login automático do modo NFC-e (cancelado pelo usuário).") from exc
 
     def sessao_expirando(self) -> bool:
         """True se o login já está velho o suficiente para renovar antes do portal derrubar."""
@@ -359,7 +478,15 @@ class NfceSessionManager:
             pass
 
         if self.fazer_login():
-            self.acessar_area_empresas()
+            try:
+                self.acessar_area_empresas()
+            except RuntimeError as exc:
+                # O portal pode recusar o acesso mesmo com o login OK (ex.: alerta de
+                # sessão duplicada) — devolve False em vez de deixar a exceção propagar,
+                # para que o chamador caia no protocolo de recuperação total em vez de
+                # derrubar o lote inteiro.
+                narrate_warning("Sessão renovada, mas o portal recusou o acesso à área de empresas: %s", exc)
+                return False
             narrate_success("Sessão do portal SEFAZ-CE renovada com sucesso.")
             return True
         narrate_warning("Não foi possível renovar a sessão proativamente.")
@@ -389,7 +516,13 @@ class NfceSessionManager:
         self.page.wait_for_timeout(self.settings.nfce_session_recovery_wait_seconds * 1000)
 
         if self.fazer_login():
-            self.acessar_area_empresas()
+            try:
+                self.acessar_area_empresas()
+            except RuntimeError as exc:
+                narrate_error(
+                    "Protocolo de recuperação: login OK, mas o portal recusou o acesso à área de empresas: %s", exc
+                )
+                return False
             narrate_success("Protocolo de recuperação concluído; sessão restabelecida.")
             return True
         narrate_error("Protocolo de recuperação falhou; sessão não pôde ser restabelecida.")
@@ -443,14 +576,24 @@ class NfceDownloadManager:
         self.empresa_dir = empresa_dir
         self.empresa_dir.mkdir(parents=True, exist_ok=True)
 
-    def mover_arquivo(self, origem: Path, chave: str) -> Path:
+    def ja_baixado(self, chave: str) -> bool:
+        """True se essa chave já foi baixada em execução anterior — busca recursiva na
+        pasta inteira da empresa (não só na subpasta da direção atual), já que a mesma
+        chave pode ter sido salva antes com uma classificação diferente de direção.
+        Evita reconsultar o portal SEFAZ-CE por algo que já está no disco.
+        """
+        return any(self.empresa_dir.rglob(f"{chave}.*"))
+
+    def mover_arquivo(self, origem: Path, chave: str, direcao: str = "") -> Path:
         # Garante que o nome final sempre carregue a chave, mesmo que o portal sirva
         # um nome genérico — facilita conferir depois qual XML corresponde a qual chave.
         nome_arquivo = origem.name if chave in origem.stem else f"{chave}{origem.suffix}"
-        destino = self.empresa_dir / nome_arquivo
+        pasta_destino = self.empresa_dir / DIRECAO_SUBPASTA[direcao] if direcao else self.empresa_dir
+        pasta_destino.mkdir(parents=True, exist_ok=True)
+        destino = pasta_destino / nome_arquivo
         contador = 1
         while destino.exists():
-            destino = self.empresa_dir / f"{destino.stem}_{contador}{destino.suffix}"
+            destino = pasta_destino / f"{destino.stem}_{contador}{destino.suffix}"
             contador += 1
         shutil.move(str(origem), str(destino))
         return destino
@@ -479,16 +622,13 @@ class NfceBatchExtractor:
         pause_event: threading.Event | None = None,
     ) -> list[NfceBatchResult]:
         page = context.pages[0] if context.pages else context.new_page()
-        session = NfceSessionManager(self.settings, page)
+        session = NfceSessionManager(self.settings, page, cancel_event=cancel_event, pause_event=pause_event)
 
         narrate("Fazendo login no portal SEFAZ-CE (modo NFC-e)...")
-        if not session.fazer_login():
-            narrate_error("Não foi possível fazer login no portal SEFAZ-CE com as credenciais configuradas.")
-            raise RuntimeError("Falha no login automático do modo NFC-e.")
+        session.autenticar()
         narrate_success("Login no portal SEFAZ-CE realizado com sucesso.")
 
         narrate("Carregando lista de empresas vinculadas ao CPF...")
-        session.acessar_area_empresas()
         empresas = session.listar_empresas()
         narrate_success("%s empresa(s) encontrada(s) na sessão.", len(empresas))
 
@@ -518,7 +658,8 @@ class NfceBatchExtractor:
                 results.append(NfceBatchResult(spreadsheet_row, status="sem_empresa"))
                 continue
 
-            chaves = collect_nfce_keys_for_cnpj(self.keys_folder, target_cnpj)
+            chaves_por_direcao = collect_nfce_keys_for_cnpj(self.keys_folder, target_cnpj)
+            chaves = [chave for lista in chaves_por_direcao.values() for chave in lista]
             if not chaves:
                 narrate_warning(
                     "Nenhuma chave de NFC-e encontrada para %s na pasta configurada "
@@ -527,6 +668,9 @@ class NfceBatchExtractor:
                 )
                 results.append(NfceBatchResult(spreadsheet_row, status="sem_chaves"))
                 continue
+            direcao_por_chave = {
+                chave: direcao for direcao, lista in chaves_por_direcao.items() for chave in lista
+            }
 
             narrate("%s chave(s) a processar para %s.", len(chaves), empresa_nome)
             # Mesmo padrão "COD - EMPRESA - CNPJ" do modo SIGA (ver _build_taxpayer_folder_name
@@ -535,9 +679,26 @@ class NfceBatchExtractor:
             cod = mapa_cnpj_base.get(target_cnpj)
             cod = (cod.cod if cod else "") or "SEM-COD"
             empresa_dir = self.output_dir / sanitize_folder_name(f"{cod} - {empresa_nome} - {target_cnpj}")
-            baixadas = self._processar_empresa(
-                context, page, session, company, chaves, empresa_dir, cancel_event, pause_event
-            )
+            try:
+                baixadas = self._processar_empresa(
+                    context,
+                    page,
+                    session,
+                    company,
+                    chaves,
+                    empresa_dir,
+                    cancel_event,
+                    pause_event,
+                    direcao_por_chave,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Uma falha imprevista (ex.: sessão instável que nem o protocolo de
+                # recuperação total conseguiu restabelecer) não pode derrubar o lote
+                # inteiro — registra esta empresa como erro e segue para a próxima.
+                LOGGER.exception("Falha inesperada ao processar %s no modo NFC-e", empresa_nome)
+                narrate_error("Falha inesperada ao processar %s: %s", empresa_nome, exc)
+                results.append(NfceBatchResult(spreadsheet_row, status="erro", chaves_total=len(chaves)))
+                continue
 
             status = "concluido" if baixadas == len(chaves) else "parcial"
             if status == "concluido":
@@ -555,7 +716,12 @@ class NfceBatchExtractor:
 
         return results
 
-    def discover_selectable_companies(self, context: BrowserContext) -> list[dict]:
+    def discover_selectable_companies(
+        self,
+        context: BrowserContext,
+        cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
+    ) -> list[dict]:
         """Loga no portal e devolve as empresas elegíveis para a tela de seleção.
 
         Elegível = a IE devolvida pelo portal resolve para um CNPJ na planilha-base
@@ -565,15 +731,12 @@ class NfceBatchExtractor:
         conta própria (idempotente, já que `fazer_login` detecta sessão já ativa).
         """
         page = context.pages[0] if context.pages else context.new_page()
-        session = NfceSessionManager(self.settings, page)
+        session = NfceSessionManager(self.settings, page, cancel_event=cancel_event, pause_event=pause_event)
 
         narrate("Fazendo login no portal SEFAZ-CE (modo NFC-e)...")
-        if not session.fazer_login():
-            narrate_error("Não foi possível fazer login no portal SEFAZ-CE com as credenciais configuradas.")
-            raise RuntimeError("Falha no login automático do modo NFC-e.")
+        session.autenticar()
         narrate_success("Login no portal SEFAZ-CE realizado com sucesso.")
 
-        session.acessar_area_empresas()
         empresas = session.listar_empresas()
         narrate("%s empresa(s) encontrada(s) na sessão do portal.", len(empresas))
 
@@ -585,8 +748,8 @@ class NfceBatchExtractor:
             cnpj = mapa_ie_cnpj.get(normalize_ie(company.ie), "")
             if not cnpj:
                 continue
-            chaves = collect_nfce_keys_for_cnpj(self.keys_folder, cnpj)
-            if not chaves:
+            total_chaves = sum(len(lista) for lista in collect_nfce_keys_for_cnpj(self.keys_folder, cnpj).values())
+            if not total_chaves:
                 continue
             rows.append(
                 {
@@ -594,7 +757,7 @@ class NfceBatchExtractor:
                     "cod": company.ie,
                     "empresa": company.nome,
                     "cnpj": cnpj,
-                    "chaves_count": len(chaves),
+                    "chaves_count": total_chaves,
                 }
             )
 
@@ -623,6 +786,7 @@ class NfceBatchExtractor:
         empresa_dir: Path,
         cancel_event: threading.Event | None = None,
         pause_event: threading.Event | None = None,
+        direcao_por_chave: dict[str, str] | None = None,
     ) -> int:
         """Processa as chaves de uma empresa, com renovação de sessão e recuperação em falha.
 
@@ -632,9 +796,18 @@ class NfceBatchExtractor:
         com chaves que nunca baixam (canceladas/denegadas/inexistentes na SEFAZ).
         """
         download_manager = NfceDownloadManager(context, empresa_dir)
-        pendentes = list(chaves)
         baixadas: set[str] = set()
+        ja_baixadas = [chave for chave in chaves if download_manager.ja_baixado(chave)]
+        if ja_baixadas:
+            narrate(
+                "%s chave(s) de %s já baixadas em execução anterior; pulando.",
+                len(ja_baixadas),
+                company.nome,
+            )
+            baixadas.update(ja_baixadas)
+        pendentes = [chave for chave in chaves if chave not in baixadas]
         passadas_sem_progresso = 0
+        direcao_por_chave = direcao_por_chave or {}
 
         for _passada in range(5):
             if not pendentes:
@@ -644,7 +817,8 @@ class NfceBatchExtractor:
                 break
 
             if session.sessao_expirando():
-                session.renovar_login()
+                if not (session.renovar_login() or session.reset_completo_com_espera()):
+                    break
 
             script = company.href.replace("javascript:", "")
             try:
@@ -656,6 +830,7 @@ class NfceBatchExtractor:
                 continue
 
             progresso_nesta_passada = 0
+            falhas_consecutivas = 0
             try:
                 for chave_index, chave in enumerate(list(pendentes), start=1):
                     if not wait_if_paused(cancel_event, pause_event):
@@ -666,13 +841,34 @@ class NfceBatchExtractor:
                         narrate("Renovando sessão antes de continuar o lote de %s...", company.nome)
                         break
 
-                    sucesso, precisa_reset = self._baixar_xml_chave(context, empresa_page, chave, download_manager)
+                    sucesso, precisa_reset = self._baixar_xml_chave(
+                        context, empresa_page, chave, download_manager, direcao_por_chave.get(chave, "")
+                    )
                     if sucesso:
                         baixadas.add(chave)
                         pendentes.remove(chave)
                         progresso_nesta_passada += 1
+                        falhas_consecutivas = 0
+                    else:
+                        falhas_consecutivas += 1
                     if precisa_reset:
                         narrate_warning("Sessão instável durante o download de %s; acionando recuperação.", company.nome)
+                        if not (session.renovar_login() or session.reset_completo_com_espera()):
+                            return len(baixadas)
+                        break
+                    if falhas_consecutivas >= 3:
+                        # Mesmo gatilho do script original (erros_consecutivos >= 3 em
+                        # processar_lote_chaves, importação/NFCE/codigo-fonte/xml nfce.py):
+                        # a aba da empresa tende a degradar depois de várias consultas
+                        # seguidas na mesma página (o botão de baixar demora cada vez mais
+                        # pra aparecer) — em vez de esperar a passada inteira terminar (até
+                        # centenas de chaves), força a recuperação e reabre a empresa do
+                        # zero assim que 3 falhas seguidas são detectadas.
+                        narrate_warning(
+                            "%s falha(s) seguida(s) processando %s; reabrindo a empresa.",
+                            falhas_consecutivas,
+                            company.nome,
+                        )
                         if not (session.renovar_login() or session.reset_completo_com_espera()):
                             return len(baixadas)
                         break
@@ -753,6 +949,7 @@ class NfceBatchExtractor:
         page: Page,
         chave: str,
         download_manager: NfceDownloadManager,
+        direcao: str = "",
     ) -> tuple[bool, bool]:
         """Consulta uma chave e baixa o XML. Retorna (sucesso, precisa_reset_de_sessao).
 
@@ -806,7 +1003,10 @@ class NfceBatchExtractor:
 
             try:
                 botao_xml = page.locator("button[ng-click='downloadXML()']")
-                botao_xml.wait_for(state="visible", timeout=10_000)
+                # 20s (era 10s): consultas sucessivas na mesma aba de empresa (sem recarregar
+                # a página) tendem a renderizar o botão mais devagar a cada nova chave — 10s
+                # só bastava de forma confiável para a primeira consulta após abrir a empresa.
+                botao_xml.wait_for(state="visible", timeout=20_000)
             except TimeoutError:
                 narrate_warning("Chave %s: nota encontrada, mas o botão de baixar XML não apareceu a tempo.", chave)
                 return False, False
@@ -819,7 +1019,7 @@ class NfceBatchExtractor:
                 narrate_warning("Chave %s: nota encontrada e download clicado, mas o arquivo não chegou a tempo.", chave)
                 return False, False
 
-            download_manager.mover_arquivo(downloaded_path, chave)
+            download_manager.mover_arquivo(downloaded_path, chave, direcao)
 
             page.evaluate(
                 """

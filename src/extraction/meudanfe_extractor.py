@@ -57,13 +57,19 @@ from selenium.webdriver.support.ui import WebDriverWait
 import undetected_chromedriver as uc
 
 from src.config import Settings
+from src.extraction.nfce_extractor import cnpj_from_access_key, is_nfe_key, sanitize_folder_name
+from src.extraction.spreadsheet import (
+    DIRECAO_SUBPASTA,
+    SpreadsheetRow,
+    load_cod_empresa_cnpj_base,
+    tipo_nota_do_nome_arquivo,
+)
 from src.utils.execution_control import wait_if_paused as _aguardar_execucao
 from src.utils.narration import narrate, narrate_error, narrate_success, narrate_warning
 
 LOGGER = logging.getLogger(__name__)
 
 COLUNA_CHAVE_NFE = "chave nf-e"
-PASTA_DOWNLOADS_MEUDANFE = "downloads-meudanfe"
 MAX_WORKERS_PERMITIDO = 8
 
 # Serializa a criação do driver entre workers paralelos: o undetected_chromedriver
@@ -203,10 +209,28 @@ class MeudanfeBatchResult:
 
 
 def listar_planilhas_nfe(pasta_dados: Path) -> list[Path]:
-    """Lista, recursivamente, apenas planilhas .xlsx que contenham "NF-e" no nome."""
-    if not pasta_dados.exists():
+    """Lista as planilhas .xlsx candidatas a conter chaves de NF-e.
+
+    Se `pasta_dados` for um arquivo único (não uma pasta) — ex. um arquivo solto
+    baixado direto para Downloads —, é devolvido direto: o usuário escolheu esse
+    arquivo explicitamente, então o filtro por nome não se aplica; quem garante que só
+    entram chaves de NF-e é a própria leitura da coluna "Chave NF-e" mais adiante, não o
+    nome do arquivo. Se for uma pasta, varre recursivamente e filtra pelo nome conter
+    "nf-e", para não misturar por engano planilhas de NFC-e/CT-e soltas na mesma árvore.
+
+    Em qualquer um dos dois casos, ignora arquivos de lock do Excel (`~$arquivo.xlsx`,
+    criados enquanto a planilha original está aberta) — não são planilhas de verdade e
+    só gerariam um aviso de leitura na tentativa de abri-los.
+    """
+    if pasta_dados.is_file():
+        return [] if pasta_dados.name.startswith("~$") else [pasta_dados]
+    if not pasta_dados.is_dir():
         return []
-    return sorted(caminho for caminho in pasta_dados.rglob("*.xlsx") if "nf-e" in caminho.name.lower())
+    return sorted(
+        caminho
+        for caminho in pasta_dados.rglob("*.xlsx")
+        if "nf-e" in caminho.name.lower() and not caminho.name.startswith("~$")
+    )
 
 
 def localizar_coluna_chave_nfe(aba) -> tuple[int, int]:
@@ -221,28 +245,74 @@ def localizar_coluna_chave_nfe(aba) -> tuple[int, int]:
     raise ValueError("A coluna 'Chave NF-e' não foi encontrada.")
 
 
-def montar_pasta_destino_planilha(caminho_planilha: Path, pasta_destino_base: Path, pasta_entrada: Path) -> Path:
-    """Pasta de saída da planilha, preservando a estrutura de empresa da pasta de entrada.
-
-    A pasta de entrada (tipicamente a própria saída do modo SIGA) já organiza cada planilha
-    em `<COD - EMPRESA - CNPJ>/<mês>/<aba>/planilha.xlsx` — sem preservar esse caminho
-    relativo, todas as empresas caiam numa única pasta nomeada só pelo tipo de relatório
-    (igual para qualquer empresa), misturando as chaves de todas elas com nada além da
-    própria chave de 44 dígitos para diferenciar a origem.
+def _pasta_empresa_pelo_caminho(caminho_planilha: Path, pasta_destino_base: Path, pasta_entrada: Path) -> Path | None:
+    """Nome da pasta da empresa inferido pelo primeiro segmento do caminho relativo à
+    pasta de entrada — convenção `<COD - EMPRESA - CNPJ>/<mês>/[<aba>]/planilha.xlsx` do
+    SIGA. Usado como 2ª prioridade em `montar_pasta_destino_chave` (só quando o CNPJ da
+    chave não consta na planilha-base). Devolve `None` quando não há esse segmento de
+    pasta (planilha solta direto na pasta de entrada, ou a entrada é um arquivo único).
     """
     try:
-        caminho_relativo = caminho_planilha.relative_to(pasta_entrada)
+        partes = caminho_planilha.relative_to(pasta_entrada).parts
     except ValueError:
         # Planilha fora da pasta de entrada esperada (não deveria acontecer, já que
-        # `listar_planilhas_nfe` sempre varre a partir dela) — cai para o nome isolado.
-        caminho_relativo = Path(caminho_planilha.name)
-    return pasta_destino_base / PASTA_DOWNLOADS_MEUDANFE / caminho_relativo.parent / caminho_relativo.stem
+        # `listar_planilhas_nfe` sempre varre a partir dela).
+        partes = ()
+    return pasta_destino_base / partes[0] if len(partes) > 1 else None
+
+
+def montar_pasta_destino_chave(
+    chave: str,
+    caminho_planilha: Path,
+    pasta_destino_base: Path,
+    pasta_entrada: Path,
+    mapa_cod_empresa_cnpj: dict[str, SpreadsheetRow],
+    direcao: str = "",
+) -> Path:
+    """Resolve a pasta de destino de uma chave, na mesma ordem de prioridade documentada
+    para o robô de referência que inspirou esta função (planilha "Identificação e
+    Organização das Pastas"):
+
+    1. CNPJ do emitente embutido na própria chave (`cnpj_from_access_key`), buscado na
+       planilha-base COD/EMPRESA/CNPJ — o mais confiável, porque distingue matriz e
+       filiais mesmo quando o nome da pasta de entrada não ajuda (ex.: pastas genéricas
+       "0001"/"0002" por filial, sem CNPJ no nome — fora da convenção do SIGA, mas
+       possível quando a entrada vem de outra fonte).
+    2. Nome da pasta de entrada (`<COD - EMPRESA - CNPJ>/...`, convenção do SIGA) — usado
+       só quando o CNPJ da chave não consta na planilha-base.
+    3. `SEM-COD - SEM-EMPRESA - <cnpj>`, se nem isso resolver.
+
+    No caso comum (entrada = saída do próprio SIGA, planilha-base atualizada), o
+    resultado da prioridade 1 já bate com o nome que o SIGA deu à pasta — a mudança de
+    prioridade só se nota nos cenários de exceção acima.
+
+    `direcao` ("saida"/"entrada"/"", já detectada pelo nome do arquivo de origem por
+    quem chama) acrescenta a subpasta "Notas de Saída"/"Notas de Entrada" no final.
+    """
+    cnpj = cnpj_from_access_key(chave)
+    info = mapa_cod_empresa_cnpj.get(cnpj)
+    if info is not None:
+        pasta_empresa = pasta_destino_base / sanitize_folder_name(
+            f"{info.cod or 'SEM-COD'} - {info.empresa or 'SEM-EMPRESA'} - {cnpj}"
+        )
+    else:
+        pasta_empresa = _pasta_empresa_pelo_caminho(caminho_planilha, pasta_destino_base, pasta_entrada)
+        if pasta_empresa is None:
+            pasta_empresa = pasta_destino_base / sanitize_folder_name(f"SEM-COD - SEM-EMPRESA - {cnpj}")
+    return pasta_empresa / DIRECAO_SUBPASTA[direcao] if direcao else pasta_empresa
 
 
 def extrair_registros_planilha_nfe(
-    caminho_planilha: Path, pasta_destino_base: Path, pasta_entrada: Path
+    caminho_planilha: Path,
+    pasta_destino_base: Path,
+    pasta_entrada: Path,
+    mapa_cod_empresa_cnpj: dict[str, SpreadsheetRow] | None = None,
 ) -> list[RegistroPlanilhaNFe]:
-    """Extrai as chaves válidas (44 dígitos, deduplicadas) de uma planilha e sua origem."""
+    """Extrai as chaves válidas (44 dígitos, modelo NF-e, deduplicadas) de uma planilha e
+    sua origem. A pasta de destino é resolvida por CHAVE (`montar_pasta_destino_chave`,
+    que prioriza o CNPJ embutido na chave sobre o nome da pasta de entrada), já que uma
+    planilha solta pode em tese conter chaves de mais de uma empresa.
+    """
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore", message="Workbook contains no default style, apply openpyxl's default"
@@ -252,7 +322,7 @@ def extrair_registros_planilha_nfe(
     try:
         aba = workbook[workbook.sheetnames[0]]
         linha_cabecalho, coluna_chave = localizar_coluna_chave_nfe(aba)
-        pasta_destino = montar_pasta_destino_planilha(caminho_planilha, pasta_destino_base, pasta_entrada)
+        direcao_planilha = tipo_nota_do_nome_arquivo(caminho_planilha.name)
         registros: list[RegistroPlanilhaNFe] = []
         chaves_vistas: set[str] = set()
 
@@ -262,16 +332,31 @@ def extrair_registros_planilha_nfe(
             if len(linha) < coluna_chave:
                 continue
             chave = sanitizar_chave(linha[coluna_chave - 1])
-            if not chave or len(chave) != 44 or chave in chaves_vistas:
-                if chave and len(chave) != 44:
-                    LOGGER.warning(
-                        "Chave inválida ignorada na planilha %s, linha %s: %s",
-                        caminho_planilha.name,
-                        numero_linha,
-                        chave,
-                    )
+            if not chave:
+                continue
+            if len(chave) != 44:
+                LOGGER.warning(
+                    "Chave inválida ignorada na planilha %s, linha %s: %s",
+                    caminho_planilha.name,
+                    numero_linha,
+                    chave,
+                )
+                continue
+            if not is_nfe_key(chave):
+                LOGGER.warning(
+                    "Chave de modelo incorreto ignorada (não é NF-e, provavelmente NFC-e/CT-e) "
+                    "na planilha %s, linha %s: %s",
+                    caminho_planilha.name,
+                    numero_linha,
+                    chave,
+                )
+                continue
+            if chave in chaves_vistas:
                 continue
             chaves_vistas.add(chave)
+            pasta_destino = montar_pasta_destino_chave(
+                chave, caminho_planilha, pasta_destino_base, pasta_entrada, mapa_cod_empresa_cnpj or {}, direcao_planilha
+            )
             registros.append(
                 RegistroPlanilhaNFe(
                     caminho_planilha=caminho_planilha,
@@ -804,12 +889,20 @@ class MeudanfeBatchExtractor:
         if not self.input_folder.exists():
             raise FileNotFoundError(f"A pasta {self.input_folder} não existe.")
 
+        mapa_cod_empresa_cnpj = (
+            load_cod_empresa_cnpj_base(self.settings.cod_empresa_cnpj_base_path)
+            if self.settings.cod_empresa_cnpj_base_path
+            else {}
+        )
+
         narrate("Lendo planilhas de NF-e em %s...", self.input_folder)
         registros: list[RegistroPlanilhaNFe] = []
         for caminho_planilha in listar_planilhas_nfe(self.input_folder):
             try:
                 registros.extend(
-                    extrair_registros_planilha_nfe(caminho_planilha, self.output_folder, self.input_folder)
+                    extrair_registros_planilha_nfe(
+                        caminho_planilha, self.output_folder, self.input_folder, mapa_cod_empresa_cnpj
+                    )
                 )
             except Exception as exc:  # noqa: BLE001
                 narrate_warning("Falha ao ler a planilha %s: %s", caminho_planilha.name, exc)
@@ -927,7 +1020,16 @@ class MeudanfeBatchExtractor:
             (
                 item.chave,
                 item.caminho_planilha.name,
-                str(montar_pasta_destino_planilha(item.caminho_planilha, self.output_folder, self.input_folder)),
+                str(
+                    montar_pasta_destino_chave(
+                        item.chave,
+                        item.caminho_planilha,
+                        self.output_folder,
+                        self.input_folder,
+                        mapa_cod_empresa_cnpj,
+                        tipo_nota_do_nome_arquivo(item.caminho_planilha.name),
+                    )
+                ),
                 item.erro,
             )
             for item in resultado_final_por_chave.values()

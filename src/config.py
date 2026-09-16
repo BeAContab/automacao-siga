@@ -2,16 +2,40 @@ from __future__ import annotations
 
 """Configurações centrais e caminhos padrão usados em toda a automação."""
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _installation_dir() -> Path:
+    """Pasta ao lado do executável (empacotado) ou raiz do projeto (código-fonte).
+
+    Deliberadamente NÃO usa `sys._MEIPASS` (que aponta para `_internal/`, o bundle
+    interno do PyInstaller — cheio de DLLs/`.pyc`, nada amigável pra edição manual).
+    Usa `sys.executable` para achar a pasta onde o `.exe` realmente fica, um nível
+    acima de `_internal/` — o mesmo lugar onde README.md/LICENSE já são instalados.
+    Serve para arquivos que o usuário deve poder abrir/editar direto no Explorer.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return PROJECT_ROOT
+
+
 DEFAULT_CERTIFICATE_DIR = PROJECT_ROOT / "certificado"
 DEFAULT_BROWSER_PROFILE_DIR = PROJECT_ROOT / ".browser-profile"
 DEFAULT_BROWSER_DEBUG_PROFILE_DIR = PROJECT_ROOT / "browser-debug-profile"
 DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "saida"
+# Planilha-base COD/EMPRESA/CNPJ (todos os clientes do escritório) instalada ao lado do
+# .exe (ver `_installation_dir`) — o próprio escritório pode editá-la depois (novo
+# cliente, CNPJ que muda) sem precisar de uma nova versão do app. Usada como rede de
+# segurança para nomear a pasta de saída quando não há como inferir COD/EMPRESA a
+# partir da estrutura de pastas de entrada (ex.: modo NF-e recebendo um arquivo solto,
+# fora da convenção de pastas do SIGA).
+DEFAULT_COD_EMPRESA_CNPJ_PATH = _installation_dir() / "COD EMP CNPJ.xlsx"
 # Planilha CNPJ/IE de rede compartilhada pelo escritório — sempre a mesma para todo
 # operador do modo NFC-e, por isso pré-preenchida em vez de exigir seleção manual a
 # cada execução (pedido do usuário; decisão anterior era deliberadamente não ter
@@ -128,6 +152,10 @@ class Settings:
     nfce_session_renewal_check_every_n_keys: int = 40
     nfce_batch_max_keys: int = 300
     nfce_session_recovery_wait_seconds: int = 240
+    # Quando o login falha porque o portal detecta outra sessão ativa com o mesmo CPF
+    # (ou um "Tempo limite excedido" que o código não consegue distinguir disso), o login
+    # passa a retentar indefinidamente nesse intervalo, em vez de desistir na hora.
+    nfce_login_retry_wait_seconds: int = 300
 
     # --- Modo NF-e (Meu DANFE): portagem de importação/NFE 2/automacao-meu-danfe/main.py ---
     # Site público de terceiros (consulta por chave de acesso, sem login/credenciais).
@@ -139,7 +167,7 @@ class Settings:
     nf_meudanfe_input_folder: Path | None = None
     # Pasta de destino dos downloads (obrigatória, escolhida pelo usuário na interface,
     # mesmo padrão de "Pasta de saída"/"Pasta de saída dos XMLs" do SIGA/NFC-e) — cada
-    # planilha grava em <destino>/downloads-meudanfe/<planilha>/{XML,PDF}.
+    # empresa grava em <destino>/<COD - EMPRESA - CNPJ>/{XML,PDF}, mesmo padrão raso do NFC-e.
     nf_meudanfe_output_folder: Path | None = None
     # 1 a 8 instâncias de Chrome em paralelo (undetected_chromedriver, uma por worker) —
     # teto igual ao do script original; mais paralelismo aumenta o risco de bloqueio
@@ -152,6 +180,10 @@ class Settings:
     # eventual instabilidade/bloqueio transitório do site se recuperar antes de tentar
     # de novo, em vez de bater na mesma falha na hora.
     nf_meudanfe_retry_wait_seconds: int = 60
+    # Planilha-base COD/EMPRESA/CNPJ (ver DEFAULT_COD_EMPRESA_CNPJ_PATH) — não é exposta
+    # como campo na interface de propósito: é automática, o escritório mantém o arquivo
+    # atualizado direto na pasta de instalação em vez de escolher/trocar isso a cada execução.
+    cod_empresa_cnpj_base_path: Path | None = DEFAULT_COD_EMPRESA_CNPJ_PATH
 
     # --- Interface (pywebview) ---
     # Habilita o DevTools do WebView2 (F12) na janela da interface. Só para

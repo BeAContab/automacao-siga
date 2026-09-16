@@ -29,7 +29,7 @@ from src.extraction.meudanfe_extractor import MeudanfeBatchExtractor, MeudanfeBa
 from src.extraction.nfce_extractor import NfceBatchExtractor, NfceBatchResult
 from src.extraction.siga_extractor import BatchExtractionResult, SigaContributorExtractor
 from src.extraction.spreadsheet import SpreadsheetRow
-from src.utils.browser import BrowserSession
+from src.utils.browser import BrowserSession, terminate_browser_processes
 from src.utils.narration import narrate, narrate_success, narrate_warning
 
 LOGGER = logging.getLogger(__name__)
@@ -105,6 +105,17 @@ class ChainBatchExtractor:
                 cancel_event=cancel_event,
                 pause_event=pause_event,
             )
+
+        # O navegador de depuração persistente (reaproveitado via CDP) não é fechado
+        # pelo __exit__ do BrowserSession acima (owns_driver=False) — ficaria parado só
+        # consumindo RAM durante toda a etapa NF-e a seguir, que não depende dele. A
+        # etapa NFC-e mais adiante não precisa do MESMO processo: o login lá é automático
+        # (CPF/senha), então basta deixar o próprio BrowserSession da etapa 3 abrir um
+        # navegador novo (self-contained, owns_driver=True) quando não achar mais o CDP
+        # disponível — e esse, ao final, se fecha sozinho.
+        narrate("Encerrando o navegador da etapa SIGA para liberar memória antes da etapa NF-e...")
+        terminate_browser_processes(self.settings)
+
         if cancel_event is not None and cancel_event.is_set():
             narrate_warning("Cadeia encerrada pelo usuário após a etapa SIGA.")
             return result
@@ -144,7 +155,9 @@ class ChainBatchExtractor:
             base_spreadsheet_path=self.nfce_base_spreadsheet_path,
         )
         with BrowserSession(self.settings) as context:
-            nfce_rows_raw = nfce_extractor.discover_selectable_companies(context)
+            nfce_rows_raw = nfce_extractor.discover_selectable_companies(
+                context, cancel_event=cancel_event, pause_event=pause_event
+            )
             if not nfce_rows_raw:
                 narrate_warning(
                     "Nenhuma empresa elegível para NFC-e (sem IE/CNPJ correspondente na planilha-base, "
