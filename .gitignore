@@ -21,6 +21,9 @@ downloads/
 scratch/
 testes/*.txt
 .env
+# Também cobre "COD EMP CNPJ.xlsx" (raiz do projeto) e a planilha-base do NFC-e — dado
+# real de cliente (CNPJ), nunca deve ser versionado; cada instalação/checkout mantém sua
+# própria cópia (ver DEFAULT_COD_EMPRESA_CNPJ_PATH em src/config.py).
 *.xlsx
 *.csv
 *.log

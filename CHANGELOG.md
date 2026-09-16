@@ -1,5 +1,72 @@
 # Changelog
 
+## [2026-09-16] — Versão 2.10.0
+
+### Adicionado
+- **4 melhorias no modo NF-e/NFC-e, inspiradas numa comparação com o robô de referência "NFE_XML"** (documento `Identificacao_e_Organizacao_das_Pastas.md`):
+  1. **NF-e filtra por modelo (55), não só por tamanho.** Novo `is_nfe_key` (`nfce_extractor.py`, mesmo padrão de `_is_nfce_key`) — uma chave de 44 dígitos que não seja modelo 55 (ex.: NFC-e/CT-e por engano na coluna "Chave NF-e") agora é descartada com aviso, em vez de processada.
+  2. **Arquivos de lock do Excel (`~$...`) são ignorados** em `listar_planilhas_nfe`, tanto na varredura de pasta quanto num arquivo único escolhido diretamente.
+  3. **NF-e prioriza o CNPJ embutido na chave sobre o nome da pasta de entrada** ao resolver a empresa de destino. Nova `montar_pasta_destino_chave` (substitui `montar_pasta_destino_planilha`/`montar_pasta_destino_por_cnpj`) resolve **por chave**, na ordem: CNPJ da chave + planilha-base `COD EMP CNPJ.xlsx` → nome da pasta de entrada (convenção do SIGA) → `SEM-COD - SEM-EMPRESA - <cnpj>`. Corrige o caso de matriz/filiais em pastas genéricas sem CNPJ no nome (ex. `0001`/`0002`) — testado reproduzindo o exemplo real do documento de referência (RH COMÉRCIO). No caso comum (entrada = saída do próprio SIGA), o resultado não muda.
+  4. **NFC-e passa a pular chave já baixada em execução anterior** (o NF-e já fazia isso; o NFC-e não tinha nenhuma checagem). Novo `NfceDownloadManager.ja_baixado`, com busca recursiva na pasta inteira da empresa — encontra a chave mesmo que tenha sido salva antes numa subpasta de direção diferente (Saída ↔ Entrada).
+  - Validado com testes isolados para os 4 itens, incluindo o cenário de filiais em pastas genéricas do documento de referência.
+
+## [2026-09-16] — Versão 2.9.0
+
+### Adicionado
+- **Modos NF-e e NFC-e separam notas de saída e de entrada em subpastas.** Antes, uma chave vinda de um relatório "Emissor" do SIGA (a empresa emitiu o documento) e outra de um relatório "Destinatario" (a empresa recebeu) da mesma empresa caíam na mesma pasta final, misturadas. Nova função `tipo_nota_do_nome_arquivo` (`src/extraction/spreadsheet.py`) detecta a direção pelo nome do arquivo de origem — a mesma convenção que o próprio SIGA já usa para nomear esses relatórios (`_display_label` em `siga_extractor.py`).
+  - **NF-e**: `montar_pasta_destino_planilha`/`montar_pasta_destino_por_cnpj` (`meudanfe_extractor.py`) acrescentam uma subpasta `Notas de Saída`/`Notas de Entrada` entre a pasta da empresa e `{XML,PDF}`.
+  - **NFC-e**: `collect_nfce_keys_for_cnpj` (`nfce_extractor.py`) passou a agrupar as chaves por direção (antes devolvia uma lista simples) — mudança de assinatura propagada em `run_batch_in_context`/`discover_selectable_companies`. `NfceDownloadManager.mover_arquivo` ganhou um parâmetro de direção e cria a subpasta correspondente na hora de salvar.
+  - Quando o nome do arquivo não indica a direção (fora do padrão do SIGA), nenhuma subpasta extra é criada — comportamento idêntico ao de antes desta versão.
+  - Validado com testes isolados: separação correta em estrutura de pastas do SIGA, em arquivo único solto (nome detectado mesmo fora da árvore de pastas), e no `NfceDownloadManager` (com e sem direção conhecida).
+
+## [2026-09-15] — Versão 2.8.0
+
+### Adicionado
+- **Modos NF-e e NFC-e passam a aceitar um arquivo `.xlsx` único, além de pasta.** Antes, "Pasta de chaves" (NFC-e) e "Pasta com planilhas NF-e" só aceitavam pasta — o diálogo nativo nem deixava escolher um arquivo. Cada campo ganhou um segundo botão ("ou escolher um arquivo") ao lado do botão de pasta já existente; o backend passou a validar pasta OU `.xlsx` (`_is_folder_or_xlsx`, `src/webui/api.py`).
+  - **NFC-e** (`find_keys_files_for_cnpj`/`collect_nfce_keys_for_cnpj`, `nfce_extractor.py`): quando é um arquivo, lê direto sem depender de nome/estrutura. Toda chave — de arquivo OU pasta — agora também é filtrada pelo **CNPJ do emitente embutido na própria chave de 44 dígitos** (posições 7-20, `cnpj_from_access_key`), reforço extra que garante nunca misturar chave de outra empresa, mesmo dentro de um único arquivo com chaves de várias empresas misturadas.
+  - **NF-e** (`listar_planilhas_nfe`/`extrair_registros_planilha_nfe`, `meudanfe_extractor.py`): arquivo único é aceito mesmo sem "nf-e" no nome (o filtro por nome só faz sentido varrendo uma pasta). Quando não há como inferir a empresa pela estrutura de pastas (arquivo solto, ex. `Downloads\planilha.xlsx`), a resolução da pasta de saída passa a ser **por chave** (não mais por arquivo inteiro), usando o CNPJ embutido em cada chave — suporta até um único arquivo com chaves de empresas diferentes misturadas.
+- **Nova planilha-base `COD EMP CNPJ.xlsx`** (COD/EMPRESA/CNPJ de todos os clientes do escritório), usada como rede de segurança para resolver `<COD - EMPRESA - CNPJ>` quando a estrutura de pastas de entrada não tem essa informação — substitui o fallback anterior (nome do próprio arquivo) por algo que efetivamente identifica a empresa. Fica instalada ao lado do `.exe` (`Settings.cod_empresa_cnpj_base_path`, `_installation_dir` em `config.py` — deliberadamente não usa `_internal/`, pouco amigável pra edição manual), copiada só na primeira instalação (`onlyifdoesntexist` no `.iss`) para nunca sobrescrever uma edição do escritório numa atualização futura. CNPJ não encontrado na base cai em `SEM-COD - SEM-EMPRESA - <cnpj>`, igual ao fallback que o SIGA já usa.
+- Nova função reaproveitável `load_cod_empresa_cnpj_base` (`src/extraction/spreadsheet.py`), construída sobre `load_cnpjs_from_xlsx` já existente.
+
+## [2026-09-15] — Versão 2.7.0
+
+### Alterado
+- **Pasta de saída do modo NF-e (Meu DANFE) simplificada para o mesmo padrão raso do NFC-e.** Antes: `<pasta de saída>/downloads-meudanfe/<COD - EMPRESA - CNPJ>/<mês>/[<aba>/]<nome da planilha>/{XML,PDF}/<chave>`, preservando a árvore inteira da planilha de entrada. Agora: `<pasta de saída>/<COD - EMPRESA - CNPJ>/{XML,PDF}/<chave>` (`montar_pasta_destino_planilha`, `meudanfe_extractor.py`) — usa só o nome da pasta da empresa, descartando o wrapper `downloads-meudanfe`, o mês, a aba e o nome da planilha. Uniformiza os 3 modos de extração no mesmo padrão de pasta por empresa (`COD - EMPRESA - CNPJ`).
+  - Efeito colateral aceito conscientemente: chaves de meses diferentes da mesma empresa passam a cair na mesma pasta `XML`/`PDF`, sem separação por mês — sem risco de colisão, já que o nome do arquivo final é sempre a própria chave de 44 dígitos (única por documento). Como bônus, uma chave que apareça em planilhas de mais de um mês (reexportação com sobreposição) agora é detectada como já baixada e pulada, em vez de baixada de novo em pastas separadas.
+
+## [2026-09-15] — Versão 2.6.6
+
+### Corrigido
+- **Retentativa indefinida de login (v2.6.5) não cobria o ponto real onde o alerta de sessão duplicada aparece.** Teste real mostrou o alerta disparando em `acessar_area_empresas()` (ao navegar para a área de empresas logo após um login que já tinha dado certo), não durante o preenchimento do formulário de login em si (`fazer_login()`) — só esse último tinha sido coberto. Novo método `NfceSessionManager.autenticar()` (`nfce_extractor.py`) unifica login + acesso à área de empresas num único laço de retentativa: ao detectar o alerta em qualquer um dos dois passos, espera e refaz os dois do zero (a sessão pode já estar comprometida nesse ponto, então só repetir a navegação não bastaria). `run_batch_in_context` e `discover_selectable_companies` passam a chamar só `autenticar()`. Validado com teste isolado simulando o alerta e o cancelamento.
+
+## [2026-09-15] — Versão 2.6.5
+
+### Adicionado
+- **Modo NFC-e: login retenta indefinidamente quando o portal recusa por sessão duplicada.** Antes, ao detectar o alerta "Tempo limite excedido... outra sessão ativa com o mesmo CPF", `fazer_login()` desistia na hora (`nfce_extractor.py`) — tanto no clique em "Carregar Empresas" quanto no início da execução — exigindo que o usuário clicasse de novo manualmente depois de fechar a outra sessão. Agora espera `Settings.nfce_login_retry_wait_seconds` (novo, padrão 5min) e tenta de novo, sem limite de tentativas, até dar certo ou até o usuário cancelar.
+  - A espera é cancelável: `NfceSessionManager` passa a receber `cancel_event`/`pause_event`, propagados também por `discover_selectable_companies` (usada por "Carregar Empresas" e pela etapa NFC-e da Cadeia Completa) e por `run_batch_in_context`.
+  - "Carregar Empresas" (`Api.load_nfce_companies`, `src/webui/api.py`) passou a rodar na mesma thread de controle usada pelas execuções de verdade (`self._worker_thread`), em vez de uma thread solta sem cancelamento — os botões "Pausar"/"Encerrar" já existentes passam a funcionar também durante essa espera, sem precisar de nenhum controle novo na interface.
+
+## [2026-09-15] — Versão 2.6.4
+
+### Alterado
+- **Cadeia Completa: encerra o navegador ocioso da etapa SIGA antes de seguir para o NF-e.** O navegador de depuração persistente (reaproveitado via CDP entre as etapas SIGA e NFC-e) ficava aberto e parado durante toda a etapa NF-e — que não depende dele (usa `undetected_chromedriver` em processos próprios) — só consumindo RAM. `ChainBatchExtractor.run` (`chain_extractor.py`) agora chama `terminate_browser_processes` logo após a etapa SIGA, liberando essa memória. A etapa NFC-e, mais adiante, não precisa do mesmo processo (login automático por CPF/senha): o `BrowserSession` dela detecta que o CDP não está mais disponível e abre um navegador novo por conta própria — que, diferente do persistente, se fecha sozinho ao final. Efeito líquido: nenhum navegador fica pendurado nem durante o NF-e, nem depois que a cadeia inteira termina. Não afeta os modos SIGA/NFC-e isolados, que continuam reaproveitando o navegador persistente normalmente entre execuções.
+
+## [2026-09-15] — Versão 2.6.3
+
+### Corrigido
+- **Modo NFC-e: taxa de sucesso muito abaixo do script standalone original** (`importação/NFCE/codigo-fonte/xml nfce.py`), que baixa todas as chaves normalmente. Comparando os dois lado a lado, o standalone conta falhas *consecutivas* por chave dentro do lote (`erros_consecutivos`, `processar_lote_chaves`) e, ao atingir 3 seguidas, fecha a aba da empresa e a reabre do zero (com `renovar_login()`/`reset_completo_com_espera()`) — a portagem (`_processar_empresa`, `nfce_extractor.py`) não tinha esse gatilho: só reabria a empresa no início da *próxima passada inteira* (até centenas de chaves depois), deixando a aba degradar por muito mais tempo antes de qualquer recuperação. Isso bate exatamente com o padrão observado num log real (dezenas de timeouts seguidos no botão de baixar XML, só voltando a funcionar quando a passada inteira terminava). Agora `_processar_empresa` conta falhas consecutivas por chave e força a mesma recuperação (reabrir a empresa) ao atingir 3 seguidas, igual ao script original.
+
+## [2026-09-14] — Versão 2.6.2
+
+### Corrigido
+- **Modo NFC-e: falha na renovação proativa de sessão podia derrubar o lote inteiro**, encerrando a execução para todas as empresas selecionadas em vez de só a atual. Diagnosticado a partir de um `log.txt` real: a cada ~8 minutos (`Settings.nfce_session_renewal_seconds`) o código reloga proativamente; quando o portal SEFAZ-CE respondia com o alerta "Tempo limite excedido... já existe outra sessão ativa com o mesmo CPF", `acessar_area_empresas()` levantava `RuntimeError` sem ser capturado em nenhum dos três pontos que chamam `renovar_login()`/`reset_completo_com_espera()` (`nfce_extractor.py`) — a exceção escapava do protocolo de recuperação total já existente no código (`reset_completo_com_espera`) e travava toda a thread de execução, sem sequer tentar a próxima empresa da lista. Agora `renovar_login()` e `reset_completo_com_espera()` tratam esse `RuntimeError` e devolvem `False`, o ponto de renovação proativa em `_processar_empresa` passa a acionar o fallback completo (`renovar_login() or reset_completo_com_espera()`) em vez de ignorar o retorno, e `run_batch_in_context` passa a isolar cada empresa num `try/except` (status `"erro"` no resultado) — uma falha imprevista numa empresa não impede mais as demais de serem processadas.
+- **Modo NFC-e: taxa alta de "nota encontrada, mas o botão de baixar XML não apareceu a tempo"** — no log real analisado, só a primeira chave consultada após abrir a empresa baixava dentro do timeout fixo de 10s; todas as consultas seguintes na mesma aba estouravam o mesmo limite, e só voltavam a funcionar numa passada seguinte (empresa reaberta do zero). Aumentado para 20s (`_baixar_xml_chave`, `nfce_extractor.py`) como mitigação — o padrão observado sugere que o portal/Angular fica mais lento para renderizar o botão a cada consulta subsequente na mesma sessão de página, não que a nota esteja de fato indisponível.
+
+## [2026-09-14] — Versão 2.6.1
+
+### Corrigido
+- **Modo NFC-e não reconhecia chaves quando o relatório do SIGA não cria a subpasta "NFC-e"** — a visualização "Emissor" de Informações Fiscais deixa o `.xlsx` de detalhamento solto direto na pasta do mês (ex.: `<COD - EMPRESA - CNPJ>\agosto\Informações Fiscais - NFC-e - Emissor - Detalhamento....xlsx`), sem subpasta "NFC-e"; `find_keys_files_for_cnpj` (`src/extraction/nfce_extractor.py`) exigia esse nome exato de subpasta e não encontrava nada nesse caso, mesmo com o arquivo certo presente. Agora a busca varre recursivamente (`rglob`) toda a pasta da empresa já localizada por CNPJ, em qualquer nível/subpasta — igual ao que o modo NF-e já fazia. A segurança contra misturar chaves de NF-e/CT-e continua garantida pelo filtro por modelo (`_is_nfce_key`, aplicado por chave, não por pasta), e o escopo por empresa (CNPJ) é mantido, então não há risco de atribuir documentos de uma empresa a outra.
+
 ## [2026-09-11] — Versão 2.6.0
 
 ### Adicionado

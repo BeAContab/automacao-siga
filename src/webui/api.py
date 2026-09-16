@@ -81,6 +81,12 @@ def _fail(message: str, level: str = "error") -> dict[str, Any]:
     return {"ok": False, "error": message, "level": level}
 
 
+def _is_folder_or_xlsx(path: Path) -> bool:
+    """True se `path` é uma pasta OU um arquivo `.xlsx` — os modos NF-e/NFC-e aceitam
+    tanto uma pasta de resultado do SIGA quanto um arquivo solto único como entrada."""
+    return path.is_dir() or (path.is_file() and path.suffix.lower() == ".xlsx")
+
+
 def _row_to_dict(row: SpreadsheetRow) -> dict[str, Any]:
     return {
         "row_number": row.row_number,
@@ -140,7 +146,6 @@ class Api:
         self._worker_thread: threading.Thread | None = None
         self._browser_thread: threading.Thread | None = None
         self._browser_started = False
-        self._nfce_discovery_thread: threading.Thread | None = None
 
         # Controle cooperativo de pausar/continuar/encerrar (ver src/utils/execution_control.py)
         # — um único par de Event cobre qualquer um dos 3 modos, já que só uma execução roda
@@ -560,8 +565,6 @@ class Api:
             return busy
         if not self._browser_started:
             return _fail("Clique em 'Iniciar Navegador' antes de carregar as empresas.", level="warning")
-        if self._nfce_discovery_thread is not None and self._nfce_discovery_thread.is_alive():
-            return _fail("Já existe um carregamento de empresas em andamento. Aguarde.", level="info")
 
         cpf = str(payload.get("cpf") or "").strip()
         senha = str(payload.get("senha") or "")
@@ -579,13 +582,23 @@ class Api:
         if not keys_folder_raw:
             return _fail("Selecione a pasta com as planilhas de chaves por empresa.", level="warning")
         keys_folder = Path(keys_folder_raw).expanduser()
-        if not keys_folder.is_dir():
-            return _fail(f"Pasta de chaves não encontrada:\n{keys_folder}")
+        if not _is_folder_or_xlsx(keys_folder):
+            return _fail(f"Pasta/arquivo de chaves não encontrado:\n{keys_folder}")
 
         # CPF/senha vivem só neste atributo, em memória, pelo tempo da execução — nunca
         # são persistidos (nem .env, nem planilha, nem log).
         self._settings.nfce_cpf = cpf
         self._settings.nfce_senha = senha
+
+        # Mesmo tratamento de estado que `_start_worker` dá às execuções de verdade: limpa
+        # pausar/cancelar de uma rodada anterior e marca o modo, para que "Pausar"/"Encerrar"
+        # funcionem também durante esta chamada — importante porque, se o portal recusar o
+        # login por sessão duplicada, o login fica retentando indefinidamente a cada alguns
+        # minutos (`Settings.nfce_login_retry_wait_seconds`) até o usuário conseguir de novo
+        # ou cancelar.
+        self._pause_event.clear()
+        self._cancel_event.clear()
+        self._current_mode = "nfce"
 
         narrate("Carregando empresas do portal SEFAZ-CE...")
 
@@ -600,8 +613,18 @@ class Api:
                     base_spreadsheet_path=base_spreadsheet,
                 )
                 with BrowserSession(self._settings) as context:
-                    rows = extractor.discover_selectable_companies(context)
+                    rows = extractor.discover_selectable_companies(
+                        context, cancel_event=self._cancel_event, pause_event=self._pause_event
+                    )
             except Exception as exc:  # noqa: BLE001
+                if self._cancel_event.is_set():
+                    # A retentativa indefinida de login (sessão duplicada) só para de fato
+                    # quando o cancelamento é sinalizado — o caminho normal daí é o login
+                    # devolver False e o extractor levantar RuntimeError, não um retorno
+                    # limpo; trata isso como cancelamento, não como falha real.
+                    narrate_warning("Carregamento de empresas cancelado pelo usuário.")
+                    self._bridge.show_message("Carregamento de empresas cancelado.", level="info")
+                    return
                 LOGGER.exception("Falha ao carregar empresas do portal SEFAZ-CE")
                 narrate_error("Falha ao carregar empresas do portal: %s", exc)
                 self._bridge.show_message(f"Falha ao carregar empresas do portal:\n{exc}")
@@ -618,8 +641,8 @@ class Api:
             narrate_success("%s empresa(s) carregada(s) do portal.", len(rows))
             self._bridge.nfce_companies_loaded(rows)
 
-        self._nfce_discovery_thread = threading.Thread(target=worker, daemon=True)
-        self._nfce_discovery_thread.start()
+        self._worker_thread = threading.Thread(target=worker, daemon=True)
+        self._worker_thread.start()
         return _ok()
 
     # ------------------------------------------------------------------ execução NFC-e
@@ -649,8 +672,8 @@ class Api:
         if not keys_folder_raw:
             return _fail("Selecione a pasta com as planilhas de chaves por empresa.", level="warning")
         keys_folder = Path(keys_folder_raw).expanduser()
-        if not keys_folder.is_dir():
-            return _fail(f"Pasta de chaves não encontrada:\n{keys_folder}")
+        if not _is_folder_or_xlsx(keys_folder):
+            return _fail(f"Pasta/arquivo de chaves não encontrado:\n{keys_folder}")
 
         raw_rows = payload.get("rows") or []
         if not raw_rows:
@@ -721,8 +744,8 @@ class Api:
         if not input_folder_raw:
             return _fail("Selecione a pasta com as planilhas NF-e.", level="warning")
         input_folder = Path(input_folder_raw).expanduser()
-        if not input_folder.is_dir():
-            return _fail(f"Pasta não encontrada:\n{input_folder}")
+        if not _is_folder_or_xlsx(input_folder):
+            return _fail(f"Pasta/arquivo não encontrado:\n{input_folder}")
 
         output_dir_raw = str(payload.get("output_dir") or "").strip()
         if not output_dir_raw:

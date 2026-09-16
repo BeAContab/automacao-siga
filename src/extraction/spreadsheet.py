@@ -91,6 +91,51 @@ def load_cnpjs_from_xlsx(path: Path) -> list[SpreadsheetRow]:
     return rows
 
 
+def load_cod_empresa_cnpj_base(path: Path) -> dict[str, SpreadsheetRow]:
+    """Lê a planilha-base COD/EMPRESA/CNPJ (mesmas colunas de `load_cnpjs_from_xlsx`,
+    por isso reaproveitada aqui) e devolve um mapa cnpj -> linha.
+
+    Usada como rede de segurança para nomear a pasta de saída (`<COD - EMPRESA - CNPJ>`)
+    quando não há como inferir isso a partir da estrutura de pastas de entrada — ex.:
+    modo NF-e recebendo um arquivo `.xlsx` solto, fora da convenção de pastas do SIGA.
+    Nunca lança exceção: pasta ausente ou planilha ilegível apenas resultam num mapa
+    vazio, e quem chama cai no fallback "SEM-COD"/"SEM-EMPRESA" já existente.
+    """
+    if not path.exists():
+        return {}
+    try:
+        rows = load_cnpjs_from_xlsx(path)
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("Falha ao ler a planilha-base COD/EMPRESA/CNPJ %s", path)
+        return {}
+    return {row.cnpj: row for row in rows}
+
+
+# Pastas de saída (Emissor) e entrada (Destinatário) — mesmos rótulos para os modos NF-e
+# e NFC-e, para o escritório reconhecer a convenção em qualquer um dos dois.
+DIRECAO_SUBPASTA: dict[str, str] = {"saida": "Notas de Saída", "entrada": "Notas de Entrada"}
+
+
+def tipo_nota_do_nome_arquivo(nome_arquivo: str) -> str:
+    """Detecta se um relatório de detalhamento é de notas de SAÍDA (perfil "Emissor" no
+    SIGA — a empresa emitiu o documento) ou de ENTRADA (perfil "Destinatario" — a
+    empresa recebeu), pelo nome do arquivo.
+
+    A convenção vem do próprio SIGA: `_display_label` (`siga_extractor.py`) grava o
+    rótulo do perfil ("Emissor"/"Destinatario") como parte literal do nome do arquivo de
+    detalhamento gerado (ex.: "Informações Fiscais - NFC-e - Emissor - Detalhamento
+    Agosto de 2026...xlsx"). Devolve "" quando o nome não segue essa convenção (arquivo
+    renomeado manualmente, ou fora do padrão do SIGA) — quem chama decide o fallback
+    nesse caso (hoje: não separar em subpasta, mantendo o comportamento anterior).
+    """
+    normalizado = strip_accents(nome_arquivo).lower()
+    if "emissor" in normalizado:
+        return "saida"
+    if "destinatario" in normalizado:
+        return "entrada"
+    return ""
+
+
 def load_cnpjs_from_text(text: str) -> list[SpreadsheetRow]:
     """Lê CNPJs informados manualmente, um por linha ou separados por pontuação."""
     rows: list[SpreadsheetRow] = []

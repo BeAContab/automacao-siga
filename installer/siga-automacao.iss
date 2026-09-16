@@ -13,7 +13,7 @@
 ; Microsoft.
 
 #define MyAppName "SIGA Automacao"
-#define MyAppVersion "2.6.0"
+#define MyAppVersion "2.10.0"
 #define MyAppExeName "siga-automacao.exe"
 
 [Setup]
@@ -42,6 +42,10 @@ Source: "..\dist\siga-automacao\*"; DestDir: "{app}"; Flags: ignoreversion recur
 Source: "..\images\icons\siga-automacao.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+; Planilha-base COD/EMPRESA/CNPJ: copiada só na primeira instalação (onlyifdoesntexist)
+; — numa atualização, o escritório já pode ter editado esse arquivo (cliente novo, CNPJ
+; que mudou), e sobrescrever silenciosamente destruiria essa edição.
+Source: "..\COD EMP CNPJ.xlsx"; DestDir: "{app}"; Flags: onlyifdoesntexist
 
 [Icons]
 Name: "{userdesktop}\SIGA Automacao"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{app}\siga-automacao.ico"; IconIndex: 0
