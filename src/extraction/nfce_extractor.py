@@ -211,6 +211,31 @@ def collect_nfce_keys_for_cnpj(keys_folder: Path, cnpj: str) -> dict[str, list[s
     return agrupado
 
 
+def extract_nfce_keys_from_text(texto: str) -> list[str]:
+    """Extrai chaves de acesso de NFC-e (44 dígitos, modelo 65) de texto colado
+    manualmente — uma por linha, ou separadas por espaço/vírgula/qualquer pontuação.
+    Usado pela aba "Colar chaves" da interface, alternativa a apontar pasta/arquivo.
+    """
+    keys: list[str] = []
+    seen: set[str] = set()
+    for run in re.findall(r"\d+", texto or ""):
+        if _is_nfce_key(run) and run not in seen:
+            seen.add(run)
+            keys.append(run)
+    return keys
+
+
+def group_nfce_keys_by_cnpj(keys: list[str]) -> dict[str, list[str]]:
+    """Agrupa chaves já filtradas (modelo 65) pelo CNPJ do emitente embutido em cada
+    uma — usado pelo modo de entrada manual (colar chaves), que não tem arquivo de
+    origem para casar a chave com uma empresa por nome de pasta.
+    """
+    agrupado: dict[str, list[str]] = {}
+    for chave in keys:
+        agrupado.setdefault(cnpj_from_access_key(chave), []).append(chave)
+    return agrupado
+
+
 @dataclass(slots=True)
 class NfceBaseInfo:
     """Uma linha da planilha-base CNPJ/IE, com um COD opcional (se a coluna existir)."""
@@ -528,6 +553,28 @@ class NfceSessionManager:
         narrate_error("Protocolo de recuperação falhou; sessão não pôde ser restabelecida.")
         return False
 
+    def recuperar_sessao(self) -> bool:
+        """Encadeia as 3 camadas de recuperação de sessão, da mais leve à mais persistente:
+        relogin leve (`renovar_login`) → recuperação total com espera de 4min
+        (`reset_completo_com_espera`) → se AINDA ASSIM falhar (sessão realmente travada
+        por mais tempo do que essas duas dão conta), cai no mesmo retry indefinido de
+        `autenticar()` (espera `nfce_login_retry_wait_seconds` e tenta de novo, sem
+        limite, até dar certo ou até o cancelamento ser sinalizado).
+
+        Sem essa 3ª camada, um lote longo (muitas empresas/chaves, várias horas) que
+        esbarrasse numa instabilidade de sessão mais teimosa desistiria da empresa atual
+        e de TODAS as seguintes — cada uma bateria na mesma sessão ainda quebrada logo
+        na primeira checagem (`sessao_expirando`) e desistiria de novo, silenciosamente,
+        pelo resto do lote.
+        """
+        if self.renovar_login() or self.reset_completo_com_espera():
+            return True
+        try:
+            self.autenticar()
+            return True
+        except RuntimeError:
+            return False
+
     def listar_empresas(self) -> list[NfceCompanyLink]:
         """Raspa a lista de empresas vinculadas ao CPF logado (IE + nome + link de abertura)."""
         try:
@@ -606,13 +653,36 @@ class NfceBatchExtractor:
         self,
         settings: Settings,
         output_dir: Path,
-        keys_folder: Path,
+        keys_folder: Path | None = None,
         base_spreadsheet_path: Path | None = None,
+        manual_keys_text: str | None = None,
+        manual_direcao: str = "",
     ) -> None:
         self.settings = settings
         self.output_dir = output_dir
         self.keys_folder = keys_folder
         self.base_spreadsheet_path = base_spreadsheet_path
+        # Modo alternativo de entrada: chaves coladas manualmente em vez de pasta/arquivo
+        # (aba "Colar chaves" da interface) — agrupadas por CNPJ uma única vez aqui, já
+        # que não há arquivo de origem pra casar cada chave com uma empresa por nome de
+        # pasta. `manual_direcao` ("saida"/"entrada"/"") classifica o lote inteiro de
+        # uma vez, já que chave colada não carrega nome de arquivo pra detectar sozinha.
+        self._manual_keys_by_cnpj = (
+            group_nfce_keys_by_cnpj(extract_nfce_keys_from_text(manual_keys_text)) if manual_keys_text else None
+        )
+        self._manual_direcao = manual_direcao
+
+    def _chaves_para_cnpj(self, cnpj: str) -> dict[str, list[str]]:
+        """Resolve as chaves de uma empresa, priorizando o modo de entrada manual (se
+        configurado) sobre a pasta/arquivo de chaves."""
+        if self._manual_keys_by_cnpj is not None:
+            chaves = self._manual_keys_by_cnpj.get(normalize_cnpj(cnpj), [])
+            agrupado = {"saida": [], "entrada": [], "": []}
+            agrupado[self._manual_direcao if self._manual_direcao in agrupado else ""] = chaves
+            return agrupado
+        if self.keys_folder is None:
+            return {"saida": [], "entrada": [], "": []}
+        return collect_nfce_keys_for_cnpj(self.keys_folder, cnpj)
 
     def run_batch_in_context(
         self,
@@ -658,7 +728,7 @@ class NfceBatchExtractor:
                 results.append(NfceBatchResult(spreadsheet_row, status="sem_empresa"))
                 continue
 
-            chaves_por_direcao = collect_nfce_keys_for_cnpj(self.keys_folder, target_cnpj)
+            chaves_por_direcao = self._chaves_para_cnpj(target_cnpj)
             chaves = [chave for lista in chaves_por_direcao.values() for chave in lista]
             if not chaves:
                 narrate_warning(
@@ -748,7 +818,7 @@ class NfceBatchExtractor:
             cnpj = mapa_ie_cnpj.get(normalize_ie(company.ie), "")
             if not cnpj:
                 continue
-            total_chaves = sum(len(lista) for lista in collect_nfce_keys_for_cnpj(self.keys_folder, cnpj).values())
+            total_chaves = sum(len(lista) for lista in self._chaves_para_cnpj(cnpj).values())
             if not total_chaves:
                 continue
             rows.append(
@@ -817,7 +887,7 @@ class NfceBatchExtractor:
                 break
 
             if session.sessao_expirando():
-                if not (session.renovar_login() or session.reset_completo_com_espera()):
+                if not session.recuperar_sessao():
                     break
 
             script = company.href.replace("javascript:", "")
@@ -825,7 +895,7 @@ class NfceBatchExtractor:
                 empresa_page = self._abrir_empresa(page, script)
             except (Error, TimeoutError) as exc:
                 LOGGER.warning("Falha ao abrir a empresa %s: %s", company.nome, exc)
-                if not (session.renovar_login() or session.reset_completo_com_espera()):
+                if not session.recuperar_sessao():
                     break
                 continue
 
@@ -853,7 +923,7 @@ class NfceBatchExtractor:
                         falhas_consecutivas += 1
                     if precisa_reset:
                         narrate_warning("Sessão instável durante o download de %s; acionando recuperação.", company.nome)
-                        if not (session.renovar_login() or session.reset_completo_com_espera()):
+                        if not session.recuperar_sessao():
                             return len(baixadas)
                         break
                     if falhas_consecutivas >= 3:
@@ -869,7 +939,7 @@ class NfceBatchExtractor:
                             falhas_consecutivas,
                             company.nome,
                         )
-                        if not (session.renovar_login() or session.reset_completo_com_espera()):
+                        if not session.recuperar_sessao():
                             return len(baixadas)
                         break
             finally:

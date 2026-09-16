@@ -1,5 +1,16 @@
 # Changelog
 
+## [2026-09-16] — Versão 2.11.0
+
+### Adicionado
+- **NFC-e: 3ª camada de recuperação de sessão para lotes longos.** Se o relogin leve (`renovar_login`) e o protocolo de recuperação total (`reset_completo_com_espera`, 4 min de espera) falharem os dois, o código desistia da empresa atual — e, se a instabilidade persistisse, de todas as empresas seguintes do lote também (cada uma bateria na mesma sessão quebrada e desistiria de novo, silenciosamente). Novo `NfceSessionManager.recuperar_sessao()` encadeia as duas camadas existentes e, se ambas falharem, cai no mesmo retry indefinido e cancelável de `autenticar()` (v2.6.6) — nunca mais abandona o lote por conta de sessão, só por cancelamento explícito do usuário.
+- **NFC-e: nova aba "Colar chaves"** na tela do modo, alternativa a apontar pasta/arquivo — `extract_nfce_keys_from_text` extrai sequências de 44 dígitos (modelo 65) do texto colado, `group_nfce_keys_by_cnpj` agrupa pelo CNPJ embutido em cada chave. Como chave colada não tem nome de arquivo de origem, a direção (Saída/Entrada) não é detectada automaticamente — um seletor opcional na própria aba classifica o lote colado inteiro, ou deixa sem classificar.
+
+### Corrigido
+- **NF-e: dedup (`arquivos_ja_existem`) agora é recursivo na pasta da empresa**, não só no caminho exato com a subpasta de direção — mesma lógica que o `NfceDownloadManager.ja_baixado` do NFC-e já tinha desde a v2.10.0. Evita rebaixar uma chave que foi salva antes com uma classificação de direção diferente (Notas de Saída ↔ Notas de Entrada).
+
+Itens inspirados numa segunda comparação com dois documentos de referência de robôs equivalentes (NFC-e e a validação de migração de NF-e) — ver histórico de decisão sobre por que o NF-e usa `undetected_chromedriver` em vez do Playwright descrito no segundo documento (`brain/2026-08-19-nfe-playwright-nao-integrado.md`, `brain/2026-08-20-nfe-meudanfe-integrado.md`): essa parte não foi portada de propósito.
+
 ## [2026-09-16] — Versão 2.10.0
 
 ### Adicionado

@@ -230,15 +230,34 @@
             <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfce-base" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
           </div>
         </label>
-        <label class="flex flex-col gap-xs">
-          <span class="text-body-sm font-body-sm text-on-surface-variant">Pasta de chaves (44 dígitos)</span>
-          <div class="flex">
-            <input class="flex-1 siga-form-field rounded-l px-sm py-2 text-body-sm bg-white min-w-0" id="nfce-keys-folder" readonly type="text">
-            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfce-keys" title="Escolher uma pasta" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
-            <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfce-keys-file" title="Ou escolher um arquivo .xlsx único" type="button"><span class="material-symbols-outlined text-[18px] align-middle">description</span></button>
+        <div class="flex flex-col gap-xs">
+          <span class="text-body-sm font-body-sm text-on-surface-variant">Chaves de acesso (44 dígitos)</span>
+          <div class="flex border-b border-outline-variant/30" data-tabs="nfce-keys">
+            <button class="input-tab px-sm py-1 text-body-sm font-body-sm border-b-2 border-transparent" data-tab="file" type="button">Pasta/arquivo</button>
+            <button class="input-tab px-sm py-1 text-body-sm font-body-sm border-b-2 border-transparent" data-tab="manual" type="button">Colar chaves</button>
           </div>
-          <span class="text-[10px] text-on-surface-variant leading-snug">Aceita uma pasta de resultado do SIGA (reconhece as subpastas "NFC-e" automaticamente), um arquivo .xlsx único solto em qualquer lugar, ou uma planilha nomeada com o CNPJ.</span>
-        </label>
+
+          <div class="flex flex-col gap-xs" data-tab-panel="nfce-keys-file">
+            <div class="flex">
+              <input class="flex-1 siga-form-field rounded-l px-sm py-2 text-body-sm bg-white min-w-0" id="nfce-keys-folder" readonly type="text">
+              <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfce-keys" title="Escolher uma pasta" type="button"><span class="material-symbols-outlined text-[18px] align-middle">folder_open</span></button>
+              <button class="bg-surface-container-high border border-l-0 border-outline-variant/50 rounded-r px-3 hover:bg-surface-variant transition-colors" data-action="pick-nfce-keys-file" title="Ou escolher um arquivo .xlsx único" type="button"><span class="material-symbols-outlined text-[18px] align-middle">description</span></button>
+            </div>
+            <span class="text-[10px] text-on-surface-variant leading-snug">Aceita uma pasta de resultado do SIGA (reconhece as subpastas "NFC-e" automaticamente), um arquivo .xlsx único solto em qualquer lugar, ou uma planilha nomeada com o CNPJ.</span>
+          </div>
+
+          <div class="flex flex-col gap-xs" data-tab-panel="nfce-keys-manual" hidden>
+            <textarea class="siga-form-field rounded px-sm py-2 text-body-sm font-console-text bg-white h-20 resize-none" id="nfce-manual-keys" placeholder="Cole uma chave de 44 dígitos por linha, ou separadas por espaço/vírgula" spellcheck="false"></textarea>
+            <label class="flex flex-col gap-xs">
+              <span class="text-[10px] text-on-surface-variant">Direção (opcional — sem nome de arquivo de origem, não dá pra detectar sozinho)</span>
+              <select class="siga-form-field rounded px-sm py-1 text-body-sm bg-white" id="nfce-manual-direcao">
+                <option value="">Não classificar</option>
+                <option value="saida">Notas de Saída</option>
+                <option value="entrada">Notas de Entrada</option>
+              </select>
+            </label>
+          </div>
+        </div>
         <label class="flex flex-col gap-xs">
           <span class="text-body-sm font-body-sm text-on-surface-variant">Pasta de saída dos XMLs</span>
           <div class="flex">
