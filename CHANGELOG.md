@@ -1,5 +1,14 @@
 # Changelog
 
+## [2026-09-16] — Versão 2.11.4
+
+### Corrigido
+- **SIGA (Informações Fiscais): detalhamento de NF-e e CT-e vinha misturando documentos autorizados com cancelados/denegados no mesmo arquivo.** O clique de abertura do mês (`_open_reference_month`) mirava sempre o NOME do mês, que abre um detalhamento com todas as categorias juntas — confirmado ao vivo com casos reais: uma NF-e cancelada (nota 590) misturada com autorizadas no relatório "Interestadual" de Agosto/2026, e um CT-e cancelado (nº 1170) misturado com autorizados no relatório de Janeiro/2026. O SIGA já oferece nativamente o recorte certo: clicar na QTD **dentro da coluna** "Autorizadas"/"Autorizados" (em vez do nome do mês/categoria) faz o próprio portal devolver só aquela categoria.
+  - Novos `_collect_grouped_indicator_metrics`/`_get_grouped_indicator_metric`/`_click_group_cell` (`siga_extractor.py`) localizam a coluna certa pelo cabeçalho (resolvendo `rowspan`/`colspan` do cabeçalho de 3 linhas da tabela "Indicadores por Mês" — "MÊS" tem `rowspan=3`), em vez de ler sempre as 2 primeiras colunas de dado.
+  - `open_reference_month_if_positive` ganhou `gate_group_keyword`/`open_group_keyword`: o gate (decidir se abre o mês) agora sempre olha a coluna "Autorizadas/Autorizados"; para CT-e/NFC-e (`detail_mode="authorized"`) o clique de abertura também vai direto na QTD dessa coluna, pulando o detalhamento misto por completo. Para NF-e (`detail_mode="reports"`) o clique do mês continua no nome (para revelar Interna/Interestadual/Externa), mas `_select_positive_reports`/`_request_report_details_for_profile` agora leem/clicam a mesma coluna "Autorizadas" dentro de cada recorte geográfico.
+  - Mantém um fallback para o comportamento antigo (clique no nome da linha) se a coluna não for localizada, para não travar o lote numa eventual mudança de layout do SIGA.
+  - Não afeta os modos NF-e (Meu DANFE)/NFC-e a jusante: eles localizam a chave pela coluna "Chave NF-e" (por cabeçalho) e a direção Saída/Entrada por "Emissor"/"Destinatario" no nome do arquivo — nenhum dos dois muda com essa correção, só o conteúdo das linhas passa a vir sempre autorizado.
+
 ## [2026-09-16] — Versão 2.11.3
 
 ### Alterado

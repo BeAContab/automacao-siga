@@ -1081,6 +1081,19 @@ class SigaContributorExtractor:
                 page,
                 month_reference,
                 require_positive_value=tab_config.month_requires_positive_value,
+                # O gate sempre olha a coluna "Autorizadas/Autorizados" (nao mais a
+                # primeira coluna bruta "Emitidas/Emitidos") -- um mes com movimento
+                # bruto mas zero autorizado nao deveria nem tentar abrir/baixar nada.
+                gate_group_keyword="autorizad",
+                # No modo "reports" (NF-e) o clique de abertura continua no NOME do
+                # mes, pois e isso que revela as categorias Interna/Interestadual/
+                # Externa (`_select_positive_reports`/`_click_report_by_name` ja
+                # filtram por "autorizad" nesse nivel). Nos demais modos (CT-e/NFC-e,
+                # sem essa quebra por categoria), abrir clicando direto na QTD da
+                # coluna "Autorizadas/Autorizados" faz o SIGA devolver o detalhamento
+                # ja filtrado, sem misturar cancelados/denegados -- confirmado ao vivo
+                # em 16/09/2026.
+                open_group_keyword=None if tab_config.detail_mode == "reports" else "autorizad",
             )
             if not month_decision.opened:
                 LOGGER.info(
@@ -1924,14 +1937,27 @@ class SigaContributorExtractor:
         page: Page,
         month_reference: str,
         require_positive_value: bool = True,
+        gate_group_keyword: str | None = None,
+        open_group_keyword: str | None = None,
     ) -> MonthOpenDecision:
+        """Verifica o QTD/VALOR do mes e o abre se houver movimento suficiente.
+
+        `gate_group_keyword`/`open_group_keyword` selecionam, respectivamente, de qual
+        GRUPO de colunas (ex.: "autorizad", que casa "Autorizadas"/"Autorizados") ler a
+        metrica de decisao e qual QTD clicar para abrir -- `None` mantem o comportamento
+        antigo (primeira coluna de dados / clique no nome do mes). Ver `_click_group_cell`
+        para o porque de clicar na QTD em vez do nome do mes.
+        """
         LOGGER.info("Verificando o mês de referência %s antes de abri-lo", month_reference)
         self._wait_for_month_reference_table(page, month_reference)
         metric = None
         last_error: TimeoutError | None = None
         for attempt in range(1, 7):
             try:
-                metric = self._get_indicator_metric(page, month_reference)
+                if gate_group_keyword:
+                    metric = self._get_grouped_indicator_metric(page, month_reference, gate_group_keyword)
+                else:
+                    metric = self._get_indicator_metric(page, month_reference)
             except TimeoutError as exc:
                 last_error = exc
                 metric = None
@@ -1964,7 +1990,11 @@ class SigaContributorExtractor:
                 ),
             )
 
-        self._open_reference_month(page, month_reference)
+        opened_by_group = bool(open_group_keyword) and self._click_group_cell(
+            page, month_reference, open_group_keyword
+        )
+        if not opened_by_group:
+            self._open_reference_month(page, month_reference)
         return MonthOpenDecision(
             month_reference=month_reference,
             qtd=metric.qtd,
@@ -2260,7 +2290,10 @@ class SigaContributorExtractor:
         LOGGER.info("Selecionando relatórios com QTD maior que zero")
         narrate("Selecionando os relatórios com movimento (quantidade maior que zero)...")
         reports = ("Interna", "Interestadual", "Externa")
-        metrics = self._collect_indicator_metrics(page, reports)
+        # Lê da coluna "Autorizadas" (não da primeira coluna/"Emitidas") -- um recorte
+        # geográfico com movimento bruto mas zero autorizadas não deveria gerar pedido de
+        # download nenhum (o resultado seria vazio ou, pior, misturado com canceladas).
+        metrics = self._collect_grouped_indicator_metrics(page, reports, "autorizad")
         selected_reports: list[str] = []
         for report_name in reports:
             metric = metrics.get(report_name.lower())
@@ -2325,8 +2358,15 @@ class SigaContributorExtractor:
 
         requests: list[PendingDetailRequest] = []
         for report_name in positive_reports:
-            self._click_report_by_name(page, report_name)
+            # Clica na QTD da coluna "Autorizadas" desse recorte geográfico (não no nome
+            # da linha) para que o SIGA já devolva o detalhamento filtrado, sem misturar
+            # canceladas/denegadas -- se a página não tiver essa estrutura de colunas (ex.:
+            # mudança de layout do SIGA), cai para o clique antigo na linha como rede de
+            # segurança, mantendo o comportamento anterior em vez de travar o lote.
+            if not self._click_group_cell(page, report_name, "autorizad"):
+                self._click_report_by_name(page, report_name)
             page.wait_for_timeout(500)
+            self._wait_for_detail_xlsx_button_ready(page)
             tela_aba = self._build_download_screen_name(
                 month_reference=month_reference,
                 tab_name=tab_config.tab_name,
@@ -2483,6 +2523,198 @@ class SigaContributorExtractor:
         if not metric:
             return None
         return IndicatorMetric(name=name, qtd=float(metric["qtd"]), valor=float(metric["valor"]))
+
+    def _collect_grouped_indicator_metrics(
+        self, page: Page, names: tuple[str, ...], group_keyword: str
+    ) -> dict[str, dict[str, float]]:
+        """Como `_collect_indicator_metrics`, mas le o QTD/VALOR do GRUPO de colunas cujo
+        cabecalho contem `group_keyword` (ex.: "autorizad", que casa tanto "Autorizadas"
+        quanto "Autorizados"), em vez de sempre a primeira coluna de dados da tabela.
+
+        A tabela "Indicadores por Mês" do SIGA (NF-e/CT-e/NFC-e) tem cabeçalho de 3
+        `<tr>` reais: a 1ª só tem a célula "MÊS" com `rowspan=3`; a 2ª agrupa por
+        categoria (Emitidas/Emitidos, Autorizadas/Autorizados, Canceladas/Cancelados,
+        ...) usando `colspan`; a 3ª tem QTD/QTD%/VALOR dentro de cada grupo — confirmado
+        ao vivo em 16/09/2026 nas 3 abas. Por causa do `rowspan` de "MÊS", a 2ª linha do
+        cabeçalho começa sua contagem de colunas em 1, não em 0 — por isso a resolução de
+        colunas abaixo simula o grid completo (respeitando rowspan/colspan de toda
+        `<thead>`) em vez de somar colspans só da 1ª linha, que sempre dava o índice
+        errado (não contava a coluna ocupada por "MÊS").
+        """
+        script = """
+        (params) => {
+            const normalize = (value) => (value || "")
+                .normalize("NFD")
+                .replace(/[\\u0300-\\u036f]/g, "")
+                .replace(/\\s+/g, " ")
+                .trim()
+                .toLowerCase();
+            const parseNumber = (value) => {
+                const cleaned = (value || "")
+                    .replace(/\\./g, "")
+                    .replace(",", ".")
+                    .replace(/[^0-9.-]/g, "");
+                const parsed = Number(cleaned);
+                return Number.isFinite(parsed) ? parsed : 0;
+            };
+            const isVisible = (element) => {
+                if (!element) return false;
+                const style = window.getComputedStyle(element);
+                if (!style || style.visibility === "hidden" || style.display === "none") return false;
+                return !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length);
+            };
+
+            const wantedNames = new Set((params.names || []).map((item) => normalize(item)));
+            const wantedGroup = normalize(params.groupKeyword);
+            const results = {};
+
+            const tables = [...document.querySelectorAll("table")].filter(isVisible);
+            for (const table of tables) {
+                const theadRows = [...table.querySelectorAll("thead tr")];
+                if (theadRows.length < 2) continue;
+
+                // Resolve o grid completo do cabecalho (respeitando rowspan/colspan de
+                // TODAS as linhas) para achar o indice inicial e a largura do grupo
+                // pedido, em vez de assumir que a 1a linha ja contem os grupos.
+                const occupiedUntilRow = {};
+                let groupStart = -1;
+                let groupSpan = 0;
+                theadRows.forEach((row, rowIndex) => {
+                    let col = 0;
+                    const cells = [...row.querySelectorAll("th, td")];
+                    for (const cell of cells) {
+                        while ((occupiedUntilRow[col] ?? -1) > rowIndex) col += 1;
+                        const colSpan = cell.colSpan || 1;
+                        const rowSpan = cell.rowSpan || 1;
+                        const text = normalize(cell.innerText || cell.textContent);
+                        if (groupStart === -1 && colSpan > 1 && text.includes(wantedGroup)) {
+                            groupStart = col;
+                            groupSpan = colSpan;
+                        }
+                        const freeFromRow = rowIndex + rowSpan;
+                        for (let c = col; c < col + colSpan; c++) occupiedUntilRow[c] = freeFromRow;
+                        col += colSpan;
+                    }
+                });
+                if (groupStart === -1 || groupSpan < 1) continue;
+
+                const qtdIndex = groupStart;
+                const valorIndex = groupStart + groupSpan - 1;
+
+                const bodyRows = [...table.querySelectorAll("tbody tr")];
+                for (const row of bodyRows) {
+                    const cells = [...row.querySelectorAll("td, th")]
+                        .map((cell) => (cell.innerText || cell.textContent || "").trim())
+                        .filter(Boolean);
+                    if (cells.length <= valorIndex) continue;
+                    const name = normalize(cells[0]);
+                    if (!wantedNames.has(name)) continue;
+                    results[name] = {
+                        qtd: parseNumber(cells[qtdIndex]),
+                        valor: parseNumber(cells[valorIndex]),
+                    };
+                }
+            }
+            return results;
+        }
+        """
+        try:
+            result = page.evaluate(script, {"names": list(names), "groupKeyword": group_keyword})
+        except Error:
+            result = {}
+        return result if isinstance(result, dict) else {}
+
+    def _get_grouped_indicator_metric(
+        self, page: Page, name: str, group_keyword: str
+    ) -> IndicatorMetric | None:
+        metrics = self._collect_grouped_indicator_metrics(page, (name,), group_keyword)
+        metric = metrics.get(strip_accents(name).lower())
+        if not metric:
+            return None
+        return IndicatorMetric(name=name, qtd=float(metric["qtd"]), valor=float(metric["valor"]))
+
+    def _click_group_cell(self, page: Page, row_name: str, group_keyword: str) -> bool:
+        """Clica na célula de QTD do grupo de colunas indicado (`group_keyword`, ex.:
+        "autorizad") na linha `row_name` (nome do mês, ou de uma categoria já expandida
+        como "Interna"/"Interestadual"/"Externa").
+
+        Clicar no NOME da linha (comportamento anterior de `_open_reference_month`/
+        `_click_report_by_name`) abre um detalhamento com TODAS as categorias misturadas
+        (autorizados + cancelados + denegados); clicar na QTD dentro da coluna certa faz o
+        próprio SIGA devolver só aquela categoria, já filtrada — confirmado ao vivo em
+        16/09/2026 (NF-e e CT-e, papel Emissor/Emitente).
+        """
+        script = """
+        (params) => {
+            const normalize = (value) => (value || "")
+                .normalize("NFD")
+                .replace(/[\\u0300-\\u036f]/g, "")
+                .replace(/\\s+/g, " ")
+                .trim()
+                .toLowerCase();
+            const isVisible = (element) => {
+                if (!element) return false;
+                const style = window.getComputedStyle(element);
+                if (!style || style.visibility === "hidden" || style.display === "none") return false;
+                return !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length);
+            };
+
+            const wantedRow = normalize(params.rowName);
+            const wantedGroup = normalize(params.groupKeyword);
+
+            const tables = [...document.querySelectorAll("table")].filter(isVisible);
+            for (const table of tables) {
+                const theadRows = [...table.querySelectorAll("thead tr")];
+                if (theadRows.length < 2) continue;
+
+                // Mesma resolucao de grid usada em `_collect_grouped_indicator_metrics`
+                // (ver comentario la) -- a 1a linha do cabecalho do SIGA so tem "MES"
+                // com rowspan=3, os grupos ficam na 2a linha.
+                const occupiedUntilRow = {};
+                let groupStart = -1;
+                theadRows.forEach((row, rowIndex) => {
+                    let col = 0;
+                    const cells = [...row.querySelectorAll("th, td")];
+                    for (const cell of cells) {
+                        while ((occupiedUntilRow[col] ?? -1) > rowIndex) col += 1;
+                        const colSpan = cell.colSpan || 1;
+                        const rowSpan = cell.rowSpan || 1;
+                        const text = normalize(cell.innerText || cell.textContent);
+                        if (groupStart === -1 && colSpan > 1 && text.includes(wantedGroup)) {
+                            groupStart = col;
+                        }
+                        const freeFromRow = rowIndex + rowSpan;
+                        for (let c = col; c < col + colSpan; c++) occupiedUntilRow[c] = freeFromRow;
+                        col += colSpan;
+                    }
+                });
+                if (groupStart === -1) continue;
+
+                const bodyRows = [...table.querySelectorAll("tbody tr")];
+                for (const row of bodyRows) {
+                    const cellElements = [...row.querySelectorAll("td, th")]
+                        .filter((cell) => (cell.innerText || cell.textContent || "").trim());
+                    if (!cellElements.length) continue;
+                    const rowLabel = normalize(cellElements[0].innerText || cellElements[0].textContent);
+                    if (rowLabel !== wantedRow) continue;
+                    const targetCell = cellElements[groupStart];
+                    if (!targetCell) continue;
+                    const clickable = targetCell.querySelector("a, span, div, button") || targetCell;
+                    clickable.scrollIntoView({block: "center", inline: "center"});
+                    clickable.click();
+                    return true;
+                }
+            }
+            return false;
+        }
+        """
+        try:
+            clicked = bool(page.evaluate(script, {"rowName": row_name, "groupKeyword": group_keyword}))
+        except Error:
+            clicked = False
+        if clicked:
+            page.wait_for_timeout(1_000)
+        return clicked
 
     def _click_report_by_name(self, page: Page, report_name: str) -> None:
         report_xpath = f"xpath=//tr[./td[1][normalize-space()='{report_name}']]/td[1]"
