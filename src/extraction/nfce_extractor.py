@@ -26,7 +26,12 @@ import time
 from openpyxl import load_workbook
 
 from src.config import Settings
-from src.extraction.spreadsheet import DIRECAO_SUBPASTA, SpreadsheetRow, tipo_nota_do_nome_arquivo
+from src.extraction.spreadsheet import (
+    DIRECAO_SUBPASTA,
+    SpreadsheetRow,
+    load_cod_empresa_cnpj_base,
+    tipo_nota_do_nome_arquivo,
+)
 from src.utils.execution_control import wait_if_paused
 from src.utils.narration import narrate, narrate_error, narrate_success, narrate_warning
 from src.utils.selenium_compat import BrowserContext, Error, Page, TimeoutError, UnexpectedAlertError
@@ -704,6 +709,14 @@ class NfceBatchExtractor:
 
         mapa_cnpj_base = load_cnpj_ie_base(self.base_spreadsheet_path)
         mapa_ie_cnpj = {info.ie: cnpj for cnpj, info in mapa_cnpj_base.items() if info.ie}
+        # Rede de segurança pro COD da pasta de saída quando a planilha-base CNPJ/IE
+        # selecionada na tela não tiver essa coluna preenchida pra empresa (mesma
+        # planilha-base COD/EMPRESA/CNPJ que o modo NF-e já usa para o mesmo fim).
+        mapa_cod_empresa_cnpj = (
+            load_cod_empresa_cnpj_base(self.settings.cod_empresa_cnpj_base_path)
+            if self.settings.cod_empresa_cnpj_base_path
+            else {}
+        )
 
         results: list[NfceBatchResult] = []
         for index, spreadsheet_row in enumerate(selected_rows, start=1):
@@ -744,10 +757,16 @@ class NfceBatchExtractor:
 
             narrate("%s chave(s) a processar para %s.", len(chaves), empresa_nome)
             # Mesmo padrão "COD - EMPRESA - CNPJ" do modo SIGA (ver _build_taxpayer_folder_name
-            # em siga_extractor.py) - "SEM-COD" se a planilha-base não tiver coluna COD, igual
-            # ao fallback que o SIGA já usa quando falta o COD na própria planilha dele.
-            cod = mapa_cnpj_base.get(target_cnpj)
-            cod = (cod.cod if cod else "") or "SEM-COD"
+            # em siga_extractor.py). Prioridade do COD: 1º a planilha-base CNPJ/IE selecionada
+            # na tela; 2º a planilha-base COD/EMPRESA/CNPJ (mesma rede de segurança que o NF-e
+            # já usa), pro caso de a empresa não ter COD preenchido na primeira; por fim
+            # "SEM-COD" se nem isso resolver, igual ao fallback que o SIGA já usa.
+            info_cod = mapa_cnpj_base.get(target_cnpj)
+            cod = info_cod.cod if info_cod else ""
+            if not cod:
+                info_cod_extra = mapa_cod_empresa_cnpj.get(target_cnpj)
+                cod = info_cod_extra.cod if info_cod_extra else ""
+            cod = cod or "SEM-COD"
             empresa_dir = self.output_dir / sanitize_folder_name(f"{cod} - {empresa_nome} - {target_cnpj}")
             try:
                 baixadas = self._processar_empresa(
@@ -911,6 +930,26 @@ class NfceBatchExtractor:
                         narrate("Renovando sessão antes de continuar o lote de %s...", company.nome)
                         break
 
+                    if chave_index > 1:
+                        # O portal SEFAZ-CE só exibe de forma confiável o botão de baixar XML
+                        # na PRIMEIRA consulta feita depois de a página carregar — confirmado
+                        # ao vivo (fora da automação, direto no navegador): a partir da 2ª
+                        # consulta na mesma aba, o botão para de aparecer, mesmo com os dados
+                        # da nota já buscados com sucesso pelo próprio portal (a chamada
+                        # completa, o AngularJS recebe a resposta — só o popup não é exibido).
+                        # Recarregar antes de cada chave (menos a 1ª, já fresca por causa de
+                        # `_abrir_empresa`) evita esse travamento binário, em vez de só
+                        # descobri-lo tarde via o gatilho de falhas consecutivas abaixo.
+                        try:
+                            empresa_page.reload(wait_until="domcontentloaded", timeout=self.settings.timeout_ms)
+                            empresa_page.wait_for_timeout(1500)
+                        except (Error, TimeoutError) as exc:
+                            LOGGER.warning(
+                                "Falha ao recarregar a página de consulta para %s: %s", company.nome, exc
+                            )
+                            # Segue tentando mesmo assim; se a consulta falhar por causa
+                            # disso, cai no mesmo tratamento de falha consecutiva de sempre.
+
                     sucesso, precisa_reset = self._baixar_xml_chave(
                         context, empresa_page, chave, download_manager, direcao_por_chave.get(chave, "")
                     )
@@ -928,10 +967,11 @@ class NfceBatchExtractor:
                         break
                     if falhas_consecutivas >= 3:
                         # Mesmo gatilho do script original (erros_consecutivos >= 3 em
-                        # processar_lote_chaves, importação/NFCE/codigo-fonte/xml nfce.py):
-                        # a aba da empresa tende a degradar depois de várias consultas
-                        # seguidas na mesma página (o botão de baixar demora cada vez mais
-                        # pra aparecer) — em vez de esperar a passada inteira terminar (até
+                        # processar_lote_chaves, importação/NFCE/codigo-fonte/xml nfce.py).
+                        # Com o reload por chave acima, isso deixa de ser a defesa principal
+                        # contra o botão não aparecer (causa raiz já coberta) e vira rede de
+                        # segurança para outros problemas (sessão instável, erro de rede no
+                        # próprio reload) — em vez de esperar a passada inteira terminar (até
                         # centenas de chaves), força a recuperação e reabre a empresa do
                         # zero assim que 3 falhas seguidas são detectadas.
                         narrate_warning(

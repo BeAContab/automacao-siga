@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026-09-16] — Versão 2.11.2
+
+### Corrigido
+- **NFC-e: pasta de saída caindo em `SEM-COD` mesmo quando o COD já existe na `COD EMP CNPJ.xlsx`.** O COD da pasta de saída era resolvido só pela planilha-base CNPJ/IE selecionada na tela (`load_cnpj_ie_base`) — se essa planilha específica não tivesse a coluna COD preenchida pra uma empresa, caía direto em `SEM-COD`, mesmo a `COD EMP CNPJ.xlsx` (a base de clientes inteira do escritório, já usada como rede de segurança no modo NF-e desde a v2.8.0) tendo o COD certo. `run_batch_in_context` (`nfce_extractor.py`) passa a cair nessa segunda base antes de desistir para `SEM-COD` — caso real testado: CNPJ 13484901000148 (ACADEMY BEAUTY), sem COD na planilha-base CNPJ/IE, resolvido corretamente como `1065` via `COD EMP CNPJ.xlsx`.
+
+## [2026-09-16] — Versão 2.11.1
+
+### Corrigido
+- **NFC-e: causa raiz do "nota encontrada, mas o botão de baixar XML não apareceu a tempo" identificada e corrigida.** Investigação ao vivo direto no navegador (fora da automação) confirmou que o portal SEFAZ-CE só exibe de forma confiável o popup/botão de download na **primeira** consulta feita depois da página carregar — a partir da 2ª consulta na mesma aba, o botão simplesmente não aparece mais, mesmo com a chamada ao portal completando com sucesso e os dados da nota chegando certinho no controller Angular da página (não é lentidão nem timeout: o botão genuinamente não é renderizado, não importa quanto se espere). Confirmado de forma determinística: recarregar a página resolve — a mesma chave que falhava repetidamente passa a funcionar em ~200ms logo após o reload.
+  - `_processar_empresa` (`nfce_extractor.py`) agora recarrega a página de consulta antes de cada chave, exceto a primeira de cada passada (essa já sai fresca por causa de `_abrir_empresa`). O gatilho de 3 falhas consecutivas (v2.6.6) continua existindo, mas vira rede de segurança para outros problemas (sessão instável, erro de rede no próprio reload) — deixa de ser a única defesa contra esse travamento específico, que antes só era descoberto depois de ~1 minuto desperdiçado em timeouts.
+  - Validado com testes isolados: reload chamado em todas as chaves menos a primeira de cada passada; falha no reload não trava o lote.
+
 ## [2026-09-16] — Versão 2.11.0
 
 ### Adicionado
