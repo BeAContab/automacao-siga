@@ -371,8 +371,16 @@ def extrair_registros_planilha_nfe(
 
 
 def arquivos_ja_existem(pasta_destino: Path, chave: str) -> bool:
-    """True se o PDF e o XML finais da chave já existem na pasta de destino."""
-    return (pasta_destino / "PDF" / f"{chave}.pdf").exists() and (pasta_destino / "XML" / f"{chave}.xml").exists()
+    """True se o PDF e o XML finais da chave já existem — busca recursiva a partir da
+    pasta da EMPRESA (não só na subpasta de direção exata calculada agora), já que a
+    mesma chave pode ter sido salva antes com uma classificação diferente de direção
+    (Notas de Saída <-> Notas de Entrada) ou antes dessa separação existir. Mesma lógica
+    de `NfceDownloadManager.ja_baixado` no modo NFC-e.
+    """
+    raiz = pasta_destino.parent if pasta_destino.name in DIRECAO_SUBPASTA.values() else pasta_destino
+    if not raiz.exists():
+        return False
+    return any(raiz.rglob(f"{chave}.pdf")) and any(raiz.rglob(f"{chave}.xml"))
 
 
 def salvar_documentos_fiscais(pasta_destino: Path, chave: str, documento: DocumentoFiscalBaixado) -> tuple[Path, Path]:

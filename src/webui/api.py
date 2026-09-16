@@ -579,11 +579,17 @@ class Api:
             return _fail(f"Planilha-base não encontrada:\n{base_spreadsheet}")
 
         keys_folder_raw = str(payload.get("keys_folder") or "").strip()
-        if not keys_folder_raw:
-            return _fail("Selecione a pasta com as planilhas de chaves por empresa.", level="warning")
-        keys_folder = Path(keys_folder_raw).expanduser()
-        if not _is_folder_or_xlsx(keys_folder):
-            return _fail(f"Pasta/arquivo de chaves não encontrado:\n{keys_folder}")
+        manual_keys_text = str(payload.get("manual_keys_text") or "").strip()
+        manual_direcao = str(payload.get("manual_direcao") or "").strip()
+        if not keys_folder_raw and not manual_keys_text:
+            return _fail(
+                "Selecione a pasta/arquivo de chaves, ou cole as chaves manualmente.", level="warning"
+            )
+        keys_folder: Path | None = None
+        if keys_folder_raw:
+            keys_folder = Path(keys_folder_raw).expanduser()
+            if not _is_folder_or_xlsx(keys_folder):
+                return _fail(f"Pasta/arquivo de chaves não encontrado:\n{keys_folder}")
 
         # CPF/senha vivem só neste atributo, em memória, pelo tempo da execução — nunca
         # são persistidos (nem .env, nem planilha, nem log).
@@ -611,6 +617,8 @@ class Api:
                     output_dir=self._settings.output_dir,
                     keys_folder=keys_folder,
                     base_spreadsheet_path=base_spreadsheet,
+                    manual_keys_text=manual_keys_text or None,
+                    manual_direcao=manual_direcao,
                 )
                 with BrowserSession(self._settings) as context:
                     rows = extractor.discover_selectable_companies(
@@ -669,11 +677,17 @@ class Api:
             return _fail(f"Não foi possível criar a pasta de saída:\n{exc}")
 
         keys_folder_raw = str(payload.get("keys_folder") or "").strip()
-        if not keys_folder_raw:
-            return _fail("Selecione a pasta com as planilhas de chaves por empresa.", level="warning")
-        keys_folder = Path(keys_folder_raw).expanduser()
-        if not _is_folder_or_xlsx(keys_folder):
-            return _fail(f"Pasta/arquivo de chaves não encontrado:\n{keys_folder}")
+        manual_keys_text = str(payload.get("manual_keys_text") or "").strip()
+        manual_direcao = str(payload.get("manual_direcao") or "").strip()
+        if not keys_folder_raw and not manual_keys_text:
+            return _fail(
+                "Selecione a pasta/arquivo de chaves, ou cole as chaves manualmente.", level="warning"
+            )
+        keys_folder: Path | None = None
+        if keys_folder_raw:
+            keys_folder = Path(keys_folder_raw).expanduser()
+            if not _is_folder_or_xlsx(keys_folder):
+                return _fail(f"Pasta/arquivo de chaves não encontrado:\n{keys_folder}")
 
         raw_rows = payload.get("rows") or []
         if not raw_rows:
@@ -688,7 +702,9 @@ class Api:
 
         narrate("Execução do modo NFC-e iniciada pela interface gráfica.")
         return self._start_worker(
-            lambda: self._execute_nfce(selected_rows, output_dir, keys_folder, base_spreadsheet, cpf, senha),
+            lambda: self._execute_nfce(
+                selected_rows, output_dir, keys_folder, base_spreadsheet, cpf, senha, manual_keys_text, manual_direcao
+            ),
             output_dir,
             "Execução NFC-e iniciada. Aguarde a conclusão no log.",
             "Execução NFC-e finalizada.",
@@ -699,10 +715,12 @@ class Api:
         self,
         selected_rows: list[SpreadsheetRow],
         output_dir: Path,
-        keys_folder: Path,
+        keys_folder: Path | None,
         base_spreadsheet: Path | None,
         cpf: str,
         senha: str,
+        manual_keys_text: str = "",
+        manual_direcao: str = "",
     ) -> None:
         from src.extraction.nfce_extractor import NfceBatchExtractor
 
@@ -721,6 +739,8 @@ class Api:
             output_dir=output_dir,
             keys_folder=keys_folder,
             base_spreadsheet_path=base_spreadsheet,
+            manual_keys_text=manual_keys_text or None,
+            manual_direcao=manual_direcao,
         )
         with BrowserSession(self._settings) as context:
             results = extractor.run_batch_in_context(

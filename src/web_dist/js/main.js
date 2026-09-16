@@ -34,6 +34,22 @@
   }
 
   /**
+   * Le a fonte de chaves do NFC-e conforme a aba ativa ("Pasta/arquivo" ou "Colar
+   * chaves") - devolve so os campos relevantes pro payload da API, deixando a validacao
+   * de negocio (obrigatoriedade, formato) pro lado Python, como o resto da interface ja faz.
+   */
+  function nfceKeysField() {
+    const tab = S.state.inputTab['nfce-keys'] || 'file';
+    if (tab === 'manual') {
+      return {
+        manual_keys_text: document.getElementById('nfce-manual-keys').value.trim(),
+        manual_direcao: val('nfce-manual-direcao'),
+      };
+    }
+    return { keys_folder: val('nfce-keys-folder') };
+  }
+
+  /**
    * O modo 'chain' (cadeia completa) reaproveita a tela e o estado ('rows.siga' etc.)
    * do modo 'siga' inteiros - so acrescenta um bloco de campos extras. Onde o codigo
    * precisa de uma chave de estado/DOM ligada a grade (renderGrid, limpar linhas...),
@@ -310,9 +326,9 @@
       await Modal.alert('Selecione a planilha-base IE/CNPJ.', 'warning');
       return;
     }
-    const keysFolder = val('nfce-keys-folder');
-    if (!keysFolder) {
-      await Modal.alert('Selecione a pasta com as planilhas de chaves por empresa.', 'warning');
+    const keysField = nfceKeysField();
+    if (!keysField.keys_folder && !keysField.manual_keys_text) {
+      await Modal.alert('Selecione a pasta/arquivo de chaves, ou cole as chaves manualmente.', 'warning');
       return;
     }
 
@@ -324,7 +340,7 @@
       cpf: cpf,
       senha: senha,
       base_spreadsheet: baseSpreadsheet,
-      keys_folder: keysFolder,
+      ...keysField,
     });
     if (result && !result.ok) {
       if (btn) btn.disabled = false;
@@ -477,6 +493,7 @@
   async function boot() {
     wireEvents();
     setInputTab('siga', 'import');
+    setInputTab('nfce-keys', 'file');
 
     const initial = await Api.getInitialState();
     MODE_LABELS = initial.mode_labels;

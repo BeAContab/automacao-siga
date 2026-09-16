@@ -19,6 +19,18 @@
     return node ? node.value.trim() : '';
   }
 
+  /** Mesma leitura de aba de chaves do NFC-e usada em main.js (loadNfceCompanies). */
+  function nfceKeysField() {
+    const tab = S.state.inputTab['nfce-keys'] || 'file';
+    if (tab === 'manual') {
+      return {
+        manual_keys_text: document.getElementById('nfce-manual-keys').value.trim(),
+        manual_direcao: val('nfce-manual-direcao'),
+      };
+    }
+    return { keys_folder: val('nfce-keys-folder') };
+  }
+
   /** Traduz {ok:false, error, level} devolvido pelo Python num modal, e devolve false. */
   async function handleBackendResult(result) {
     if (result && result.ok) return true;
@@ -85,9 +97,9 @@
       await Modal.alert('Selecione a pasta de saída dos XMLs de NFC-e.', 'warning');
       return false;
     }
-    const keysFolder = val('nfce-keys-folder');
-    if (!keysFolder) {
-      await Modal.alert('Selecione a pasta com as planilhas de chaves por empresa.', 'warning');
+    const keysField = nfceKeysField();
+    if (!keysField.keys_folder && !keysField.manual_keys_text) {
+      await Modal.alert('Selecione a pasta/arquivo de chaves, ou cole as chaves manualmente.', 'warning');
       return false;
     }
     const selection = S.collectNfceSelection();
@@ -99,7 +111,7 @@
     return handleBackendResult(await Api.startNfce({
       rows: selection,
       output_dir: outputDir,
-      keys_folder: keysFolder,
+      ...keysField,
       base_spreadsheet: val('nfce-base-spreadsheet'),
       // CPF/senha trafegam so nesta chamada e vivem em memoria do lado Python pelo
       // tempo da execucao - nunca sao gravados em .env, planilha ou log.
