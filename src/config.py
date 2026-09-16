@@ -155,7 +155,7 @@ class Settings:
     # Quando o login falha porque o portal detecta outra sessão ativa com o mesmo CPF
     # (ou um "Tempo limite excedido" que o código não consegue distinguir disso), o login
     # passa a retentar indefinidamente nesse intervalo, em vez de desistir na hora.
-    nfce_login_retry_wait_seconds: int = 300
+    nfce_login_retry_wait_seconds: int = 30
 
     # --- Modo NF-e (Meu DANFE): portagem de importação/NFE 2/automacao-meu-danfe/main.py ---
     # Site público de terceiros (consulta por chave de acesso, sem login/credenciais).

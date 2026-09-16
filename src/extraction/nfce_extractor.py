@@ -346,7 +346,7 @@ class NfceSessionManager:
 
         Quando o portal recusa o login por já existir outra sessão ativa com o mesmo CPF
         (ou um "Tempo limite excedido" equivalente — ver `_describe_unexpected_alert`),
-        não desiste: espera `nfce_login_retry_wait_seconds` (padrão 5min) e tenta de novo,
+        não desiste: espera `nfce_login_retry_wait_seconds` (padrão 30s) e tenta de novo,
         indefinidamente, até dar certo ou até o cancelamento cooperativo ser sinalizado.
         """
         # Checa a pagina ATUAL antes de navegar para qualquer lugar: se esta chamada

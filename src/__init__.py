@@ -1,3 +1,3 @@
 """SIGA automation package."""
 
-__version__ = "2.11.2"
+__version__ = "2.11.3"

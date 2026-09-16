@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-09-16] — Versão 2.11.3
+
+### Alterado
+- **NFC-e: intervalo de retentativa de login reduzido de 5min para 30s.** Quando o portal recusa o login (sessão duplicada com o mesmo CPF ou "Tempo limite excedido"), `NfceSessionManager` esperava `nfce_login_retry_wait_seconds` (padrão 300s) antes de tentar de novo — tempo ocioso desnecessário num retry que já é indefinido e cancelável. Novo padrão: 30s (`src/config.py`).
+
 ## [2026-09-16] — Versão 2.11.2
 
 ### Corrigido
