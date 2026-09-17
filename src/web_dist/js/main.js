@@ -13,6 +13,7 @@
  *   window.sigaOnNfceCompaniesLoaded({rows})      - empresas do portal carregadas (modo NFC-e)
  *   window.sigaOnExecutionFinished({status})      - fim da execucao (sucesso ou falha)
  *   window.sigaSetProgress(percent)               - barra de progresso
+ *   window.sigaSetStageProgress({stage, percent}) - barra de progresso dedicada de uma etapa (Cadeia Completa)
  *   window.sigaSetStatus(text)                    - texto do rodape
  *   window.sigaShowMessage({message, level})      - erro vindo da thread de trabalho
  * =====================================================================================
@@ -72,6 +73,12 @@
     // Campos extras da cadeia completa (NF-e/NFC-e) só aparecem no modo 'chain'.
     document.querySelectorAll('[data-chain-only]').forEach((node) => {
       node.hidden = mode !== 'chain';
+    });
+
+    // Barra de progresso única (demais modos) some no modo 'chain', que usa 3 barras
+    // dedicadas (uma por etapa) em vez de uma faixa só dividida entre elas.
+    document.querySelectorAll('[data-hide-in-chain]').forEach((node) => {
+      node.hidden = mode === 'chain';
     });
 
     document.querySelectorAll('.nav-item').forEach((btn) => {
@@ -475,10 +482,14 @@
   window.sigaOnExecutionFinished = function (payload) {
     setRunning(false);
     R.setProgress(100);
+    if (S.state.mode === 'chain') {
+      ['siga', 'nfe', 'nfce'].forEach((stage) => R.setStageProgress(stage, 100));
+    }
     R.setStatus((payload && payload.status) || 'Execução finalizada.');
   };
 
   window.sigaSetProgress = function (percent) { R.setProgress(percent); };
+  window.sigaSetStageProgress = function (payload) { R.setStageProgress(payload.stage, payload.percent); };
   window.sigaSetStatus = function (text) { R.setStatus(text); };
   window.sigaShowMessage = function (payload) {
     // Reabilita o botao de carregar empresas do NFC-e caso a falha assincrona tenha

@@ -192,6 +192,19 @@
     if (label) label.textContent = Math.round(value) + '%';
   }
 
+  /**
+   * Barra de progresso dedicada de UMA etapa da Cadeia Completa (siga/nfe/nfce),
+   * independente das outras duas — só usada no modo 'chain' (ver [data-chain-only]
+   * em index.html); os outros modos continuam só com `setProgress` (barra única).
+   */
+  function setStageProgress(stage, percent) {
+    const value = Math.max(0, Math.min(100, Number(percent) || 0));
+    const bar = document.getElementById('progress-' + stage + '-bar');
+    const label = document.getElementById('progress-' + stage + '-label');
+    if (bar) bar.style.width = value + '%';
+    if (label) label.textContent = Math.round(value) + '%';
+  }
+
   function setStatus(text) {
     const node = document.getElementById('status-text');
     if (node) node.textContent = text;
@@ -204,6 +217,7 @@
     appendLogLine: appendLogLine,
     clearLog: clearLog,
     setProgress: setProgress,
+    setStageProgress: setStageProgress,
     setStatus: setStatus,
   };
 })();

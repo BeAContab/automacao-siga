@@ -17,6 +17,7 @@ portagem é reescrita manual — aqui as credenciais só vêm de `Settings.nfce_
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 import logging
 import re
 import shutil
@@ -695,7 +696,12 @@ class NfceBatchExtractor:
         selected_rows: list[SpreadsheetRow],
         cancel_event: threading.Event | None = None,
         pause_event: threading.Event | None = None,
+        on_row_processed: Callable[[int, int], None] | None = None,
     ) -> list[NfceBatchResult]:
+        """`on_row_processed`, se informado, é chamado com `(empresas_concluidas, total_empresas)`
+        ao final de cada empresa processada (sucesso, falha ou pulada) — mesmo padrão já usado
+        em `SigaContributorExtractor.run_batch_from_spreadsheet_in_context`, para alimentar a
+        barra de progresso dedicada da etapa NFC-e na Cadeia Completa."""
         page = context.pages[0] if context.pages else context.new_page()
         session = NfceSessionManager(self.settings, page, cancel_event=cancel_event, pause_event=pause_event)
 
@@ -735,10 +741,18 @@ class NfceBatchExtractor:
                 spreadsheet_row.cnpj,
             )
 
+            # Chamado ao final de CADA empresa (sucesso, falha ou pulada), não só no
+            # caminho feliz -- é assim que a barra de progresso dedicada da etapa NFC-e
+            # (Cadeia Completa) acompanha o lote inteiro, inclusive empresas puladas.
+            def _emit_progress() -> None:
+                if on_row_processed is not None:
+                    on_row_processed(index, len(selected_rows))
+
             company = self._match_company(empresas, target_cnpj, mapa_ie_cnpj)
             if company is None:
                 narrate_warning("Empresa %s não encontrada na sessão do portal SEFAZ-CE.", empresa_nome)
                 results.append(NfceBatchResult(spreadsheet_row, status="sem_empresa"))
+                _emit_progress()
                 continue
 
             chaves_por_direcao = self._chaves_para_cnpj(target_cnpj)
@@ -750,6 +764,7 @@ class NfceBatchExtractor:
                     empresa_nome,
                 )
                 results.append(NfceBatchResult(spreadsheet_row, status="sem_chaves"))
+                _emit_progress()
                 continue
             direcao_por_chave = {
                 chave: direcao for direcao, lista in chaves_por_direcao.items() for chave in lista
@@ -787,6 +802,7 @@ class NfceBatchExtractor:
                 LOGGER.exception("Falha inesperada ao processar %s no modo NFC-e", empresa_nome)
                 narrate_error("Falha inesperada ao processar %s: %s", empresa_nome, exc)
                 results.append(NfceBatchResult(spreadsheet_row, status="erro", chaves_total=len(chaves)))
+                _emit_progress()
                 continue
 
             status = "concluido" if baixadas == len(chaves) else "parcial"
@@ -802,6 +818,7 @@ class NfceBatchExtractor:
                     chaves_baixadas=baixadas,
                 )
             )
+            _emit_progress()
 
         return results
 

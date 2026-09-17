@@ -953,6 +953,7 @@ class Api:
         chrome_path: str,
     ) -> None:
         from src.extraction.chain_extractor import ChainBatchExtractor
+        from src.extraction.meudanfe_extractor import listar_planilhas_nfe
 
         output_spreadsheet_path = self._prepare_results_spreadsheet(selected_rows, manual_mode, spreadsheet_path)
 
@@ -976,17 +977,37 @@ class Api:
             "nfe": "Etapa 2 de 3: extração NF-e (Meu DANFE) em andamento...",
             "nfce": "Etapa 3 de 3: extração NFC-e em andamento...",
         }
+        # Total de planilhas da etapa NF-e só é conhecido quando ela comeca (depende do
+        # que a etapa SIGA baixou) -- guardado aqui pra `on_nfe_planilha_concluida`
+        # calcular o percentual dessa etapa contra o total certo.
+        nfe_progress = {"total": 0, "concluidas": 0}
 
         def on_stage_started(stage: str, base_percent: int) -> None:
+            # Cada etapa tem sua PRÓPRIA barra de progresso (0-100%), independente das
+            # outras duas -- reseta a barra da etapa que está começando agora.
             self._bridge.set_status(stage_status.get(stage, ""))
-            self._bridge.set_progress(float(base_percent))
+            self._bridge.set_stage_progress(stage, 0.0)
+            if stage == "nfe":
+                try:
+                    nfe_progress["total"] = len(listar_planilhas_nfe(output_dir))
+                except OSError:
+                    nfe_progress["total"] = 0
 
         def on_siga_row_processed(done: int, total: int) -> None:
-            # Reserva 0-40% para a etapa SIGA (as duas seguintes ganham seus proprios
-            # marcos em on_stage_started); mesma logica de _execute_siga, só que numa
-            # faixa menor porque aqui existem mais duas etapas depois dela.
             if total > 0:
-                self._bridge.set_progress(min(40.0, (done / total) * 40))
+                self._bridge.set_stage_progress("siga", (done / total) * 100)
+
+        def on_nfe_planilha_concluida(resultado: Any) -> None:
+            self._push_nfe_result(resultado)
+            nfe_progress["concluidas"] += 1
+            if nfe_progress["total"] > 0:
+                self._bridge.set_stage_progress(
+                    "nfe", min(100.0, (nfe_progress["concluidas"] / nfe_progress["total"]) * 100)
+                )
+
+        def on_nfce_row_processed(done: int, total: int) -> None:
+            if total > 0:
+                self._bridge.set_stage_progress("nfce", (done / total) * 100)
 
         result = chain_extractor.run(
             selected_rows,
@@ -996,7 +1017,8 @@ class Api:
             output_spreadsheet_path,
             on_stage_started=on_stage_started,
             on_siga_row_processed=on_siga_row_processed,
-            on_nfe_planilha_concluida=self._push_nfe_result,
+            on_nfe_planilha_concluida=on_nfe_planilha_concluida,
+            on_nfce_row_processed=on_nfce_row_processed,
             cancel_event=self._cancel_event,
             pause_event=self._pause_event,
         )
