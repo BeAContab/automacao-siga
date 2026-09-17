@@ -122,6 +122,12 @@ class JsBridge:
     def set_progress(self, percent: float) -> None:
         self.dispatch("sigaSetProgress", percent)
 
+    def set_stage_progress(self, stage: str, percent: float) -> None:
+        """Progresso de UMA etapa da Cadeia Completa (siga/nfe/nfce), independente das
+        outras duas -- usado só no modo Cadeia Completa; os outros modos continuam
+        usando `set_progress` (barra única)."""
+        self.dispatch("sigaSetStageProgress", {"stage": stage, "percent": percent})
+
     def set_status(self, text: str) -> None:
         self.dispatch("sigaSetStatus", text)
 

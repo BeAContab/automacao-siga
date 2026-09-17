@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026-09-17] — Versão 2.11.5
+
+### Adicionado
+- **Cadeia Completa: barra de progresso dedicada por etapa (SIGA/NF-e/NFC-e).** Antes as 3 etapas dividiam uma única barra em faixas fixas (0-40%/40-70%/70-100%), sem deixar claro em qual etapa o lote estava. Agora cada etapa tem sua própria barra 0-100%, visível só no modo Cadeia Completa (a barra única continua servindo os outros 3 modos).
+  - `NfceBatchExtractor.run_batch_in_context` (`nfce_extractor.py`) ganhou `on_row_processed`, mesmo padrão já usado no SIGA, chamado ao final de cada empresa (sucesso, falha ou pulada).
+  - `ChainBatchExtractor.run` (`chain_extractor.py`) repassa esse callback como `on_nfce_row_processed`.
+  - `Api._execute_chain` (`api.py`) calcula os 3 percentuais de forma independente — o total de planilhas da etapa NF-e é obtido via `listar_planilhas_nfe` assim que a etapa começa.
+  - Novo `JsBridge.set_stage_progress`/`window.sigaSetStageProgress` (`bridge.py`/`main.js`) e 3 barras dedicadas em `index.html` (`data-chain-only`), alternando com a barra única via `data-hide-in-chain`.
+
+### Corrigido
+- **NFC-e: tela de "erro de privacidade" do Chrome/Edge ao abrir o portal `servicos.sefaz.ce.gov.br`.** O navegador de automação (perfil dedicado) é lançado sem nenhuma flag de certificado, então um problema de cadeia ICP-Brasil do lado do governo trava a automação esperando um clique manual em "Avançar". Adicionadas `--ignore-certificate-errors`/`--allow-insecure-localhost` ao comando de lançamento (`_start_debug_browser_process`, `browser.py`) — escopo isolado ao perfil dedicado da automação, nunca ao Chrome/Edge pessoal do usuário.
+
 ## [2026-09-16] — Versão 2.11.4
 
 ### Corrigido

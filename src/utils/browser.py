@@ -128,6 +128,13 @@ def _start_debug_browser_process(
         # por um clique real do usuário), e o Chrome bloqueia esse tipo de pop-up por
         # padrão — sem isso, a aba da empresa nunca chega a abrir.
         "--disable-popup-blocking",
+        # O portal do NFC-e (servicos.sefaz.ce.gov.br) dispara a tela nativa "sua conexão
+        # não é particular" por problema de cadeia de certificado do lado do governo —
+        # sem essas flags, a automação trava esperando um clique manual em "Avançar".
+        # Escopo isolado ao perfil dedicado da automação (browser_debug_profile_dir),
+        # nunca ao Chrome pessoal do usuário.
+        "--ignore-certificate-errors",
+        "--allow-insecure-localhost",
     ]
     # Quando o login depende do certificado do usuário, o perfil do sistema pode ser necessário.
     if settings.use_system_browser_profile:

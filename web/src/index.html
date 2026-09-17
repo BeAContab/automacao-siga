@@ -432,14 +432,46 @@
     <div class="p-sm flex-1 overflow-y-auto terminal-scroll text-console-text font-console-text selectable leading-relaxed" id="console-log"></div>
   </div>
 
-  <!-- Progresso -->
-  <div class="shrink-0">
+  <!-- Progresso (unico) -- todos os modos, exceto Cadeia Completa (ver [data-hide-in-chain] em main.js) -->
+  <div class="shrink-0" data-hide-in-chain>
     <div class="flex justify-between items-end mb-xs">
       <span class="text-label-bold font-label-bold text-siga-slate uppercase tracking-wider text-[10px]">Progresso da operação</span>
       <span class="text-label-bold font-label-bold text-on-surface" id="progress-label">0%</span>
     </div>
     <div class="w-full h-2 bg-[#DDE3E5] rounded-full overflow-hidden">
       <div class="h-full bg-siga-gold w-0 transition-all duration-300" id="progress-bar"></div>
+    </div>
+  </div>
+
+  <!-- Progresso por etapa -- só no modo Cadeia Completa (uma barra dedicada por etapa,
+       em vez de uma faixa só dividida entre as 3) -->
+  <div class="shrink-0 space-y-sm" data-chain-only hidden>
+    <div>
+      <div class="flex justify-between items-end mb-xs">
+        <span class="text-label-bold font-label-bold text-siga-slate uppercase tracking-wider text-[10px]">Etapa 1/3 — SIGA</span>
+        <span class="text-label-bold font-label-bold text-on-surface" id="progress-siga-label">0%</span>
+      </div>
+      <div class="w-full h-2 bg-[#DDE3E5] rounded-full overflow-hidden">
+        <div class="h-full bg-siga-gold w-0 transition-all duration-300" id="progress-siga-bar"></div>
+      </div>
+    </div>
+    <div>
+      <div class="flex justify-between items-end mb-xs">
+        <span class="text-label-bold font-label-bold text-siga-slate uppercase tracking-wider text-[10px]">Etapa 2/3 — NF-e</span>
+        <span class="text-label-bold font-label-bold text-on-surface" id="progress-nfe-label">0%</span>
+      </div>
+      <div class="w-full h-2 bg-[#DDE3E5] rounded-full overflow-hidden">
+        <div class="h-full bg-siga-gold w-0 transition-all duration-300" id="progress-nfe-bar"></div>
+      </div>
+    </div>
+    <div>
+      <div class="flex justify-between items-end mb-xs">
+        <span class="text-label-bold font-label-bold text-siga-slate uppercase tracking-wider text-[10px]">Etapa 3/3 — NFC-e</span>
+        <span class="text-label-bold font-label-bold text-on-surface" id="progress-nfce-label">0%</span>
+      </div>
+      <div class="w-full h-2 bg-[#DDE3E5] rounded-full overflow-hidden">
+        <div class="h-full bg-siga-gold w-0 transition-all duration-300" id="progress-nfce-bar"></div>
+      </div>
     </div>
   </div>
 </aside>

@@ -74,6 +74,7 @@ class ChainBatchExtractor:
         on_stage_started: Callable[[str, int], None] | None = None,
         on_siga_row_processed: Callable[[int, int], None] | None = None,
         on_nfe_planilha_concluida: Callable[[MeudanfeBatchResult], None] | None = None,
+        on_nfce_row_processed: Callable[[int, int], None] | None = None,
         cancel_event: threading.Event | None = None,
         pause_event: threading.Event | None = None,
     ) -> ChainExtractionResult:
@@ -174,7 +175,11 @@ class ChainBatchExtractor:
                     for raw in nfce_rows_raw
                 ]
                 result.nfce_results = nfce_extractor.run_batch_in_context(
-                    context, nfce_rows, cancel_event=cancel_event, pause_event=pause_event
+                    context,
+                    nfce_rows,
+                    cancel_event=cancel_event,
+                    pause_event=pause_event,
+                    on_row_processed=on_nfce_row_processed,
                 )
         narrate_success("Etapa 3 concluída: %s empresa(s) de NFC-e processada(s).", len(result.nfce_results))
 
