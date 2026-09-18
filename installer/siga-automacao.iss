@@ -13,7 +13,7 @@
 ; Microsoft.
 
 #define MyAppName "SIGA Automacao"
-#define MyAppVersion "2.11.5"
+#define MyAppVersion "2.11.6"
 #define MyAppExeName "siga-automacao.exe"
 
 [Setup]

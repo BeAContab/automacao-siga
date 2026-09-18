@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-09-18] — Versão 2.11.6
+
+### Corrigido
+- **Erro de privacidade do NFC-e voltando a aparecer na Cadeia Completa mesmo após a v2.11.5.** O fix anterior só cobriu `_start_debug_browser_process` (o caminho usado pelo botão "Iniciar Navegador"). Existe um segundo caminho de abertura de navegador — `_build_browser_options`/`_create_driver`, via Selenium puro — usado quando o `BrowserSession` não consegue anexar a um navegador já aberto via CDP. É exatamente o que acontece na etapa NFC-e (3ª) da Cadeia Completa: o navegador da etapa SIGA é encerrado de propósito antes dela (`terminate_browser_processes`, para liberar memória), então a etapa NFC-e abre um navegador novo por esse segundo caminho — que não tinha a flag de certificado. Adicionadas `--ignore-certificate-errors`/`--allow-insecure-localhost` também em `_build_browser_options` (`browser.py`). Os modos SIGA/NFC-e isolados não eram afetados, pois sempre reaproveitam o mesmo navegador aberto por "Iniciar Navegador" (primeiro caminho, já corrigido na v2.11.5).
+
 ## [2026-09-17] — Versão 2.11.5
 
 ### Adicionado
