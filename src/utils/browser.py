@@ -424,6 +424,14 @@ def _build_browser_options(settings: Settings, debugger_address: str | None = No
 
     options.add_argument("--start-maximized")
     options.add_argument(f"--remote-debugging-port={settings.remote_debugging_port}")
+    # Mesmo motivo da flag em `_start_debug_browser_process`: o portal do NFC-e dispara a
+    # tela nativa "sua conexão não é particular" por problema de certificado do lado do
+    # governo. Esse caminho (via Selenium puro, não subprocess.Popen) é o usado quando o
+    # `BrowserSession` não consegue anexar a um navegador já aberto via CDP -- ex.: a etapa
+    # NFC-e da Cadeia Completa, que roda depois do navegador da etapa SIGA já ter sido
+    # encerrado de propósito (ver `terminate_browser_processes` em `chain_extractor.py`).
+    options.add_argument("--ignore-certificate-errors")
+    options.add_argument("--allow-insecure-localhost")
     if settings.headless:
         options.add_argument("--headless=new")
     if settings.use_system_browser_profile:
